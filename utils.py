@@ -7,6 +7,33 @@ from urllib.parse import quote
 import logging
 import sys
 import asyncio
+import os
+import psycopg2
+import logging
+
+logger = logging.getLogger(__name__)
+
+def verify_postgres_connection():
+    db_url = os.getenv("DATABASE_URL")
+
+    if not db_url:
+        logger.error("[DB CHECK] DATABASE_URL is NOT set")
+        return False
+
+    try:
+        conn = psycopg2.connect(db_url, connect_timeout=5)
+        cur = conn.cursor()
+        cur.execute("SELECT 1;")
+        result = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        logger.info(f"[DB CHECK] Postgres connected successfully, result={result}")
+        return True
+
+    except Exception as e:
+        logger.exception(f"[DB CHECK] Postgres connection FAILED: {e}")
+        return False
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from docx import Document
@@ -14,6 +41,7 @@ from docx import Document
 from models import CV
 
 logger = logging.getLogger(__name__)
+
 
 # -------------------------------------------------------------------
 # Jinja setup

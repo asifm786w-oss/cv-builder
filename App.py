@@ -4,9 +4,17 @@ import csv
 import os
 
 import openai
+
+from utils import verify_postgres_connection
+
+verify_postgres_connection()
+
+
 from openai import OpenAI
 from auth import init_db
 init_db()
+
+
 
 from models import CV, Experience, Education
 from utils import (
