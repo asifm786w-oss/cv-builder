@@ -2,7 +2,7 @@ openai
 streamlit
 pydantic
 jinja2
-xhtml2pdf
+reportlab
 PyPDF2
 docx2txt
 python-docx
