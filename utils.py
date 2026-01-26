@@ -1,13 +1,14 @@
+from __future__ import annotations
+
 from io import BytesIO
 from pathlib import Path
 from datetime import date
-import sys
-import asyncio
 from urllib.parse import quote
 import logging
+import sys
+import asyncio
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from xhtml2pdf import pisa
 from docx import Document
 
 from models import CV
@@ -25,155 +26,103 @@ env = Environment(
     autoescape=select_autoescape(["html", "xml"]),
 )
 
-
-def render_cv_html(cv: CV, template_name: str = "cv_basic.html") -> str:
-    """
-    Render the CV into an HTML string using the Jinja2 template.
-    """
+def render_cv_html(cv: CV, template_name: str) -> str:
+    """Render the CV into an HTML string using the Jinja2 template."""
     template = env.get_template(template_name)
-    html_str = template.render(cv=cv)
-    return html_str
+    return template.render(cv=cv)
 
 
 # -------------------------------------------------------------------
-# Low-level PDF helpers
+# PDF (Playwright-only)
 # -------------------------------------------------------------------
-def _render_pdf_with_xhtml2pdf(html_str: str) -> bytes:
-    """
-    Fallback PDF renderer: use xhtml2pdf (Pisa).
-    """
-    logger.warning("[PDF] Using xhtml2pdf fallback renderer")
-    pdf_io = BytesIO()
-    pisa_status = pisa.CreatePDF(html_str, dest=pdf_io)
-
-    if pisa_status.err:
-        raise RuntimeError("xhtml2pdf failed while creating PDF")
-
-    return pdf_io.getvalue()
-
-
 def _prepare_windows_event_loop():
     """
-    On Windows, Playwright needs an event loop policy that supports subprocesses.
-    The default Proactor policy raises NotImplementedError for subprocess_exec.
+    On Windows, Playwright sometimes needs Selector policy to support subprocesses.
+    (Railway is Linux, but keep this for local dev.)
     """
     if sys.platform.startswith("win"):
         try:
-            asyncio.set_event_loop_policy(
-                asyncio.WindowsSelectorEventLoopPolicy()  # type: ignore[attr-defined]
-            )
-            logger.info("[PDF] Set WindowsSelectorEventLoopPolicy for Playwright")
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
         except Exception as e:
-            logger.warning(f"[PDF] Failed to set Windows event loop policy: {e}")
+            logger.warning(f"[PDF] Could not set Windows event loop policy: {e}")
 
 
 def _render_pdf_with_playwright(html_str: str) -> bytes:
     """
-    Primary PDF renderer: use Playwright + headless Chromium.
-
-    Raises ImportError if Playwright is not installed.
-    Raises RuntimeError if Chromium/pdf generation fails.
+    Render PDF using Playwright + headless Chromium.
+    Requires: playwright + installed browser binaries.
     """
     _prepare_windows_event_loop()
 
     try:
         from playwright.sync_api import sync_playwright  # type: ignore
-    except ImportError:
-        logger.info("[PDF] Playwright is not installed – cannot use Chromium")
-        raise
+    except ImportError as e:
+        raise RuntimeError(
+            "Playwright is not installed. Add `playwright` to requirements.txt."
+        ) from e
 
+    logger.info("[PDF] Generating PDF with Playwright/Chromium")
     try:
-        logger.info("[PDF] Generating PDF with Playwright / Chromium")
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
 
+            # Use a data URL so we don't rely on file paths
             encoded_html = quote(html_str)
             data_url = f"data:text/html;charset=utf-8,{encoded_html}"
-
             page.goto(data_url, wait_until="networkidle")
 
             pdf_bytes = page.pdf(
                 format="A4",
                 print_background=True,
-                margin={
-                    "top": "12mm",
-                    "bottom": "12mm",
-                    "left": "12mm",
-                    "right": "12mm",
-                },
+                margin={"top": "12mm", "bottom": "12mm", "left": "12mm", "right": "12mm"},
             )
 
             browser.close()
-
-        return pdf_bytes
-    except Exception as e:  # pragma: no cover
-        logger.error(f"[PDF] Playwright/Chromium error: {e}")
-        raise RuntimeError(f"Playwright/Chromium error while creating PDF: {e}") from e
-
-
-# -------------------------------------------------------------------
-# Public PDF functions
-# -------------------------------------------------------------------
-def render_cv_pdf_bytes(cv: CV, template_name: str = "cv_basic.html") -> bytes:
-    """
-    Render the CV to PDF bytes.
-
-    - Try Playwright + Chromium first (best quality)
-    - Fall back to xhtml2pdf if Playwright is not available or fails.
-    """
-    html_str = render_cv_html(cv, template_name=template_name)
-
-    try:
-        return _render_pdf_with_playwright(html_str)
-    except ImportError:
-        logger.warning("[PDF] Playwright not available, falling back to xhtml2pdf")
-        return _render_pdf_with_xhtml2pdf(html_str)
+            return pdf_bytes
     except Exception as e:
-        logger.warning(f"[PDF] Playwright failed; trying xhtml2pdf. Reason: {e}")
-        try:
-            return _render_pdf_with_xhtml2pdf(html_str)
-        except Exception:
-            raise RuntimeError(f"Playwright error while creating CV PDF: {e}") from e
+        raise RuntimeError(f"Playwright/Chromium PDF generation failed: {e}") from e
+
+
+def render_cv_pdf_bytes(cv: CV, template_name: str) -> bytes:
+    """Render the CV to PDF bytes (Playwright-only)."""
+    html_str = render_cv_html(cv, template_name=template_name)
+    return _render_pdf_with_playwright(html_str)
 
 
 # -------------------------------------------------------------------
 # DOCX: CV
 # -------------------------------------------------------------------
 def render_cv_docx_bytes(cv: CV) -> bytes:
-    """
-    Create a clean, fully editable DOCX version of the CV.
-    """
+    """Create a clean, editable DOCX version of the CV."""
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Pt, Inches
 
     doc = Document()
 
-    # Page margins
     section = doc.sections[0]
     section.top_margin = Inches(1)
     section.bottom_margin = Inches(1)
     section.left_margin = Inches(1)
     section.right_margin = Inches(1)
 
-    # Base font
     style = doc.styles["Normal"]
     style.font.name = "Calibri"
 
-    # Name (centre)
+    # Name
     title_p = doc.add_paragraph()
     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = title_p.add_run(cv.full_name or "Curriculum Vitae")
     r.bold = True
     r.font.size = Pt(16)
 
-    # Job title (centre, if present)
+    # Title
     if cv.title:
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.add_run(cv.title)
 
-    # Contact line: email | phone | full_address | location
+    # Contact line
     contact_bits = []
     if getattr(cv, "email", None):
         contact_bits.append(cv.email)
@@ -189,16 +138,15 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
         contact_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         contact_p.paragraph_format.space_after = Pt(12)
 
-    # Profile / Summary
+    # Summary
     if getattr(cv, "summary", None):
         doc.add_heading("Profile", level=2)
         doc.add_paragraph(cv.summary)
 
     # Skills
-    if getattr(cv, "skills", None):
-        if cv.skills:
-            doc.add_heading("Skills", level=2)
-            doc.add_paragraph(", ".join(cv.skills))
+    if getattr(cv, "skills", None) and cv.skills:
+        doc.add_heading("Skills", level=2)
+        doc.add_paragraph(", ".join(cv.skills))
 
     # Experience
     if getattr(cv, "experiences", None) and cv.experiences:
@@ -215,7 +163,6 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
                 h = doc.add_paragraph()
                 h.add_run(header).bold = True
 
-            # Meta line: location | dates
             meta_bits = []
             if exp.location:
                 meta_bits.append(exp.location)
@@ -231,7 +178,6 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
             if meta_bits:
                 doc.add_paragraph(" | ".join(meta_bits))
 
-            # Description as bullets
             if exp.description:
                 for line in exp.description.splitlines():
                     line = line.strip("• ").strip()
@@ -279,7 +225,7 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
 
 
 # -------------------------------------------------------------------
-# PDF: Cover letter
+# PDF: Cover letter (Playwright-only)
 # -------------------------------------------------------------------
 def render_cover_letter_pdf_bytes(
     full_name: str,
@@ -287,32 +233,23 @@ def render_cover_letter_pdf_bytes(
     location: str = "",
     email: str = "",
     phone: str = "",
-    # NOTE: default employer_name is now empty, so no stray "Hiring Manager" line
     employer_name: str = "",
     employer_company: str = "",
     employer_location: str = "",
     greeting_name: str = "Hiring Manager",
     template_name: str = "cover_letter_basic.html",
 ) -> bytes:
-    """
-    Render a cover letter to PDF bytes.
-
-    We also strip any lines in the body that are just contact info
-    (your name, email, phone, location, or today’s date), because
-    those are already shown in the header / employer block.
-    """
+    """Render cover letter to PDF bytes (Playwright-only)."""
     today_str = date.today().strftime("%d %B %Y")
 
-    # --- clean the body -------------------------------------------------
+    # Strip duplicate “header-ish” lines from body
     cleaned_lines = []
     for line in (letter_body or "").splitlines():
         s = line.strip()
         if not s:
-            cleaned_lines.append("")  # keep blank lines for spacing
+            cleaned_lines.append("")
             continue
-
         lower = s.lower()
-        # Drop lines that contain your own contact details or the date
         if (
             (full_name and full_name.lower() in lower)
             or (email and email.lower() in lower)
@@ -321,11 +258,9 @@ def render_cover_letter_pdf_bytes(
             or (today_str in s)
         ):
             continue
-
         cleaned_lines.append(line)
 
     cleaned_body = "\n".join(cleaned_lines).strip()
-    # --------------------------------------------------------------------
 
     template = env.get_template(template_name)
     html_str = template.render(
@@ -341,20 +276,7 @@ def render_cover_letter_pdf_bytes(
         letter_body=cleaned_body,
     )
 
-    try:
-        return _render_pdf_with_playwright(html_str)
-    except ImportError:
-        logger.warning("[PDF] Playwright not available, falling back to xhtml2pdf")
-        return _render_pdf_with_xhtml2pdf(html_str)
-    except Exception as e:
-        logger.warning(f"[PDF] Playwright failed; trying xhtml2pdf. Reason: {e}")
-        try:
-            return _render_pdf_with_xhtml2pdf(html_str)
-        except Exception:
-            raise RuntimeError(
-                f"Playwright error while creating cover letter PDF: {e}"
-            ) from e
-
+    return _render_pdf_with_playwright(html_str)
 
 
 # -------------------------------------------------------------------
@@ -366,23 +288,18 @@ def render_cover_letter_docx_bytes(
     location: str = "",
     email: str = "",
     phone: str = "",
-    # default empty => no stray "Hiring Manager" line
     employer_name: str = "",
     employer_company: str = "",
     employer_location: str = "",
     greeting_name: str = "Hiring Manager",
 ) -> bytes:
-    """
-    Create a nicely formatted DOCX version of the cover letter.
-
-    Behaviour mirrors the PDF:
-    - header contains your contact info
-    - body has duplicate contact / date / address lines stripped out
-    """
+    """Create a formatted DOCX cover letter."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Pt, Inches
+    import re as _re
 
     today_str = date.today().strftime("%d %B %Y")
 
-    # --- helper: recognise short address-like lines ----------------------
     def _is_headerish(s: str) -> bool:
         text = s.strip()
         if not text:
@@ -390,29 +307,19 @@ def render_cover_letter_docx_bytes(
         words = text.replace(",", " ").split()
         return 1 < len(words) <= 6 and not text.endswith(".")
 
-    # Split location into tokens for matching
     location_tokens = []
     if location:
-        import re as _re
-        location_tokens = [
-            t.strip().lower()
-            for t in _re.split(r"[,/]", location)
-            if t.strip()
-        ]
+        location_tokens = [t.strip().lower() for t in _re.split(r"[,/]", location) if t.strip()]
 
-    # --- clean the body (same logic as PDF) ------------------------------
     cleaned_lines = []
     for line in (letter_body or "").splitlines():
         s = line.strip()
         if not s:
-            cleaned_lines.append("")  # preserve spacing
+            cleaned_lines.append("")
             continue
-
         lower = s.lower()
 
-        location_hit = False
-        if location_tokens:
-            location_hit = any(tok in lower for tok in location_tokens)
+        location_hit = any(tok in lower for tok in location_tokens) if location_tokens else False
 
         headerish_employer = _is_headerish(s) and (
             (employer_company and employer_company.lower() in lower)
@@ -433,16 +340,11 @@ def render_cover_letter_docx_bytes(
         cleaned_lines.append(line)
 
     cleaned_body = "\n".join(cleaned_lines).strip()
-    # ---------------------------------------------------------------------
-
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Pt, Inches
 
     doc = Document()
 
-    # Tighter top margin so content sits a bit higher (closer to PDF layout)
     section = doc.sections[0]
-    section.top_margin = Inches(0.7)   # was 1.0
+    section.top_margin = Inches(0.7)
     section.bottom_margin = Inches(1)
     section.left_margin = Inches(1)
     section.right_margin = Inches(1)
@@ -450,7 +352,6 @@ def render_cover_letter_docx_bytes(
     style = doc.styles["Normal"]
     style.font.name = "Calibri"
 
-    # HEADER (right aligned)
     header = doc.add_paragraph()
     header.alignment = WD_ALIGN_PARAGRAPH.RIGHT
     header.paragraph_format.space_after = Pt(6)
@@ -463,12 +364,10 @@ def render_cover_letter_docx_bytes(
     if phone:
         header.add_run(phone + "\n")
 
-    # Date
     date_p = doc.add_paragraph(today_str)
     date_p.alignment = WD_ALIGN_PARAGRAPH.LEFT
     date_p.paragraph_format.space_after = Pt(6)
 
-    # Employer block – only if you actually supplied something
     if employer_name or employer_company or employer_location:
         emp = doc.add_paragraph()
         emp.paragraph_format.space_after = Pt(6)
@@ -479,21 +378,17 @@ def render_cover_letter_docx_bytes(
         if employer_location:
             emp.add_run(employer_location + "\n")
 
-    # Greeting
     greet = doc.add_paragraph(f"Dear {greeting_name},")
     greet.paragraph_format.space_after = Pt(12)
 
-    # Body (from CLEANED text)
     for paragraph in cleaned_body.split("\n\n"):
         cleaned = paragraph.strip()
         if cleaned:
             p = doc.add_paragraph(cleaned)
             p.paragraph_format.space_after = Pt(6)
 
-    # Closing
     closing = doc.add_paragraph("Kind regards,")
     closing.paragraph_format.space_after = Pt(0)
-
     name_p = doc.add_paragraph(full_name)
     name_p.paragraph_format.space_before = Pt(0)
 
@@ -501,4 +396,3 @@ def render_cover_letter_docx_bytes(
     doc.save(buffer)
     buffer.seek(0)
     return buffer.getvalue()
-

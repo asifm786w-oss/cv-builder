@@ -1,1 +1,1 @@
-web: streamlit run App.py --server.address 0.0.0.0 --server.port $PORT --server.headless true
+web: playwright install chromium && streamlit run App.py --server.port $PORT --server.address 0.0.0.0
