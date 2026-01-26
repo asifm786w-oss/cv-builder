@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    @page {
+      size: A4;
+      margin: 20mm 20mm 20mm 20mm;
+    }
+
+    body {
+      font-family: Calibri, Arial, sans-serif;
+      font-size: 12pt;
+      color: #222;
+      line-height: 1.45;
+    }
+
+    .header {
+      text-align: right;
+      margin-bottom: 15mm;
+    }
+
+    .header div {
+      margin-bottom: 3px;
+    }
+
+    .date {
+      margin-bottom: 15mm;
+    }
+
+    .employer-block {
+      margin-bottom: 12mm;
+      white-space: pre-line;
+    }
+
+    .greeting {
+      margin-bottom: 8mm;
+    }
+
+    .paragraph {
+      margin-bottom: 6mm;
+      text-align: left;
+    }
+
+    .closing {
+      margin-top: 12mm;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header (right aligned) -->
+  <div class="header">
+    <div>{{ full_name }}</div>
+    {% if location %}<div>{{ location }}</div>{% endif %}
+    {% if email %}<div>{{ email }}</div>{% endif %}
+    {% if phone %}<div>{{ phone }}</div>{% endif %}
+  </div>
+
+  <!-- Date -->
+  <div class="date">{{ today }}</div>
+
+      <!-- Employer block (only if supplied) -->
+  {% if employer_name or employer_company or employer_location %}
+    <div class="employer-block">
+      {% if employer_name %}{{ employer_name }}<br>{% endif %}
+      {% if employer_company %}{{ employer_company }}<br>{% endif %}
+      {% if employer_location %}{{ employer_location }}{% endif %}
+    </div>
+  {% endif %}
+
+
+  <!-- Greeting -->
+  <div class="greeting">Dear {{ greeting_name }},</div>
+
+  <!-- Body paragraphs -->
+  {% for paragraph in letter_body.split("\n\n") %}
+    {% if paragraph.strip() %}
+      <div class="paragraph">{{ paragraph.strip() }}</div>
+    {% endif %}
+  {% endfor %}
+
+  <!-- Closing -->
+  <div class="closing">
+    Kind regards,<br>
+    {{ full_name }}
+  </div>
+
+</body>
+</html>

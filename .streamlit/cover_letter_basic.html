@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Cover Letter - {{ full_name }}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #222;
+      padding: 32px 40px;
+    }
+
+    .date {
+      margin-bottom: 16px;
+    }
+
+    .body {
+      margin-top: 16px;
+      white-space: pre-line;
+    }
+
+    .signature {
+      margin-top: 24px;
+    }
+  </style>
+</head>
+<body>
+  <div class="date">
+    {{ today }}
+  </div>
+
+  <div class="body">
+    {{ letter_body }}
+  </div>
+
+  <div class="signature">
+    Kind regards,<br />
+    {{ full_name }}
+  </div>
+</body>
+</html>

@@ -1,0 +1,11 @@
+openai
+streamlit
+pydantic
+jinja2
+xhtml2pdf
+PyPDF2
+docx2txt
+python-docx
+playwright
+requests
+psycopg2-binary
