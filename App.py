@@ -795,48 +795,51 @@ def show_consent_gate():
         # If DB check fails for any reason, fall back to showing gate
         pass
 
-    # Otherwise, show the consent box
-st.markdown(
-    """
-    <div style="
-        border-radius: 12px;
-        padding: 18px 20px;
-        margin-top: 20px;
-        background: #f9fafb;
-        border: 1px solid #e5e7eb;
-        color: #0b0f19;
-    ">
-        <h3 style="margin-top: 0; color:#0b0f19;">Before you continue</h3>
-        <p style="font-size: 14px; line-height: 1.5; color:#0b0f19;">
-            We use cookies and process your data to run this CV builder,
-            improve the service, and keep your account secure.
-            Open and read:
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+    # If user is trying to view a policy page, don't block them with the gate
+    if st.session_state.get("policy_view"):
+        return
 
-c1, c2, c3 = st.columns(3)
-with c1:
-    if st.button("Cookie Policy", key="open_cookie_policy"):
-        st.session_state["policy_view"] = "cookies"
-        st.rerun()
-with c2:
-    if st.button("Privacy Policy", key="open_privacy_policy"):
-        st.session_state["policy_view"] = "privacy"
-        st.rerun()
-with c3:
-    if st.button("Terms of Use", key="open_terms"):
-        st.session_state["policy_view"] = "terms"
-        st.rerun()
+    # Otherwise, show the consent box
+    st.markdown(
+        """
+        <div style="
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-top: 20px;
+            background: #f9fafb;
+            border: 1px solid #e5e7eb;
+            color: #0b0f19;
+        ">
+            <h3 style="margin-top: 0; color:#0b0f19;">Before you continue</h3>
+            <p style="font-size: 14px; line-height: 1.5; color:#0b0f19;">
+                We use cookies and process your data to run this CV builder,
+                improve the service, and keep your account secure.
+                Open and read:
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Cookie Policy", key="open_cookie_policy"):
+            st.session_state["policy_view"] = "cookies"
+            st.rerun()
+    with c2:
+        if st.button("Privacy Policy", key="open_privacy_policy"):
+            st.session_state["policy_view"] = "privacy"
+            st.rerun()
+    with c3:
+        if st.button("Terms of Use", key="open_terms"):
+            st.session_state["policy_view"] = "terms"
+            st.rerun()
 
     st.info("Please accept to continue using the site.")
     st.stop()
 
 
 def auth_ui():
-	
     """Login / register / password reset UI."""
     tab_login, tab_register, tab_forgot = st.tabs(
         ["Sign in", "Create account", "Forgot password"]
@@ -893,7 +896,7 @@ def auth_ui():
                     if referred_by_email:
                         apply_referral_bonus(referred_by_email)
 
-                    # force consent gate to show now
+                    # force consent gate to show now (after login)
                     st.session_state["accepted_policies"] = False
 
                     # auto-login after signup
@@ -930,7 +933,7 @@ def auth_ui():
 
         fp_token = st.text_input("Reset token (from the email)", key="fp_token")
         fp_new_pwd = st.text_input("New password", type="password", key="fp_new_pwd")
-        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="fp_new_pwd2")
+        fp_new_pwd2 = st.text_input("Confirm password", type="password", key="fp_new_pwd2")
 
         if st.button("Set new password", key="btn_do_reset"):
             if not fp_token or not fp_new_pwd or not fp_new_pwd2:
@@ -944,6 +947,10 @@ def auth_ui():
                 else:
                     st.error("Invalid or expired reset token. Please request a new reset link.")
 
+
+# -------------------------
+# ROUTING: policy pages first (so they render even when logged out)
+# -------------------------
 if show_policy_page():
     st.stop()
 
@@ -968,12 +975,18 @@ st.markdown(
 )
 
 # -------------------------
-# AUTH GATE (after landing copy)
+# AUTH GATE (login/register before consent gate)
 # -------------------------
 if st.session_state.get("user") is None:
     st.info("Create a free account or sign in to start using the tools.")
     auth_ui()
     st.stop()
+
+# -------------------------
+# CONSENT GATE (only after login)
+# -------------------------
+show_consent_gate()
+
 
 # ✅ ENFORCE POLICIES HERE (MUST BE AFTER LOGIN, BEFORE APP LOADS)
 show_consent_gate()
