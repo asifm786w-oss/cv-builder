@@ -699,25 +699,25 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Initialise auth DB
+# =========================
+# INIT
+# =========================
 init_db()
 
-# Ensure user state exists
 if "user" not in st.session_state:
     st.session_state["user"] = None
+
 if "accepted_policies" not in st.session_state:
     st.session_state["accepted_policies"] = False
-if "policy_view" not in st.session_state:
-    st.session_state["policy_view"] = None  # None | "cookies" | "privacy" | "terms" | "accessibility"
 
-# -------------------------
-# Policy pages (Railway-safe navigation)
-# -------------------------
+if "policy_view" not in st.session_state:
+    st.session_state["policy_view"] = None  # None | cookies | privacy | terms | accessibility
+
+
+# =========================
+# POLICY FILE READER
+# =========================
 def _read_policy_file(rel_path: str) -> str:
-    """
-    Try to read a markdown policy file. Returns empty string if missing.
-    Uses your existing Pages/*.py pages if you later want; for now we read text safely.
-    """
     try:
         here = os.path.dirname(os.path.abspath(__file__))
         fp = os.path.join(here, rel_path)
@@ -729,11 +729,10 @@ def _read_policy_file(rel_path: str) -> str:
     return ""
 
 
+# =========================
+# POLICY PAGE VIEW
+# =========================
 def show_policy_page() -> bool:
-    """
-    Render policy pages inside the main app so links don't rely on /Route pages.
-    Returns True if a policy page was rendered (caller should st.stop()).
-    """
     view = st.session_state.get("policy_view")
     if not view:
         return False
@@ -745,13 +744,6 @@ def show_policy_page() -> bool:
         "terms": "Terms of Use",
     }
 
-    st.title(title_map.get(view, "Policy"))
-
-    # If you have markdown files, drop them in these locations (optional):
-    # policies/accessibility.md
-    # policies/cookie_policy.md
-    # policies/privacy_policy.md
-    # policies/terms_of_use.md
     file_map = {
         "accessibility": "policies/accessibility.md",
         "cookies": "policies/cookie_policy.md",
@@ -759,12 +751,12 @@ def show_policy_page() -> bool:
         "terms": "policies/terms_of_use.md",
     }
 
+    st.title(title_map.get(view, "Policy"))
     body = _read_policy_file(file_map.get(view, ""))
 
     if body.strip():
         st.markdown(body)
     else:
-        # fallback if you haven't created markdown files yet
         st.info("Policy content not found in this deployment. Add the markdown file under /policies.")
 
     if st.button("← Back", key="btn_policy_back"):
@@ -774,32 +766,26 @@ def show_policy_page() -> bool:
     return True
 
 
+# =========================
+# CONSENT GATE (POST-LOGIN ONLY)
+# =========================
 def show_consent_gate():
-    """One-time consent gate for cookies / privacy / terms."""
     user = st.session_state.get("user")
     if not user:
         return
 
     email = user.get("email")
 
-    # If we've already marked it in this session, skip
-    if st.session_state.get("accepted_policies", False):
+    if st.session_state.get("accepted_policies"):
         return
 
-    # Check DB flag – if already accepted in the past, mark and skip
     try:
         if has_accepted_policies(email):
             st.session_state["accepted_policies"] = True
             return
     except Exception:
-        # If DB check fails for any reason, fall back to showing gate
         pass
 
-    # If user is trying to view a policy page, don't block them with the gate
-    if st.session_state.get("policy_view"):
-        return
-
-    # Otherwise, show the consent box
     st.markdown(
         """
         <div style="
@@ -808,10 +794,10 @@ def show_consent_gate():
             margin-top: 20px;
             background: #f9fafb;
             border: 1px solid #e5e7eb;
-            color: #0b0f19;
+            color:#0b0f19;
         ">
-            <h3 style="margin-top: 0; color:#0b0f19;">Before you continue</h3>
-            <p style="font-size: 14px; line-height: 1.5; color:#0b0f19;">
+            <h3 style="margin-top:0;">Before you continue</h3>
+            <p style="font-size:14px;">
                 We use cookies and process your data to run this CV builder,
                 improve the service, and keep your account secure.
                 Open and read:
@@ -823,136 +809,103 @@ def show_consent_gate():
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("Cookie Policy", key="open_cookie_policy"):
+        if st.button("Cookie Policy"):
             st.session_state["policy_view"] = "cookies"
             st.rerun()
     with c2:
-        if st.button("Privacy Policy", key="open_privacy_policy"):
+        if st.button("Privacy Policy"):
             st.session_state["policy_view"] = "privacy"
             st.rerun()
     with c3:
-        if st.button("Terms of Use", key="open_terms"):
+        if st.button("Terms of Use"):
             st.session_state["policy_view"] = "terms"
             st.rerun()
+
+    agree = st.checkbox("I agree to the Cookie Policy, Privacy Policy and Terms of Use")
+
+    if st.button("Accept and continue") and agree:
+        try:
+            mark_policies_accepted(email)
+        except Exception:
+            pass
+        st.session_state["accepted_policies"] = True
+        st.rerun()
 
     st.info("Please accept to continue using the site.")
     st.stop()
 
 
+# =========================
+# AUTH UI
+# =========================
 def auth_ui():
-    """Login / register / password reset UI."""
     tab_login, tab_register, tab_forgot = st.tabs(
         ["Sign in", "Create account", "Forgot password"]
     )
 
-    # ---- LOGIN TAB ----
     with tab_login:
-        login_email = st.text_input("Email", key="login_email")
-        login_password = st.text_input("Password", type="password", key="login_password")
+        login_email = st.text_input("Email")
+        login_password = st.text_input("Password", type="password")
 
-        if st.button("Sign in", key="btn_login"):
-            if not login_email or not login_password:
-                st.error("Please enter both email and password.")
+        if st.button("Sign in"):
+            user = authenticate_user(login_email, login_password)
+            if user:
+                st.session_state["user"] = user
+                st.rerun()
             else:
-                user = authenticate_user(login_email, login_password)
-                if user:
-                    st.session_state["user"] = user
-                    st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
-                    st.rerun()
-                else:
-                    st.error("Invalid email or password.")
+                st.error("Invalid email or password.")
 
-    # ---- REGISTER TAB ----
     with tab_register:
-        reg_name = st.text_input("Full name", key="reg_name")
-        reg_email = st.text_input("Email", key="reg_email")
-        reg_password = st.text_input("Password", type="password", key="reg_password")
-        reg_password2 = st.text_input("Confirm password", type="password", key="reg_password2")
+        reg_name = st.text_input("Full name")
+        reg_email = st.text_input("Email")
+        reg_password = st.text_input("Password", type="password")
+        reg_password2 = st.text_input("Confirm password", type="password")
 
-        reg_referral_code = st.text_input(
-            "Referral code (optional)",
-            key="reg_referral_code",
-            help="If a friend invited you, paste their referral code here.",
-        )
-
-        if st.button("Create account", key="btn_register"):
-            if not reg_email or not reg_password or not reg_password2:
-                st.error("Please fill in all required fields.")
-            elif reg_password != reg_password2:
+        if st.button("Create account"):
+            if reg_password != reg_password2:
                 st.error("Passwords do not match.")
             else:
-                referred_by_email = None
-
-                if reg_referral_code.strip():
-                    ref_user = get_user_by_referral_code(reg_referral_code.strip())
-                    if not ref_user:
-                        st.error("That referral code is not valid.")
-                        st.stop()
-                    referred_by_email = ref_user["email"]
-
-                ok = create_user(reg_email, reg_password, reg_name, referred_by=referred_by_email)
-
+                ok = create_user(reg_email, reg_password, reg_name)
                 if ok:
-                    if referred_by_email:
-                        apply_referral_bonus(referred_by_email)
-
-                    # force consent gate to show now (after login)
                     st.session_state["accepted_policies"] = False
-
-                    # auto-login after signup
-                    user = authenticate_user(reg_email, reg_password)
-                    if user:
-                        st.session_state["user"] = user
-                        st.rerun()
-                    else:
-                        st.success("Account created. Please sign in.")
+                    st.session_state["user"] = authenticate_user(reg_email, reg_password)
+                    st.rerun()
                 else:
                     st.error("That email is already registered.")
 
-    # ---- FORGOT PASSWORD TAB ----
     with tab_forgot:
-        st.write("If you've forgotten your password, you can reset it here.")
-
-        st.subheader("1. Request a reset link")
-        fp_email = st.text_input("Email used for your account", key="fp_email")
-
-        if st.button("Send reset link", key="btn_send_reset"):
-            if not fp_email:
-                st.error("Please enter your email.")
-            else:
-                try:
-                    token = create_password_reset_token(fp_email)
-                    if token:
-                        send_password_reset_email(fp_email, token)
-                    st.success("If this email is registered, a reset link has been sent.")
-                except Exception as e:
-                    st.error(f"Error while sending reset email: {e}")
-
-        st.markdown("---")
-        st.subheader("2. Set a new password using your reset token")
-
-        fp_token = st.text_input("Reset token (from the email)", key="fp_token")
-        fp_new_pwd = st.text_input("New password", type="password", key="fp_new_pwd")
-        fp_new_pwd2 = st.text_input("Confirm password", type="password", key="fp_new_pwd2")
-
-        if st.button("Set new password", key="btn_do_reset"):
-            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
-                st.error("Please fill in all fields.")
-            elif fp_new_pwd != fp_new_pwd2:
-                st.error("Passwords do not match.")
-            else:
-                ok = reset_password_with_token(fp_token, fp_new_pwd)
-                if ok:
-                    st.success("Password reset successfully. You can now sign in with your new password.")
-                else:
-                    st.error("Invalid or expired reset token. Please request a new reset link.")
+        st.write("Reset your password via email.")
 
 
-# -------------------------
-# ROUTING: policy pages first (so they render even when logged out)
-# -------------------------
+# =========================
+# ROUTING
+# =========================
 if show_policy_page():
     st.stop()
+
+st.title("Munibs Career Support Tools")
+
+st.write(
+    "Build a modern CV and tailored cover letter in minutes. "
+    "Use AI to improve your summary, bullets and cover letters, and "
+    "download everything as PDF or Word."
+)
+
+st.markdown(
+    """
+    - ✅ Modern, clean CV templates  
+    - 🤖 AI help for summaries, bullet points and cover letters  
+    - 📄 Download as PDF and Word  
+    - 🔐 Your data stays private to your account  
+    """
+)
+
+if st.session_state["user"] is None:
+    auth_ui()
+    st.stop()
+
+show_consent_gate()
+
 
 # -------------------------
 # PUBLIC HOME / LANDING
