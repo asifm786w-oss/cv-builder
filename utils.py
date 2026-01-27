@@ -4,16 +4,24 @@ from io import BytesIO
 from pathlib import Path
 from datetime import date
 from urllib.parse import quote
-import logging
-import sys
 import asyncio
-import os
-import psycopg2
 import logging
+import os
+import sys
+import subprocess
+
+import psycopg2
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from docx import Document
+
+from models import CV
 
 logger = logging.getLogger(__name__)
 
-def verify_postgres_connection():
+# ============================================================
+# DB CHECK
+# ============================================================
+def verify_postgres_connection() -> bool:
     db_url = os.getenv("DATABASE_URL")
 
     if not db_url:
@@ -35,17 +43,10 @@ def verify_postgres_connection():
         logger.exception(f"[DB CHECK] Postgres connection FAILED: {e}")
         return False
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from docx import Document
 
-from models import CV
-
-logger = logging.getLogger(__name__)
-
-
-# -------------------------------------------------------------------
+# ============================================================
 # Jinja setup
-# -------------------------------------------------------------------
+# ============================================================
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 
@@ -60,10 +61,10 @@ def render_cv_html(cv: CV, template_name: str) -> str:
     return template.render(cv=cv)
 
 
-# -------------------------------------------------------------------
+# ============================================================
 # PDF (Playwright-only)
-# -------------------------------------------------------------------
-def _prepare_windows_event_loop():
+# ============================================================
+def _prepare_windows_event_loop() -> None:
     """
     On Windows, Playwright sometimes needs Selector policy to support subprocesses.
     (Railway is Linux, but keep this for local dev.)
@@ -74,72 +75,72 @@ def _prepare_windows_event_loop():
         except Exception as e:
             logger.warning(f"[PDF] Could not set Windows event loop policy: {e}")
 
+
+# IMPORTANT: keep this global so it applies before Playwright import.
+# Also set this as a Railway Variable (recommended): PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
+
+
+def _find_browser_exe() -> str | None:
+    root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright"))
+
+    # Prefer headless shell if present (matches your error path)
+    headless = sorted(
+        root.glob("chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell")
+    )
+    if headless:
+        return str(headless[-1])
+
+    # Fallback to full chromium
+    chromium = sorted(root.glob("chromium-*/chrome-linux/chrome"))
+    if chromium:
+        return str(chromium[-1])
+
+    return None
+
+
+def _ensure_browsers_installed() -> None:
+    exe = _find_browser_exe()
+    if exe:
+        return
+
+    logger.warning("[PDF] Playwright browsers missing. Installing chromium + headless-shell at runtime...")
+    env_vars = os.environ.copy()
+    env_vars["PLAYWRIGHT_BROWSERS_PATH"] = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
+
+    subprocess.check_call(
+        ["python", "-m", "playwright", "install", "--with-deps", "chromium", "chromium-headless-shell"],
+        env=env_vars,
+    )
+
+    if not _find_browser_exe():
+        raise RuntimeError(
+            "Playwright install ran, but no Chromium executable was found in PLAYWRIGHT_BROWSERS_PATH."
+        )
+
 
 def _render_pdf_with_playwright(html_str: str) -> bytes:
     """
     Render PDF using Playwright + headless Chromium.
-    Works on Railway by ensuring browsers exist at runtime and using the correct executable_path.
+    Railway-safe: ensures browsers exist and uses executable_path explicitly.
     """
     _prepare_windows_event_loop()
+
+    # Must remain set BEFORE importing Playwright
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
 
     try:
         from playwright.sync_api import sync_playwright  # type: ignore
     except ImportError as e:
-        raise RuntimeError(
-            "Playwright is not installed. Add `playwright` to requirements.txt."
-        ) from e
-
-    # Ensure Playwright browsers path is stable in Railway
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
-
-    from pathlib import Path
-    import subprocess
-
-    def _find_browser_exe() -> str | None:
-        root = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
-
-        # Prefer headless shell if present (matches your error path)
-        headless = sorted(
-            root.glob("chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell")
-        )
-        if headless:
-            return str(headless[-1])
-
-        # Fallback to full chromium
-        chromium = sorted(root.glob("chromium-*/chrome-linux/chrome"))
-        if chromium:
-            return str(chromium[-1])
-
-        return None
-
-    def _ensure_browsers_installed() -> None:
-        exe = _find_browser_exe()
-        if exe:
-            return
-
-        logger.warning("[PDF] Playwright browsers missing. Installing chromium + headless-shell at runtime...")
-        env = os.environ.copy()
-        env["PLAYWRIGHT_BROWSERS_PATH"] = os.environ["PLAYWRIGHT_BROWSERS_PATH"]
-
-        # Install both, so whichever Playwright expects is available
-        subprocess.check_call(
-            ["python", "-m", "playwright", "install", "--with-deps", "chromium", "chromium-headless-shell"],
-            env=env,
-        )
-
-        # If still missing after install, fail loudly
-        if not _find_browser_exe():
-            raise RuntimeError("Playwright install ran, but no Chromium executable was found in PLAYWRIGHT_BROWSERS_PATH.")
+        raise RuntimeError("Playwright is not installed. Add `playwright` to requirements.txt.") from e
 
     logger.info("[PDF] Generating PDF with Playwright/Chromium")
-
     try:
         _ensure_browsers_installed()
         exe = _find_browser_exe()
 
         with sync_playwright() as p:
-            launch_kwargs = {
+            launch_kwargs: dict = {
                 "headless": True,
                 "args": ["--no-sandbox", "--disable-dev-shm-usage"],
             }
@@ -149,24 +150,16 @@ def _render_pdf_with_playwright(html_str: str) -> bytes:
             browser = p.chromium.launch(**launch_kwargs)
             page = browser.new_page()
 
+            # Use a data URL so we don't rely on file paths
             encoded_html = quote(html_str)
             data_url = f"data:text/html;charset=utf-8,{encoded_html}"
 
-            page.goto(
-                data_url,
-                wait_until="domcontentloaded",
-                timeout=30_000,
-            )
+            page.goto(data_url, wait_until="domcontentloaded", timeout=30_000)
 
             pdf_bytes = page.pdf(
                 format="A4",
                 print_background=True,
-                margin={
-                    "top": "12mm",
-                    "bottom": "12mm",
-                    "left": "12mm",
-                    "right": "12mm",
-                },
+                margin={"top": "12mm", "bottom": "12mm", "left": "12mm", "right": "12mm"},
             )
 
             browser.close()
@@ -177,16 +170,15 @@ def _render_pdf_with_playwright(html_str: str) -> bytes:
         raise RuntimeError(f"Playwright/Chromium PDF generation failed: {e}") from e
 
 
-
 def render_cv_pdf_bytes(cv: CV, template_name: str) -> bytes:
     """Render the CV to PDF bytes (Playwright-only)."""
     html_str = render_cv_html(cv, template_name=template_name)
     return _render_pdf_with_playwright(html_str)
 
 
-# -------------------------------------------------------------------
+# ============================================================
 # DOCX: CV
-# -------------------------------------------------------------------
+# ============================================================
 def render_cv_docx_bytes(cv: CV) -> bytes:
     """Create a clean, editable DOCX version of the CV."""
     from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -318,9 +310,9 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
     return bio.getvalue()
 
 
-# -------------------------------------------------------------------
+# ============================================================
 # PDF: Cover letter (Playwright-only)
-# -------------------------------------------------------------------
+# ============================================================
 def render_cover_letter_pdf_bytes(
     full_name: str,
     letter_body: str,
@@ -336,7 +328,6 @@ def render_cover_letter_pdf_bytes(
     """Render cover letter to PDF bytes (Playwright-only)."""
     today_str = date.today().strftime("%d %B %Y")
 
-    # Strip duplicate “header-ish” lines from body
     cleaned_lines = []
     for line in (letter_body or "").splitlines():
         s = line.strip()
@@ -373,9 +364,9 @@ def render_cover_letter_pdf_bytes(
     return _render_pdf_with_playwright(html_str)
 
 
-# -------------------------------------------------------------------
+# ============================================================
 # DOCX: Cover letter
-# -------------------------------------------------------------------
+# ============================================================
 def render_cover_letter_docx_bytes(
     full_name: str,
     letter_body: str,
