@@ -1,7 +1,10 @@
-# ai_v2.py
+# ai.py
 import os
 import json
 import streamlit as st
+import logging
+import traceback
+import httpx
 from openai import OpenAI
 
 # -------------------------------------------------------------------
@@ -23,7 +26,8 @@ def _get_client() -> OpenAI:
     if not api_key:
         raise RuntimeError("No OpenAI API key found. Set OPENAI_API_KEY or Streamlit secrets.")
 
-    return OpenAI(api_key=api_key)
+    # CHANGED: add sane timeout + limited retries (no other behavior changes)
+    return OpenAI(api_key=api_key, timeout=60.0, max_retries=2)
 
 # -------------------------------------------------------------------
 # Keep your cleaner (but now we DO NOT ask the model to output "Dear ...")
@@ -332,14 +336,28 @@ If a field is missing, use null or an empty list as appropriate.
 CV TEXT:
 \"\"\"{raw_text}\"\"\""""
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": "You parse CVs into structured JSON suitable for filling forms. You never merge jobs."},
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.0,
-    )
+    # CHANGED: add explicit exception logging so we can see the real failure cause
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "You parse CVs into structured JSON suitable for filling forms. You never merge jobs."},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.0,
+        )
+    except httpx.TimeoutException as e:
+        logging.error("OpenAI TIMEOUT in extract_cv_data: %r", e)
+        logging.error(traceback.format_exc())
+        raise
+    except httpx.ConnectError as e:
+        logging.error("OpenAI CONNECT ERROR in extract_cv_data: %r", e)
+        logging.error(traceback.format_exc())
+        raise
+    except Exception as e:
+        logging.error("OpenAI ERROR in extract_cv_data: %s: %r", type(e).__name__, e)
+        logging.error(traceback.format_exc())
+        raise
 
     content = response.choices[0].message.content.strip()
     content = content.replace("```json", "").replace("```", "").strip()
