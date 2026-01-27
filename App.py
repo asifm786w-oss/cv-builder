@@ -807,8 +807,6 @@ def show_consent_gate():
     unsafe_allow_html=True,
 )
 
-    
-
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Cookie Policy"):
@@ -1614,7 +1612,10 @@ def _reset_outputs_on_new_cv():
         st.session_state.pop(f"description_ai_{i}", None)
         st.session_state.pop(f"use_ai_{i}", None)
 
+import os
+import logging
 
+logging.warning("OPENAI_API_KEY present? %s", bool(os.getenv("OPENAI_API_KEY")))
 def _apply_parsed_cv_to_session(parsed: dict) -> None:
     """Apply parsed CV dict to Streamlit session_state. Safe defaults + cleanup."""
 
