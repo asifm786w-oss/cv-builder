@@ -952,6 +952,7 @@ def auth_ui():
 if show_policy_page():
     st.stop()
 
+
 if st.session_state["user"] is None:
     auth_ui()
     st.stop()
