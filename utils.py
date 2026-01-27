@@ -79,7 +79,7 @@ os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
 def _render_pdf_with_playwright(html_str: str) -> bytes:
     """
     Render PDF using Playwright + headless Chromium.
-    Requires: playwright + installed browser binaries.
+    Works on Railway by ensuring browsers exist at runtime and using the correct executable_path.
     """
     _prepare_windows_event_loop()
 
@@ -90,15 +90,63 @@ def _render_pdf_with_playwright(html_str: str) -> bytes:
             "Playwright is not installed. Add `playwright` to requirements.txt."
         ) from e
 
+    # Ensure Playwright browsers path is stable in Railway
+    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
+
+    from pathlib import Path
+    import subprocess
+
+    def _find_browser_exe() -> str | None:
+        root = Path(os.environ["PLAYWRIGHT_BROWSERS_PATH"])
+
+        # Prefer headless shell if present (matches your error path)
+        headless = sorted(
+            root.glob("chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell")
+        )
+        if headless:
+            return str(headless[-1])
+
+        # Fallback to full chromium
+        chromium = sorted(root.glob("chromium-*/chrome-linux/chrome"))
+        if chromium:
+            return str(chromium[-1])
+
+        return None
+
+    def _ensure_browsers_installed() -> None:
+        exe = _find_browser_exe()
+        if exe:
+            return
+
+        logger.warning("[PDF] Playwright browsers missing. Installing chromium + headless-shell at runtime...")
+        env = os.environ.copy()
+        env["PLAYWRIGHT_BROWSERS_PATH"] = os.environ["PLAYWRIGHT_BROWSERS_PATH"]
+
+        # Install both, so whichever Playwright expects is available
+        subprocess.check_call(
+            ["python", "-m", "playwright", "install", "--with-deps", "chromium", "chromium-headless-shell"],
+            env=env,
+        )
+
+        # If still missing after install, fail loudly
+        if not _find_browser_exe():
+            raise RuntimeError("Playwright install ran, but no Chromium executable was found in PLAYWRIGHT_BROWSERS_PATH.")
+
     logger.info("[PDF] Generating PDF with Playwright/Chromium")
 
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"],
-            )
+        _ensure_browsers_installed()
+        exe = _find_browser_exe()
 
+        with sync_playwright() as p:
+            launch_kwargs = {
+                "headless": True,
+                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+            }
+            if exe:
+                launch_kwargs["executable_path"] = exe
+
+            browser = p.chromium.launch(**launch_kwargs)
             page = browser.new_page()
 
             encoded_html = quote(html_str)
