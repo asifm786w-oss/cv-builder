@@ -707,6 +707,71 @@ if "user" not in st.session_state:
     st.session_state["user"] = None
 if "accepted_policies" not in st.session_state:
     st.session_state["accepted_policies"] = False
+if "policy_view" not in st.session_state:
+    st.session_state["policy_view"] = None  # None | "cookies" | "privacy" | "terms" | "accessibility"
+
+# -------------------------
+# Policy pages (Railway-safe navigation)
+# -------------------------
+def _read_policy_file(rel_path: str) -> str:
+    """
+    Try to read a markdown policy file. Returns empty string if missing.
+    Uses your existing Pages/*.py pages if you later want; for now we read text safely.
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        fp = os.path.join(here, rel_path)
+        if os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+
+def show_policy_page() -> bool:
+    """
+    Render policy pages inside the main app so links don't rely on /Route pages.
+    Returns True if a policy page was rendered (caller should st.stop()).
+    """
+    view = st.session_state.get("policy_view")
+    if not view:
+        return False
+
+    title_map = {
+        "accessibility": "Accessibility",
+        "cookies": "Cookie Policy",
+        "privacy": "Privacy Policy",
+        "terms": "Terms of Use",
+    }
+
+    st.title(title_map.get(view, "Policy"))
+
+    # If you have markdown files, drop them in these locations (optional):
+    # policies/accessibility.md
+    # policies/cookie_policy.md
+    # policies/privacy_policy.md
+    # policies/terms_of_use.md
+    file_map = {
+        "accessibility": "policies/accessibility.md",
+        "cookies": "policies/cookie_policy.md",
+        "privacy": "policies/privacy_policy.md",
+        "terms": "policies/terms_of_use.md",
+    }
+
+    body = _read_policy_file(file_map.get(view, ""))
+
+    if body.strip():
+        st.markdown(body)
+    else:
+        # fallback if you haven't created markdown files yet
+        st.info("Policy content not found in this deployment. Add the markdown file under /policies.")
+
+    if st.button("← Back", key="btn_policy_back"):
+        st.session_state["policy_view"] = None
+        st.rerun()
+
+    return True
 
 
 def show_consent_gate():
@@ -731,50 +796,46 @@ def show_consent_gate():
         pass
 
     # Otherwise, show the consent box
-    st.markdown(
-        """
-        <div style="
-            border-radius: 12px;
-            padding: 18px 20px;
-            margin-top: 20px;
-            background: #f9fafb;
-            border: 1px solid #e5e7eb;
-        ">
-            <h3 style="margin-top: 0;">Before you continue</h3>
-            <p style="font-size: 14px; line-height: 1.5;">
-                We use cookies and process your data to run this CV builder,
-                improve the service, and keep your account secure.
-                By using this site you agree to our
-                <a href="/Cookie_Policy" target="_self">Cookie Policy</a>,
-                <a href="/Privacy_Policy" target="_self">Privacy Policy</a>
-                and <a href="/Terms_of_Use" target="_self">Terms of Use</a>.
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+st.markdown(
+    """
+    <div style="
+        border-radius: 12px;
+        padding: 18px 20px;
+        margin-top: 20px;
+        background: #f9fafb;
+        border: 1px solid #e5e7eb;
+    ">
+        <h3 style="margin-top: 0;">Before you continue</h3>
+        <p style="font-size: 14px; line-height: 1.5;">
+            We use cookies and process your data to run this CV builder,
+            improve the service, and keep your account secure.
+            Open and read:
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
-    agree = st.checkbox(
-        "I have read and agree to the Cookie Policy, Privacy Policy and Terms of Use.",
-        key="policies_checkbox",
-    )
-
-    col_a, col_b = st.columns([1, 4])
-    with col_a:
-        if st.button("Accept and continue", key="btn_accept_policies") and agree:
-            try:
-                mark_policies_accepted(email)
-            except Exception:
-                # Even if DB update fails, we still set the session flag
-                pass
-            st.session_state["accepted_policies"] = True
-            st.rerun()
+c1, c2, c3 = st.columns(3)
+with c1:
+    if st.button("Cookie Policy", key="open_cookie_policy"):
+        st.session_state["policy_view"] = "cookies"
+        st.rerun()
+with c2:
+    if st.button("Privacy Policy", key="open_privacy_policy"):
+        st.session_state["policy_view"] = "privacy"
+        st.rerun()
+with c3:
+    if st.button("Terms of Use", key="open_terms"):
+        st.session_state["policy_view"] = "terms"
+        st.rerun()
 
     st.info("Please accept to continue using the site.")
     st.stop()
 
 
 def auth_ui():
+	
     """Login / register / password reset UI."""
     tab_login, tab_register, tab_forgot = st.tabs(
         ["Sign in", "Create account", "Forgot password"]
@@ -882,8 +943,8 @@ def auth_ui():
                 else:
                     st.error("Invalid or expired reset token. Please request a new reset link.")
 
-
-
+if show_policy_page():
+    st.stop()
 
 # -------------------------
 # PUBLIC HOME / LANDING
@@ -2417,17 +2478,24 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
-st.markdown(
-    """
-<hr style="margin-top:40px;">
+st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 
-<div style='text-align:center; font-size:12px;'>
-    <a href="/Accessibility" target="_self">Accessibility</a> |
-    <a href="/Cookie_Policy" target="_self">Cookie Policy</a> |
-    <a href="/Privacy_Policy" target="_self">Privacy Policy</a> |
-    <a href="/Terms_of_Use" target="_self">Terms of Use</a>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+fc1, fc2, fc3, fc4 = st.columns(4)
+with fc1:
+    if st.button("Accessibility", key="footer_accessibility"):
+        st.session_state["policy_view"] = "accessibility"
+        st.rerun()
+with fc2:
+    if st.button("Cookie Policy", key="footer_cookies"):
+        st.session_state["policy_view"] = "cookies"
+        st.rerun()
+with fc3:
+    if st.button("Privacy Policy", key="footer_privacy"):
+        st.session_state["policy_view"] = "privacy"
+        st.rerun()
+with fc4:
+    if st.button("Terms of Use", key="footer_terms"):
+        st.session_state["policy_view"] = "terms"
+        st.rerun()
+
 
