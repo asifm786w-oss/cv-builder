@@ -804,9 +804,10 @@ st.markdown(
         margin-top: 20px;
         background: #f9fafb;
         border: 1px solid #e5e7eb;
+        color: #0b0f19;
     ">
-        <h3 style="margin-top: 0;">Before you continue</h3>
-        <p style="font-size: 14px; line-height: 1.5;">
+        <h3 style="margin-top: 0; color:#0b0f19;">Before you continue</h3>
+        <p style="font-size: 14px; line-height: 1.5; color:#0b0f19;">
             We use cookies and process your data to run this CV builder,
             improve the service, and keep your account secure.
             Open and read:
