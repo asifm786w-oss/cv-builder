@@ -74,6 +74,7 @@ def _prepare_windows_event_loop():
         except Exception as e:
             logger.warning(f"[PDF] Could not set Windows event loop policy: {e}")
 
+os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
 
 def _render_pdf_with_playwright(html_str: str) -> bytes:
     """
