@@ -1723,7 +1723,11 @@ if uploaded_cv is not None and fill_clicked:
             st.rerun()
 
         except Exception as e:
+            import logging, traceback
+            logging.error("CV PARSE FAILED: %s: %r", type(e).__name__, e)
+            logging.error(traceback.format_exc())
             st.error(f"AI error while parsing CV: {e}")
+
 
 
 
