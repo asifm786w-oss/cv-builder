@@ -952,22 +952,6 @@ def auth_ui():
 if show_policy_page():
     st.stop()
 
-st.title("Munibs Career Support Tools")
-
-st.write(
-    "Build a modern CV and tailored cover letter in minutes. "
-    "Use AI to improve your summary, bullets and cover letters, and "
-    "download everything as PDF or Word."
-)
-
-st.markdown(
-    """
-    - ✅ Modern, clean CV templates  
-    - 🤖 AI help for summaries, bullet points and cover letters  
-    - 📄 Download as PDF and Word  
-    - 🔐 Your data stays private to your account  
-    """
-)
 
 if st.session_state["user"] is None:
     auth_ui()

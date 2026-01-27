@@ -8,7 +8,6 @@ import asyncio
 import logging
 import os
 import sys
-import subprocess
 
 import psycopg2
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -56,7 +55,6 @@ env = Environment(
 )
 
 def render_cv_html(cv: CV, template_name: str) -> str:
-    """Render the CV into an HTML string using the Jinja2 template."""
     template = env.get_template(template_name)
     return template.render(cv=cv)
 
@@ -65,10 +63,6 @@ def render_cv_html(cv: CV, template_name: str) -> str:
 # PDF (Playwright-only)
 # ============================================================
 def _prepare_windows_event_loop() -> None:
-    """
-    On Windows, Playwright sometimes needs Selector policy to support subprocesses.
-    (Railway is Linux, but keep this for local dev.)
-    """
     if sys.platform.startswith("win"):
         try:
             asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())  # type: ignore[attr-defined]
@@ -76,58 +70,16 @@ def _prepare_windows_event_loop() -> None:
             logger.warning(f"[PDF] Could not set Windows event loop policy: {e}")
 
 
-# IMPORTANT: keep this global so it applies before Playwright import.
-# Also set this as a Railway Variable (recommended): PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
+# Set a stable browser path (also set as Railway Variable recommended)
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
-
-
-def _find_browser_exe() -> str | None:
-    root = Path(os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright"))
-
-    # Prefer headless shell if present (matches your error path)
-    headless = sorted(
-        root.glob("chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell")
-    )
-    if headless:
-        return str(headless[-1])
-
-    # Fallback to full chromium
-    chromium = sorted(root.glob("chromium-*/chrome-linux/chrome"))
-    if chromium:
-        return str(chromium[-1])
-
-    return None
-
-
-def _ensure_browsers_installed() -> None:
-    exe = _find_browser_exe()
-    if exe:
-        return
-
-    logger.warning("[PDF] Playwright browsers missing. Installing chromium + headless-shell at runtime...")
-    env_vars = os.environ.copy()
-    env_vars["PLAYWRIGHT_BROWSERS_PATH"] = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
-
-    subprocess.check_call(
-        ["python", "-m", "playwright", "install", "--with-deps", "chromium", "chromium-headless-shell"],
-        env=env_vars,
-    )
-
-    if not _find_browser_exe():
-        raise RuntimeError(
-            "Playwright install ran, but no Chromium executable was found in PLAYWRIGHT_BROWSERS_PATH."
-        )
 
 
 def _render_pdf_with_playwright(html_str: str) -> bytes:
     """
     Render PDF using Playwright + headless Chromium.
-    Railway-safe: ensures browsers exist and uses executable_path explicitly.
+    NOTE: On Railway you MUST have system libs installed (libglib2.0 etc) via Dockerfile.
     """
     _prepare_windows_event_loop()
-
-    # Must remain set BEFORE importing Playwright
-    os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/app/.playwright")
 
     try:
         from playwright.sync_api import sync_playwright  # type: ignore
@@ -135,22 +87,15 @@ def _render_pdf_with_playwright(html_str: str) -> bytes:
         raise RuntimeError("Playwright is not installed. Add `playwright` to requirements.txt.") from e
 
     logger.info("[PDF] Generating PDF with Playwright/Chromium")
+
     try:
-        _ensure_browsers_installed()
-        exe = _find_browser_exe()
-
         with sync_playwright() as p:
-            launch_kwargs: dict = {
-                "headless": True,
-                "args": ["--no-sandbox", "--disable-dev-shm-usage"],
-            }
-            if exe:
-                launch_kwargs["executable_path"] = exe
-
-            browser = p.chromium.launch(**launch_kwargs)
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"],
+            )
             page = browser.new_page()
 
-            # Use a data URL so we don't rely on file paths
             encoded_html = quote(html_str)
             data_url = f"data:text/html;charset=utf-8,{encoded_html}"
 
@@ -171,7 +116,6 @@ def _render_pdf_with_playwright(html_str: str) -> bytes:
 
 
 def render_cv_pdf_bytes(cv: CV, template_name: str) -> bytes:
-    """Render the CV to PDF bytes (Playwright-only)."""
     html_str = render_cv_html(cv, template_name=template_name)
     return _render_pdf_with_playwright(html_str)
 
@@ -180,7 +124,6 @@ def render_cv_pdf_bytes(cv: CV, template_name: str) -> bytes:
 # DOCX: CV
 # ============================================================
 def render_cv_docx_bytes(cv: CV) -> bytes:
-    """Create a clean, editable DOCX version of the CV."""
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Pt, Inches
 
@@ -195,20 +138,17 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
     style = doc.styles["Normal"]
     style.font.name = "Calibri"
 
-    # Name
     title_p = doc.add_paragraph()
     title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = title_p.add_run(cv.full_name or "Curriculum Vitae")
     r.bold = True
     r.font.size = Pt(16)
 
-    # Title
     if cv.title:
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p.add_run(cv.title)
 
-    # Contact line
     contact_bits = []
     if getattr(cv, "email", None):
         contact_bits.append(cv.email)
@@ -224,17 +164,14 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
         contact_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         contact_p.paragraph_format.space_after = Pt(12)
 
-    # Summary
     if getattr(cv, "summary", None):
         doc.add_heading("Profile", level=2)
         doc.add_paragraph(cv.summary)
 
-    # Skills
     if getattr(cv, "skills", None) and cv.skills:
         doc.add_heading("Skills", level=2)
         doc.add_paragraph(", ".join(cv.skills))
 
-    # Experience
     if getattr(cv, "experiences", None) and cv.experiences:
         doc.add_heading("Experience", level=2)
         for exp in cv.experiences:
@@ -270,7 +207,6 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
                     if line:
                         doc.add_paragraph(line, style="List Bullet")
 
-    # Education
     if getattr(cv, "education", None) and cv.education:
         doc.add_heading("Education", level=2)
         for edu in cv.education:
@@ -295,7 +231,6 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
             if meta_bits:
                 doc.add_paragraph(" | ".join(meta_bits))
 
-    # References
     if getattr(cv, "references", None):
         text = cv.references or ""
         if text.strip():
@@ -325,7 +260,6 @@ def render_cover_letter_pdf_bytes(
     greeting_name: str = "Hiring Manager",
     template_name: str = "cover_letter_basic.html",
 ) -> bytes:
-    """Render cover letter to PDF bytes (Playwright-only)."""
     today_str = date.today().strftime("%d %B %Y")
 
     cleaned_lines = []
@@ -378,7 +312,6 @@ def render_cover_letter_docx_bytes(
     employer_location: str = "",
     greeting_name: str = "Hiring Manager",
 ) -> bytes:
-    """Create a formatted DOCX cover letter."""
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.shared import Pt, Inches
     import re as _re
