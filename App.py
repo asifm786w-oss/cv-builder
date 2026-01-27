@@ -789,26 +789,15 @@ def show_consent_gate():
     st.markdown(
     """
     <div style="
-        border-radius: 16px;
+        border-radius: 12px;
         padding: 18px 20px;
         margin-top: 20px;
-        background: rgba(255,255,255,0.06);
-        border: 1px solid rgba(255,255,255,0.14);
-        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+        background: #111827;
+        border: 1px solid #1f2937;
+        color: rgba(255,255,255,0.95);
     ">
-        <h3 style="
-            margin-top:0;
-            color: rgba(255,255,255,0.95);
-        ">
-            Before you continue
-        </h3>
-
-        <p style="
-            font-size:14px;
-            line-height:1.5;
-            color: rgba(255,255,255,0.85);
-            margin-bottom: 0;
-        ">
+        <h3 style="margin-top:0;">Before you continue</h3>
+        <p style="font-size:14px; line-height:1.5;">
             We use cookies and process your data to run this CV builder,
             improve the service, and keep your account secure.
             Please open and read the following policies:
