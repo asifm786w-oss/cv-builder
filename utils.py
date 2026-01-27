@@ -92,24 +92,32 @@ def _render_pdf_with_playwright(html_str: str) -> bytes:
     logger.info("[PDF] Generating PDF with Playwright/Chromium")
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+    browser = p.chromium.launch(
+        headless=True,
+        args=["--no-sandbox", "--disable-dev-shm-usage"],
+    )
+    page = browser.new_page()
 
-            # Use a data URL so we don't rely on file paths
-            encoded_html = quote(html_str)
-            data_url = f"data:text/html;charset=utf-8,{encoded_html}"
-            page.goto(data_url, wait_until="networkidle")
+    # Use a data URL so we don't rely on file paths
+    encoded_html = quote(html_str)
+    data_url = f"data:text/html;charset=utf-8,{encoded_html}"
 
-            pdf_bytes = page.pdf(
-                format="A4",
-                print_background=True,
-                margin={"top": "12mm", "bottom": "12mm", "left": "12mm", "right": "12mm"},
-            )
+    # networkidle can hang if templates load external assets; domcontentloaded is safer
+    page.goto(data_url, wait_until="domcontentloaded", timeout=30_000)
+
+    pdf_bytes = page.pdf(
+        format="A4",
+        print_background=True,
+        margin={"top": "12mm", "bottom": "12mm", "left": "12mm", "right": "12mm"},
+    )
+
 
             browser.close()
             return pdf_bytes
     except Exception as e:
+        logger.exception("[PDF] Playwright/Chromium PDF generation failed")
         raise RuntimeError(f"Playwright/Chromium PDF generation failed: {e}") from e
+
 
 
 def render_cv_pdf_bytes(cv: CV, template_name: str) -> bytes:
