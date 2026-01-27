@@ -787,24 +787,37 @@ def show_consent_gate():
         pass
 
     st.markdown(
-        """
-        <div style="
-            border-radius: 12px;
-            padding: 18px 20px;
-            margin-top: 20px;
-            background: #f9fafb;
-            border: 1px solid #e5e7eb;
-            color:#0b0f19;
+    """
+    <div style="
+        border-radius: 16px;
+        padding: 18px 20px;
+        margin-top: 20px;
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.14);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    ">
+        <h3 style="
+            margin-top:0;
+            color: rgba(255,255,255,0.95);
         ">
-            <h3 style="margin-top:0;">Before you continue</h3>
-            <p style="font-size:14px;">
-                We use cookies and process your data to run this CV builder,
-                improve the service, and keep your account secure.
-                Open and read:
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
+            Before you continue
+        </h3>
+
+        <p style="
+            font-size:14px;
+            line-height:1.5;
+            color: rgba(255,255,255,0.85);
+            margin-bottom: 0;
+        ">
+            We use cookies and process your data to run this CV builder,
+            improve the service, and keep your account secure.
+            Please open and read the following policies:
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
     )
 
     c1, c2, c3 = st.columns(3)
