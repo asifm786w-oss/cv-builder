@@ -23,7 +23,9 @@ def _get_client() -> OpenAI:
     if not api_key:
         raise RuntimeError("No OpenAI API key found. Set OPENAI_API_KEY or Streamlit secrets.")
 
-    return OpenAI(api_key=api_key)
+    api_key = api_key.strip()
+    return OpenAI(api_key=api_key, timeout=60.0, max_retries=2)
+
 
 # -------------------------------------------------------------------
 # Keep your cleaner (but now we DO NOT ask the model to output "Dear ...")
