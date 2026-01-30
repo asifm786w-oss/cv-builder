@@ -751,6 +751,8 @@ if "accepted_policies" not in st.session_state:
 if "policy_view" not in st.session_state:
     st.session_state["policy_view"] = None  # None | cookies | privacy | terms | accessibility
 
+if "auth_dialog_open" not in st.session_state:
+    st.session_state["auth_dialog_open"] = False
 
 # =========================
 # POLICY FILE READER
@@ -911,8 +913,17 @@ if "show_auth_dialog" not in st.session_state:
     st.session_state["show_auth_dialog"] = False
 
 # =========================
-# AUTH UI
+# AUTH UI + POPUP
 # =========================
+
+# --- Dialog state helpers (popup open/close) ---
+def open_auth_dialog():
+    st.session_state["auth_dialog_open"] = True
+
+def close_auth_dialog():
+    st.session_state["auth_dialog_open"] = False
+
+
 @st.dialog("Sign in to unlock", width="large")
 def auth_dialog():
     st.info("Create a free account or sign in to start using the tools.")
@@ -922,7 +933,6 @@ def auth_dialog():
     if st.button("Close", use_container_width=True):
         close_auth_dialog()
         st.rerun()
-
 
 
 def auth_ui():
@@ -944,6 +954,7 @@ def auth_ui():
                 if user:
                     st.session_state["user"] = user
                     st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
+                    close_auth_dialog()  # close popup after success
                     st.rerun()
                 else:
                     st.error("Invalid email or password.")
@@ -987,6 +998,7 @@ def auth_ui():
                     user = authenticate_user(reg_email, reg_password)
                     if user:
                         st.session_state["user"] = user
+                        close_auth_dialog()  # close popup after success
                         st.rerun()
                     else:
                         st.success("Account created. Please sign in.")
@@ -1066,6 +1078,10 @@ def render_public_landing():
         """
     )
 
+
+# =========================
+# SIDEBARS
+# =========================
 def render_sidebar_preview():
     """Sidebar shown when user is NOT logged in (preview only)."""
     with st.sidebar:
@@ -1076,7 +1092,7 @@ def render_sidebar_preview():
             st.write("• Modern templates")
             st.write("• AI bullet polishing")
 
-            # IMPORTANT: must be clickable to open popup (can't be disabled=True)
+            # MUST be clickable to open popup (don't disable)
             st.button(
                 "Generate CV (Sign in required)",
                 use_container_width=True,
@@ -1085,7 +1101,6 @@ def render_sidebar_preview():
 
         with st.expander("✉️ Cover Letters", expanded=False):
             st.write("• Tailored letters from job descriptions")
-
             st.button(
                 "Generate Letter (Sign in required)",
                 use_container_width=True,
@@ -1204,6 +1219,7 @@ Usage resets monthly based on plan.
             st.rerun()
 
 
+
 # =========================
 # ROUTING
 # =========================
@@ -1212,6 +1228,9 @@ if show_policy_page():
 
 # 1. Always-visible landing (read-only)
 render_public_landing()
+
+if "auth_dialog_open" not in st.session_state:
+    st.session_state["auth_dialog_open"] = False
 
 # 2. AUTH GATE (preview allowed, tools locked)
 user = st.session_state.get("user")
