@@ -1222,34 +1222,39 @@ Usage resets monthly based on plan.
             st.rerun()
 
 
-# ============================================================
-# ROUTING (CORRECT ORDER)
-# ============================================================
+# =========================
+# ROUTING (SINGLE SOURCE OF TRUTH)
+# =========================
 if show_policy_page():
     st.stop()
 
-# Always show landing as the MAIN page
+# Always show landing (read-only)
 render_public_landing()
 
-user = st.session_state.get("user")
+# Auth state
+user = st.session_state.get("user", None)
 
-# NOT LOGGED IN: show preview sidebar + popup only if requested
+# -------------------------
+# NOT LOGGED IN: preview only
+# -------------------------
 if user is None:
     render_sidebar_preview()
 
+    # IMPORTANT:
+    # Do NOT call auth_ui() here unless you want inline login.
+    # If you want popup-only, only call auth_dialog() when a button sets a flag.
     if st.session_state.get("_show_auth_dialog"):
         auth_dialog()
 
     st.stop()
 
-
-# ============================================================
-# LOGGED IN FROM HERE DOWN ONLY
-# ============================================================
+# -------------------------
+# LOGGED IN ONLY BELOW HERE
+# -------------------------
 current_user = user
-user_email = current_user.get("email", "")
+user_email = current_user.get("email") or ""
 
-# Consent gate is POST-login only
+# Consent gate + init must run once and only here
 show_consent_gate()
 freeze_defaults()
 
