@@ -1210,41 +1210,27 @@ Usage resets monthly based on plan.
 if show_policy_page():
     st.stop()
 
-# 1) Always-visible landing (read-only)
+# 1. Always-visible landing (read-only)
 render_public_landing()
 
-# 2) AUTH (do NOT stop — keep landing visible)
-if st.session_state.get("user") is None:
+# 2. AUTH GATE (preview allowed, tools locked)
+user = st.session_state.get("user")
+if user is None:
     render_sidebar_preview()
+    st.info("Create a free account or sign in to start using the tools.")
+    auth_ui()
+    st.stop()
 
-    # show dialog only when triggered
-    if st.session_state.get("show_auth_dialog"):
-        auth_dialog()
+# 3. POST-LOGIN ONLY from here
+current_user = user
+user_email = current_user.get("email", "")
 
-# 3) POLICY / CONSENT GATE (only after login)
+# 4. POLICY / CONSENT GATE (post-login only)
 show_consent_gate()
 
-# 4) Freeze defaults AFTER consent
+# 5. Freeze defaults AFTER consent
 freeze_defaults()
 
-# 5) App loads normally from here
-current_user = st.session_state["user"]
-user_email = current_user["email"]
-
-
-
-# -------------------------
-# CONSENT GATE (only after login)
-# -------------------------
-show_consent_gate()
-freeze_defaults()
-
-# Logged-in user
-current_user = st.session_state["user"]
-user_email = current_user["email"]
-
-# ---- Admin access: role-based (KEEP for your admin page logic) ----
-is_admin = current_user.get("role") in {"owner", "admin"}
 
 
 # -------------------------
