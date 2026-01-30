@@ -892,25 +892,7 @@ def show_consent_gate():
 
     agree = st.checkbox("I agree to the Cookie Policy, Privacy Policy and Terms of Use")
 
-    if st.button("Accept and continue") and agree:
-        try:
-            mark_policies_accepted(email)
-        except Exception:
-            pass
-        st.session_state["accepted_policies"] = True
-        st.rerun()
-
-    st.info("Please accept to continue using the site.")
-    st.stop()
-
-def open_auth_dialog():
-    st.session_state["show_auth_dialog"] = True
-
-def close_auth_dialog():
-    st.session_state["show_auth_dialog"] = False
-
-if "show_auth_dialog" not in st.session_state:
-    st.session_state["show_auth_dialog"] = False
+    
 
 # =========================
 # AUTH UI + POPUP
