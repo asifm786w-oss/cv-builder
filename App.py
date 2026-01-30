@@ -805,6 +805,32 @@ def show_policy_page() -> bool:
 
 
 # =========================
+# BRAND (Munibs logo helper)
+# =========================
+def _render_munibs_logo():
+    """
+    Tries common local paths. If your logo file exists in one of these,
+    it will show automatically. Change/extend the list if needed.
+    """
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            os.path.join(here, "assets", "munibs_logo.png"),
+            os.path.join(here, "assets", "logo.png"),
+            os.path.join(here, "munibs_logo.png"),
+            os.path.join(here, "logo.png"),
+            os.path.join(here, "static", "munibs_logo.png"),
+            os.path.join(here, "static", "logo.png"),
+        ]
+        for p in candidates:
+            if os.path.exists(p):
+                st.image(p, width=120)
+                return
+    except Exception:
+        pass
+
+
+# =========================
 # CONSENT GATE (POST-LOGIN ONLY)
 # =========================
 def show_consent_gate():
@@ -824,26 +850,29 @@ def show_consent_gate():
     except Exception:
         pass
 
+    # Munibs logo back on the consent gate
+    _render_munibs_logo()
+
     st.markdown(
-    """
-    <div style="
-        border-radius: 12px;
-        padding: 18px 20px;
-        margin-top: 20px;
-        background: #111827;
-        border: 1px solid #1f2937;
-        color: rgba(255,255,255,0.95);
-    ">
-        <h3 style="margin-top:0;">Before you continue</h3>
-        <p style="font-size:14px; line-height:1.5;">
-            We use cookies and process your data to run this CV builder,
-            improve the service, and keep your account secure.
-            Please open and read the following policies:
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+        """
+        <div style="
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-top: 12px;
+            background: #111827;
+            border: 1px solid #1f2937;
+            color: rgba(255,255,255,0.95);
+        ">
+            <h3 style="margin-top:0;">Before you continue</h3>
+            <p style="font-size:14px; line-height:1.5;">
+                We use cookies and process your data to run this CV builder,
+                improve the service, and keep your account secure.
+                Please open and read the following policies:
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -983,41 +1012,24 @@ def auth_ui():
                     st.error("Invalid or expired reset token. Please request a new reset link.")
 
 
-
 # =========================
-# ROUTING
-# =========================
-if show_policy_page():
-    st.stop()
-
-# 1. Always-visible landing (read-only)
-render_public_landing()
-
-# 2. AUTH GATE (preview allowed, tools locked)
-if st.session_state.get("user") is None:
-    render_sidebar_preview()
-    st.info("Create a free account or sign in to start using the tools.")
-    auth_ui()
-    st.stop()
-
-# 3. POLICY / CONSENT GATE (only after login)
-show_consent_gate()
-
-# 4. Freeze defaults AFTER consent
-freeze_defaults()
-
-# 5. App loads normally from here
-current_user = st.session_state["user"]
-
-# Logged in from here
-user_email = current_user["email"]
-
-
-# -------------------------
 # PUBLIC HOME / LANDING (always visible)
-# -------------------------
+# =========================
 def render_public_landing():
-    st.title("Munibs Career Support Tools")
+    # Text "logo" / brand header
+    st.markdown(
+        """
+        <div style="text-align:center; margin-top: 8px; margin-bottom: 18px;">
+            <div style="font-size: 44px; font-weight: 800; line-height: 1.05;">
+                Munibs
+            </div>
+            <div style="font-size: 16px; opacity: 0.85; margin-top: 6px;">
+                Career Support Tools
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     st.write(
         "Build a modern CV and tailored cover letter in minutes. "
@@ -1033,7 +1045,6 @@ def render_public_landing():
         - 🔐 Your data stays private to your account  
         """
     )
-
 
 def render_sidebar_preview():
     """Sidebar shown when user is NOT logged in (preview only)."""
@@ -1156,6 +1167,32 @@ Usage resets monthly based on plan.
         if st.button("Log out", use_container_width=True):
             st.session_state["user"] = None
             st.rerun()
+
+# =========================
+# ROUTING
+# =========================
+if show_policy_page():
+    st.stop()
+
+# 1) Always-visible landing (read-only)
+render_public_landing()
+
+# 2) AUTH GATE (show auth UNDER landing; tools locked)
+if st.session_state.get("user") is None:
+    render_sidebar_preview()
+    st.info("Create a free account or sign in to start using the tools.")
+    auth_ui()
+    st.stop()
+
+# 3) POLICY / CONSENT GATE (only after login)
+show_consent_gate()
+
+# 4) Freeze defaults AFTER consent
+freeze_defaults()
+
+# 5) App loads normally from here
+current_user = st.session_state["user"]
+user_email = current_user["email"]
 
 
 
