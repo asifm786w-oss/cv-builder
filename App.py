@@ -901,10 +901,30 @@ def show_consent_gate():
     st.info("Please accept to continue using the site.")
     st.stop()
 
+def open_auth_dialog():
+    st.session_state["show_auth_dialog"] = True
+
+def close_auth_dialog():
+    st.session_state["show_auth_dialog"] = False
+
+if "show_auth_dialog" not in st.session_state:
+    st.session_state["show_auth_dialog"] = False
 
 # =========================
 # AUTH UI
 # =========================
+@st.dialog("Sign in to unlock", width="large")
+def auth_dialog():
+    st.info("Create a free account or sign in to start using the tools.")
+    auth_ui()
+
+    st.markdown("---")
+    if st.button("Close", use_container_width=True):
+        close_auth_dialog()
+        st.rerun()
+
+
+
 def auth_ui():
     """Login / register / password reset UI."""
     tab_login, tab_register, tab_forgot = st.tabs(
@@ -1055,14 +1075,30 @@ def render_sidebar_preview():
         with st.expander("📄 CV Builder", expanded=True):
             st.write("• Modern templates")
             st.write("• AI bullet polishing")
-            st.button("Generate CV (locked)", disabled=True, use_container_width=True)
+
+            # IMPORTANT: must be clickable to open popup (can't be disabled=True)
+            st.button(
+                "Generate CV (Sign in required)",
+                use_container_width=True,
+                on_click=open_auth_dialog,
+            )
 
         with st.expander("✉️ Cover Letters", expanded=False):
             st.write("• Tailored letters from job descriptions")
-            st.button("Generate Letter (locked)", disabled=True, use_container_width=True)
+
+            st.button(
+                "Generate Letter (Sign in required)",
+                use_container_width=True,
+                on_click=open_auth_dialog,
+            )
 
         with st.expander("🔒 Account", expanded=False):
             st.write("Sign in to save your CVs and download PDF/Word.")
+            st.button(
+                "Sign in / Create account",
+                use_container_width=True,
+                on_click=open_auth_dialog,
+            )
 
 
 def render_sidebar_logged_in(current_user, user_email, my_ref_code, my_ref_count):
@@ -1071,7 +1107,6 @@ def render_sidebar_logged_in(current_user, user_email, my_ref_code, my_ref_count
         st.markdown("### 📌 Menu")
 
         with st.expander("📄 CV", expanded=True):
-            # Keep these as simple buttons for now (won't break your flow)
             st.button("CV Builder", use_container_width=True)
 
         with st.expander("✉️ Cover Letter", expanded=False):
@@ -1168,6 +1203,7 @@ Usage resets monthly based on plan.
             st.session_state["user"] = None
             st.rerun()
 
+
 # =========================
 # ROUTING
 # =========================
@@ -1177,12 +1213,13 @@ if show_policy_page():
 # 1) Always-visible landing (read-only)
 render_public_landing()
 
-# 2) AUTH GATE (show auth UNDER landing; tools locked)
+# 2) AUTH (do NOT stop — keep landing visible)
 if st.session_state.get("user") is None:
     render_sidebar_preview()
-    st.info("Create a free account or sign in to start using the tools.")
-    auth_ui()
-    st.stop()
+
+    # show dialog only when triggered
+    if st.session_state.get("show_auth_dialog"):
+        auth_dialog()
 
 # 3) POLICY / CONSENT GATE (only after login)
 show_consent_gate()
