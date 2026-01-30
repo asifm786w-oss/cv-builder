@@ -329,6 +329,44 @@ def restore_education_state(max_rows: int = 5):
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
 
 
+def render_sidebar_preview():
+    with st.sidebar:
+        st.markdown("### 🧭 Explore")
+        st.caption("Preview mode — sign in to unlock tools.")
+
+        with st.expander("📄 CV Builder", expanded=True):
+            st.write("• Templates preview")
+            st.write("• CV sections & examples")
+            st.button("Generate CV (locked)", disabled=True, use_container_width=True)
+
+        with st.expander("✉️ Cover Letters", expanded=False):
+            st.write("• Tailored letters preview")
+            st.button("Generate Letter (locked)", disabled=True, use_container_width=True)
+
+        with st.expander("🔒 Account", expanded=False):
+            st.write("Sign in to save your CVs and exports.")
+
+
+def render_sidebar_logged_in():
+    with st.sidebar:
+        st.markdown("### 📌 Menu")
+
+        # Clean dropdown navigation
+        with st.expander("📄 CV", expanded=True):
+            st.button("CV Builder", use_container_width=True)
+            st.button("Saved CVs", use_container_width=True)
+
+        with st.expander("✉️ Cover Letter", expanded=False):
+            st.button("Generate Letter", use_container_width=True)
+            st.button("Saved Letters", use_container_width=True)
+
+        with st.expander("⚙️ Settings", expanded=False):
+            st.button("Profile", use_container_width=True)
+            st.button("Logout", use_container_width=True)
+
+        # IMPORTANT: no user type/admin stuff here (as requested)
+
+
 # -------------------------------------------------------------------
 # OpenAI helpers (kept for future use if needed)
 # -------------------------------------------------------------------
@@ -952,59 +990,188 @@ def auth_ui():
 if show_policy_page():
     st.stop()
 
+# 1. Always-visible landing (read-only)
+render_public_landing()
 
-if st.session_state["user"] is None:
-    auth_ui()
-    st.stop()
-
-show_consent_gate()
-
-
-# -------------------------
-# PUBLIC HOME / LANDING
-# -------------------------
-st.title("Munibs Career Support Tools")
-
-st.write(
-    "Build a modern CV and tailored cover letter in minutes. "
-    "Use AI to improve your summary, bullets and cover letters, and "
-    "download everything as PDF or Word."
-)
-
-st.markdown(
-    """
-    - ✅ Modern, clean CV templates  
-    - 🤖 AI help for summaries, bullet points and cover letters  
-    - 📄 Download as PDF and Word  
-    - 🔐 Your data stays private to your account  
-    """
-)
-
-# -------------------------
-# AUTH GATE (login/register before consent gate)
-# -------------------------
+# 2. AUTH GATE (preview allowed, tools locked)
 if st.session_state.get("user") is None:
+    render_sidebar_preview()
     st.info("Create a free account or sign in to start using the tools.")
     auth_ui()
     st.stop()
+
+# 3. POLICY / CONSENT GATE (only after login)
+show_consent_gate()
+
+# 4. Freeze defaults AFTER consent
+freeze_defaults()
+
+# 5. App loads normally from here
+current_user = st.session_state["user"]
+
+# Logged in from here
+user_email = current_user["email"]
+
+
+# -------------------------
+# PUBLIC HOME / LANDING (always visible)
+# -------------------------
+def render_public_landing():
+    st.title("Munibs Career Support Tools")
+
+    st.write(
+        "Build a modern CV and tailored cover letter in minutes. "
+        "Use AI to improve your summary, bullets and cover letters, and "
+        "download everything as PDF or Word."
+    )
+
+    st.markdown(
+        """
+        - ✅ Modern, clean CV templates  
+        - 🤖 AI help for summaries, bullet points and cover letters  
+        - 📄 Download as PDF and Word  
+        - 🔐 Your data stays private to your account  
+        """
+    )
+
+
+def render_sidebar_preview():
+    """Sidebar shown when user is NOT logged in (preview only)."""
+    with st.sidebar:
+        st.markdown("### 🧭 Explore")
+        st.caption("Preview mode — sign in to unlock the tools.")
+
+        with st.expander("📄 CV Builder", expanded=True):
+            st.write("• Modern templates")
+            st.write("• AI bullet polishing")
+            st.button("Generate CV (locked)", disabled=True, use_container_width=True)
+
+        with st.expander("✉️ Cover Letters", expanded=False):
+            st.write("• Tailored letters from job descriptions")
+            st.button("Generate Letter (locked)", disabled=True, use_container_width=True)
+
+        with st.expander("🔒 Account", expanded=False):
+            st.write("Sign in to save your CVs and download PDF/Word.")
+
+
+def render_sidebar_logged_in(current_user, user_email, my_ref_code, my_ref_count):
+    """Sidebar shown when logged in. No role/admin shown."""
+    with st.sidebar:
+        st.markdown("### 📌 Menu")
+
+        with st.expander("📄 CV", expanded=True):
+            # Keep these as simple buttons for now (won't break your flow)
+            st.button("CV Builder", use_container_width=True)
+
+        with st.expander("✉️ Cover Letter", expanded=False):
+            st.button("Cover Letter", use_container_width=True)
+
+        # Usage (keep your existing logic intact, just present it cleaner)
+        with st.expander("📊 Usage", expanded=False):
+            plan = current_user.get("plan", "free")
+            referrals = min(current_user.get("referrals_count", 0) or 0, REFERRAL_CAP)
+            plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+
+            base_cv = plan_limits["cv"]
+            base_ai = plan_limits["ai"]
+
+            # Admin/owner unlimited stays in logic, we just don't show role
+            if current_user.get("role") in {"owner", "admin"}:
+                base_cv = None
+                base_ai = None
+
+            used_cv = st.session_state.get("cv_generations", 0)
+            used_ai_total = (
+                st.session_state.get("summary_uses", 0)
+                + st.session_state.get("cover_uses", 0)
+                + st.session_state.get("bullets_uses", 0)
+                + st.session_state.get("job_summary_uses", 0)
+            )
+
+            bonus_cv = referrals * BONUS_PER_REFERRAL_CV
+            bonus_ai = referrals * BONUS_PER_REFERRAL_AI
+
+            if base_cv is None:
+                st.write("**CV Generations:** ♾️ Unlimited")
+            else:
+                remaining_cv = max(base_cv + bonus_cv - used_cv, 0)
+                st.write(f"**CV Remaining:** {remaining_cv}")
+
+            if base_ai is None:
+                st.write("**AI Tools:** ♾️ Unlimited")
+            else:
+                remaining_ai = max(base_ai + bonus_ai - used_ai_total, 0)
+                st.write(f"**AI Remaining:** {remaining_ai}")
+
+        with st.expander("🔗 Referral Program", expanded=False):
+            st.write(f"**Your code:** `{my_ref_code}`")
+            st.write(f"**Referrals used:** {my_ref_count} / {REFERRAL_CAP}")
+
+        with st.expander("📘 Help", expanded=False):
+            help_topic = st.radio(
+                "Choose a topic",
+                [
+                    "Quick Start",
+                    "AI Tools & Usage",
+                    "Cover Letter Rules",
+                    "Templates & Downloads",
+                    "Troubleshooting",
+                    "Privacy & Refunds",
+                ],
+                key="help_topic_sidebar",
+            )
+
+            if help_topic == "Quick Start":
+                st.markdown(
+                    """
+1) Fill **Personal Details**  
+2) Add **Skills**  
+3) Add **Experience** roles  
+4) Add **Education**  
+5) (Optional) paste a **Job Description**  
+6) Generate and download as **PDF** or **Word**
+                    """
+                )
+            elif help_topic == "AI Tools & Usage":
+                st.markdown(
+                    """
+- Improve summary  
+- Rewrite bullet points  
+- Generate tailored cover letters  
+Usage resets monthly based on plan.
+                    """
+                )
+            elif help_topic == "Cover Letter Rules":
+                st.markdown("Complete **Personal Details** so headers/sign-off are correct.")
+            elif help_topic == "Templates & Downloads":
+                st.markdown("PDF = best for applying. Word = best for editing.")
+            elif help_topic == "Troubleshooting":
+                st.markdown("If AI hangs, wait 10–30s and try once.")
+            elif help_topic == "Privacy & Refunds":
+                st.markdown("Upload only what you need. Payments non-refundable once used.")
+
+        st.markdown("---")
+        st.caption("Support: support@affiliateworldcommissions.com")
+
+        if st.button("Log out", use_container_width=True):
+            st.session_state["user"] = None
+            st.rerun()
+
+
 
 # -------------------------
 # CONSENT GATE (only after login)
 # -------------------------
 show_consent_gate()
-
-
-# ✅ ENFORCE POLICIES HERE (MUST BE AFTER LOGIN, BEFORE APP LOADS)
-show_consent_gate()
-
 freeze_defaults()
 
 # Logged-in user
 current_user = st.session_state["user"]
 user_email = current_user["email"]
 
-# ---- Admin access: role-based ----
+# ---- Admin access: role-based (KEEP for your admin page logic) ----
 is_admin = current_user.get("role") in {"owner", "admin"}
+
 
 # -------------------------
 # Usage + plan configuration (DEFINE BEFORE SIDEBAR USES IT)
