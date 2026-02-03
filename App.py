@@ -292,6 +292,7 @@ def backup_education_state(max_rows: int = 5):
     Store the latest non-empty education fields so reruns can't wipe them.
     """
     edu_rows = []
+
     for i in range(max_rows):
         row = {
             "degree": st.session_state.get(f"degree_{i}", "") or "",
@@ -300,22 +301,14 @@ def backup_education_state(max_rows: int = 5):
             "start": st.session_state.get(f"edu_start_{i}", "") or "",
             "end": st.session_state.get(f"edu_end_{i}", "") or "",
         }
+
         # keep row if it has anything meaningful
         if any(v.strip() for v in row.values()):
             edu_rows.append(row)
 
     if edu_rows:
         st.session_state["_edu_backup"] = edu_rows
-    else:
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🔐 Sign in", key="sb_signin_btn"):
-                open_auth_modal("Sign in")
-                st.rerun()
-        with c2:
-            if st.button("✨ Create", key="sb_create_btn"):
-                open_auth_modal("Create account")
-                st.rerun()
+
 
 
 
