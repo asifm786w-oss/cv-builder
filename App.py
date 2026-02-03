@@ -2391,80 +2391,52 @@ for i in range(int(num_experiences)):
             )
         )
 
-# ---------- Run AI AFTER the loop ----------
+
+# ---------- Run AI AFTER the loop (single, correct) ----------
 role_to_improve = st.session_state.get("ai_running_role")
-run_now = st.session_state.get("ai_run_now", False)
-
-if run_now and role_to_improve is not None:
-    if not gate_premium("use AI role improvements"):
-        # reset flags so it doesn't keep trying
-        st.session_state["ai_running_role"] = None
-        st.session_state["ai_run_now"] = False
-        st.stop()
-    desc_key    = f"description_{i}"
-    pending_key = f"description_pending_{i}"
-    current_text = (st.session_state.get(desc_key) or "").strip()
-
-    if not current_text:
-        st.warning("Please add text for this role first.")
-    elif not has_free_quota("bullets_uses", 1, "role description improvements"):
-        pass
-    else:
-        with st.spinner(f"Improving Role {i+1} description..."):
-            try:
-                improved = improve_bullets(current_text)
-                improved_limited = enforce_word_limit(
-                    improved,
-                    MAX_DOC_WORDS,
-                    label=f"Role {i+1} description",
-                )
-
-                # ✅ stage update for next rerun
-                st.session_state[pending_key] = improved_limited
-
-                st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
-                increment_usage(user_email, "bullets_uses")
-
-                st.success(f"Role {i+1} updated.")
-                st.rerun()
-
-            except Exception as e:
-                st.error(f"AI error: {e}")
-
-
-# ---------- Run AI AFTER the loop ----------
-role_to_improve = st.session_state.get("ai_running_role")
-run_now = st.session_state.pop("ai_run_now", False)
+run_now = st.session_state.pop("ai_run_now", False)  # pop so it runs once
 
 if run_now and role_to_improve is not None:
     i = int(role_to_improve)
+
+    # IMPORTANT: clear role flag early so reruns don't re-trigger
+    st.session_state["ai_running_role"] = None
+
+    if not gate_premium("use AI role improvements"):
+        st.stop()
+
     desc_key    = f"description_{i}"
     pending_key = f"description_pending_{i}"
     current_text = (st.session_state.get(desc_key) or "").strip()
 
     if not current_text:
         st.warning("Please add text for this role first.")
-    elif not has_free_quota("bullets_uses", 1, "role description improvements"):
-        pass
-    else:
-        with st.spinner(f"Improving Role {i+1} description..."):
-            try:
-                improved = improve_bullets(current_text)
-                improved_limited = enforce_word_limit(
-                    improved,
-                    MAX_DOC_WORDS,
-                    label=f"Role {i+1} description",
-                )
+        st.stop()
 
-                st.session_state[pending_key] = improved_limited
-                st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
-                increment_usage(user_email, "bullets_uses")
+    if not has_free_quota("bullets_uses", 1, "role description improvements"):
+        st.stop()
 
-                st.session_state["ai_running_role"] = None
-                st.rerun()
+    with st.spinner(f"Improving Role {i+1} description..."):
+        try:
+            improved = improve_bullets(current_text)
+            improved_limited = enforce_word_limit(
+                improved,
+                MAX_DOC_WORDS,
+                label=f"Role {i+1} description",
+            )
 
-            except Exception as e:
-                st.error(f"AI error: {e}")
+            # Stage update for next render
+            st.session_state[pending_key] = improved_limited
+
+            st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
+            increment_usage(user_email, "bullets_uses")
+
+            st.success(f"Role {i+1} updated.")
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"AI error: {e}")
+
 
 restore_education_state()
 # -------------------------
