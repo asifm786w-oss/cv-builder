@@ -128,6 +128,12 @@ def backup_skills_state():
     if isinstance(val, str) and val.strip():
         st.session_state["_skills_backup"] = val
 
+def render_auth_modal_if_open():
+	
+    if not st.session_state.get("auth_modal_open", False):
+        return
+    _auth_dialog()  # your existing dialog function
+
 def restore_skills_state():
     """
     If skills_text became None/blank after a rerun, restore from:
@@ -300,6 +306,17 @@ def backup_education_state(max_rows: int = 5):
 
     if edu_rows:
         st.session_state["_edu_backup"] = edu_rows
+    else:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🔐 Sign in", key="sb_signin_btn"):
+                open_auth_modal("Sign in")
+                st.rerun()
+        with c2:
+            if st.button("✨ Create", key="sb_create_btn"):
+                open_auth_modal("Create account")
+                st.rerun()
+
 
 
 def restore_education_state(max_rows: int = 5):
@@ -327,44 +344,6 @@ def restore_education_state(max_rows: int = 5):
         st.session_state[f"edu_location_{i}"] = row.get("location", "")
         st.session_state[f"edu_start_{i}"] = row.get("start", "")
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
-
-
-def render_sidebar_preview():
-    with st.sidebar:
-        st.markdown("### 🧭 Explore")
-        st.caption("Preview mode — sign in to unlock tools.")
-
-        with st.expander("📄 CV Builder", expanded=True):
-            st.write("• Templates preview")
-            st.write("• CV sections & examples")
-            st.button("Generate CV (locked)", disabled=True, use_container_width=True)
-
-        with st.expander("✉️ Cover Letters", expanded=False):
-            st.write("• Tailored letters preview")
-            st.button("Generate Letter (locked)", disabled=True, use_container_width=True)
-
-        with st.expander("🔒 Account", expanded=False):
-            st.write("Sign in to save your CVs and exports.")
-
-
-def render_sidebar_logged_in():
-    with st.sidebar:
-        st.markdown("### 📌 Menu")
-
-        # Clean dropdown navigation
-        with st.expander("📄 CV", expanded=True):
-            st.button("CV Builder", use_container_width=True)
-            st.button("Saved CVs", use_container_width=True)
-
-        with st.expander("✉️ Cover Letter", expanded=False):
-            st.button("Generate Letter", use_container_width=True)
-            st.button("Saved Letters", use_container_width=True)
-
-        with st.expander("⚙️ Settings", expanded=False):
-            st.button("Profile", use_container_width=True)
-            st.button("Logout", use_container_width=True)
-
-        # IMPORTANT: no user type/admin stuff here (as requested)
 
 
 # -------------------------------------------------------------------
@@ -401,6 +380,132 @@ def _get_openai_client() -> OpenAI:
         )
 
     return OpenAI(api_key=api_key)
+def is_preview_mode() -> bool:
+    return st.session_state.get("user") is None
+
+def preview_topbar():
+    if not is_preview_mode():
+        return
+    st.markdown(
+        """
+        <div style="
+            position: sticky;
+            top: 0;
+            z-index: 999;
+            margin: 0 0 14px 0;
+            padding: 10px 12px;
+            border-radius: 14px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.14);
+            backdrop-filter: blur(8px);
+        ">
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+            <div>
+              <div style="font-weight:900; letter-spacing:-0.02em;">Preview mode</div>
+              <div style="opacity:0.85; font-size:12.5px;">Sign in to generate downloads, use AI, and save your data.</div>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <a style="text-decoration:none;" href="#">
+                <span style="
+                    display:inline-block;
+                    padding:8px 12px;
+                    border-radius:999px;
+                    border:1px solid rgba(255,255,255,0.18);
+                    font-weight:800;
+                    font-size:12.5px;">
+                    🔒 Premium
+                </span>
+              </a>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def _is_logged_in_user(u) -> bool:
+    return bool(u and isinstance(u, dict) and u.get("email"))
+
+def render_mulyba_brand_header(is_logged_in: bool):
+    st.markdown(
+        """
+        <div class="sb-card">
+            <div style="font-size:20px; font-weight:900;">🏷️ Mulyba</div>
+            <div class="sb-muted">Career Suite • CV Builder • AI tools</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # --- Auth buttons under brand (GUEST ONLY) ---
+    if not is_logged_in:
+        c1, c2 = st.columns(2)
+
+        with c1:
+            if st.button("🔐 Sign in", key="brand_signin_btn"):
+                open_auth_modal("Sign in")
+                st.rerun()
+
+        with c2:
+            if st.button("✨ Create", key="brand_create_btn"):
+                open_auth_modal("Create account")
+                st.rerun()
+
+
+
+def locked_action_button(
+    label: str,
+    *,
+    key: str,
+    feature_label: str = "This feature",
+    counter_key: str | None = None,
+    cost: int = 1,
+    require_login: bool = True,
+    default_tab: str = "Sign in",
+    cooldown_name: str | None = None,
+    cooldown_seconds: int = 5,
+    disabled: bool = False,
+    **_ignore,  # <-- makes it compatible with any older calls
+) -> bool:
+    """
+    Single safe button:
+    - If require_login and guest -> opens auth modal, returns False
+    - If cooldown active -> warns, returns False
+    - If counter_key provided -> checks has_free_quota(counter_key, cost, feature_label)
+    - Else -> returns True when clicked
+    """
+
+    user = st.session_state.get("user")
+    is_logged_in = _is_logged_in_user(user)
+
+    clicked = st.button(label, key=key, disabled=disabled)
+    if not clicked:
+        return False
+
+    # Login gate
+    if require_login and not is_logged_in:
+        st.warning("Sign in to unlock this feature.")
+        open_auth_modal(default_tab)
+        st.stop()
+
+    # Cooldown gate (optional)
+    if cooldown_name:
+        ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
+        if not ok:
+            st.warning(f"⏳ Please wait {left}s before trying again.")
+            st.stop()
+
+    # Quota gate (optional)
+    if counter_key:
+        if not has_free_quota(counter_key, cost, feature_label):
+            st.stop()
+
+    return True
+
+
+
+
+
 
 # -------------------------
 # CV Template mapping
@@ -419,44 +524,62 @@ TEMPLATE_MAP = {
 # Basic page config
 # -------------------------
 st.set_page_config(
-    page_title="Modern CV Builder",
+    page_title="Mulyba",
     page_icon="📄",
     layout="centered",
     initial_sidebar_state="expanded",
 )
+
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
 :root{
-    --bg: #0b0f19;
-    --panel: rgba(255,255,255,0.06);
-    --border: rgba(255,255,255,0.12);
-    --text: rgba(255,255,255,0.92);
-    --muted: rgba(255,255,255,0.70);
+  --bg: #0b0f19;
+  --panel: rgba(255,255,255,0.06);
+  --border: rgba(255,255,255,0.12);
+  --text: rgba(255,255,255,0.92);
+  --muted: rgba(255,255,255,0.70);
 
-    --red: #ff2d55;
-    --red2: #ff3b30;
+  --red: #ff2d55;
+  --red2: #ff3b30;
 
-    --radius: 16px;
-    --radius-sm: 12px;
-    --shadow: 0 18px 50px rgba(0,0,0,0.35);
-    --shadow-soft: 0 10px 30px rgba(0,0,0,0.25);
+  --radius: 16px;
+  --radius-sm: 12px;
+  --shadow: 0 18px 50px rgba(0,0,0,0.35);
+  --shadow-soft: 0 10px 30px rgba(0,0,0,0.25);
 }
 
 /* ---------- Background + base font ---------- */
 html, body, [data-testid="stAppViewContainer"]{
-    background: radial-gradient(1200px 600px at 15% 10%, rgba(255,45,85,0.18), transparent 55%),
-                radial-gradient(900px 500px at 80% 15%, rgba(255,59,48,0.12), transparent 55%),
-                linear-gradient(180deg, #070a12 0%, var(--bg) 100%) !important;
-    color: var(--text) !important;
-    font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
+  background:
+    radial-gradient(1200px 600px at 15% 10%, rgba(255,45,85,0.18), transparent 55%),
+    radial-gradient(900px 500px at 80% 15%, rgba(255,59,48,0.12), transparent 55%),
+    linear-gradient(180deg, #070a12 0%, var(--bg) 100%) !important;
+  color: var(--text) !important;
+  font-family: Inter, system-ui, -apple-system, Segoe UI, Roboto, sans-serif !important;
 }
 
+/* Remove Streamlit top chrome */
+header[data-testid="stHeader"]{ background: transparent !important; }
+
+/* ✅ Premium “air” around the whole main area (your side spacing request) */
+[data-testid="stAppViewContainer"] .main{
+  padding-left: clamp(16px, 4vw, 64px) !important;
+  padding-right: clamp(16px, 4vw, 64px) !important;
+}
+
+/* ---------- MAIN WIDTH / CENTERING ---------- */
 [data-testid="stAppViewContainer"] .main .block-container{
-    padding-top: 2rem;
-    padding-bottom: 3rem;
-    max-width: 920px;
+  padding-top: 2rem !important;
+  padding-bottom: 3rem !important;
+
+  max-width: 980px !important;     /* 👈 sweet spot with rail */
+  margin-left: auto !important;
+  margin-right: auto !important;
+
+  padding-left: 2rem !important;
+  padding-right: 2rem !important;
 }
 
 /* ---------- Typography ---------- */
@@ -465,277 +588,660 @@ h1{ font-weight: 800 !important; }
 h2{ font-weight: 750 !important; }
 p, li { color: var(--text) !important; }
 
-.stCaption, [data-testid="stCaptionContainer"]{
-    color: var(--muted) !important;
-}
+.stCaption, [data-testid="stCaptionContainer"]{ color: var(--muted) !important; }
 
-/* Only style markdown text inside MAIN */
-[data-testid="stAppViewContainer"] .main [data-testid="stMarkdownContainer"] *{
-    color: var(--text) !important;
+/* ✅ Safer markdown styling (won’t kill widget text like uploader) */
+[data-testid="stAppViewContainer"] .main [data-testid="stMarkdownContainer"]{
+  color: var(--text) !important;
+}
+[data-testid="stAppViewContainer"] .main [data-testid="stMarkdownContainer"] p,
+[data-testid="stAppViewContainer"] .main [data-testid="stMarkdownContainer"] li,
+[data-testid="stAppViewContainer"] .main [data-testid="stMarkdownContainer"] h1,
+[data-testid="stAppViewContainer"] .main [data-testid="stMarkdownContainer"] h2,
+[data-testid="stAppViewContainer"] .main [data-testid="stMarkdownContainer"] h3{
+  color: var(--text) !important;
 }
 
 /* ---------- Sidebar ---------- */
 [data-testid="stSidebar"]{
-    background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)) !important;
-    border-right: 1px solid rgba(255,255,255,0.10) !important;
+  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)) !important;
+  border-right: 1px solid rgba(255,255,255,0.10) !important;
+  width: 280px !important;
+  box-shadow:
+    inset -1px 0 0 rgba(255,255,255,0.06),
+    8px 0 30px rgba(255,45,85,0.10) !important;
+  position: relative;
 }
+
+/* Red glow divider between sidebar & content */
+[data-testid="stSidebar"]::after{
+  content: "";
+  position: absolute;
+  top: 0;
+  right: -1px;
+  width: 2px;
+  height: 100%;
+  background: linear-gradient(
+    180deg,
+    rgba(255,45,85,0.55),
+    rgba(255,45,85,0.15),
+    rgba(255,45,85,0.55)
+  );
+  box-shadow: 0 0 18px rgba(255,45,85,0.35),
+              0 0 40px rgba(255,45,85,0.18);
+  pointer-events: none;
+}
+
+/* Hide Streamlit sidebar page list */
+section[data-testid="stSidebarNav"]{ display:none !important; }
+
+/* Sidebar brightness override */
+section[data-testid="stSidebar"] > div,
+section[data-testid="stSidebar"] > div > div,
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"],
+section[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
+section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]{
+  opacity: 1 !important;
+  filter: none !important;
+}
+section[data-testid="stSidebar"] *{
+  color: rgba(255,255,255,0.96) !important;
+  opacity: 1 !important;
+  filter: none !important;
+}
+section[data-testid="stSidebar"] strong,
+section[data-testid="stSidebar"] b{
+  color: rgba(255,255,255,0.98) !important;
+  text-shadow: 0 1px 10px rgba(255,45,85,0.18) !important;
+}
+
+/* Remove empty sidebar bars */
+[data-testid="stSidebar"] div:empty{ display:none !important; }
 
 /* ---------- Expanders ---------- */
 [data-testid="stExpander"]{
-    background: var(--panel) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius) !important;
-    box-shadow: var(--shadow-soft);
-    overflow: hidden;
+  background: var(--panel) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  box-shadow: var(--shadow-soft) !important;
+  overflow: hidden !important;
 }
-
 [data-testid="stExpander"] summary{
-    padding: 0.7rem 0.9rem !important;
-    font-weight: 650 !important;
-    color: var(--text) !important;
+  padding: 0.7rem 0.9rem !important;
+  font-weight: 700 !important;
+  color: var(--text) !important;
 }
-
-/* FIX: Help expander body */
 [data-testid="stSidebar"] [data-testid="stExpander"] div[role="region"]{
-    background: rgba(0,0,0,0.32) !important;
-    border-top: 1px solid rgba(255,255,255,0.10) !important;
-    padding: 0.75rem 0.8rem !important;
-    max-height: 240px !important;
-    overflow-y: auto !important;
+  background: rgba(0,0,0,0.32) !important;
+  border-top: 1px solid rgba(255,255,255,0.10) !important;
+  padding: 0.75rem 0.8rem !important;
+  max-height: 240px !important;
+  overflow-y: auto !important;
 }
-
 [data-testid="stSidebar"] [data-testid="stExpander"] div[role="region"] *{
-    color: rgba(255,255,255,0.95) !important;
-    opacity: 1 !important;
-    visibility: visible !important;
-    font-weight: 600 !important;
+  color: rgba(255,255,255,0.95) !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  font-weight: 600 !important;
 }
 
-/* ---------- Inputs ---------- */
+/* ---------- Inputs (premium dark glass) ---------- */
 .stTextInput input,
 .stNumberInput input,
 .stDateInput input,
 .stTextArea textarea,
 div[data-baseweb="input"] input,
 div[data-baseweb="textarea"] textarea{
-    background: rgba(255,255,255,0.96) !important;
-    color: #0b0f19 !important;
-    caret-color: var(--red) !important;
-    border: 1px solid rgba(0,0,0,0.08) !important;
-    border-radius: var(--radius-sm) !important;
-    font-size: 0.98rem !important;
-    line-height: 1.45 !important;
+  background: rgba(255,255,255,0.06) !important;
+  color: rgba(255,255,255,0.92) !important;
+  caret-color: var(--red) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05) !important;
+  font-size: 0.98rem !important;
+  line-height: 1.45 !important;
 }
-
 .stTextArea textarea{ padding: 0.85rem 0.95rem !important; }
 .stTextInput input, .stNumberInput input{ padding: 0.65rem 0.85rem !important; }
 
 .stTextInput input::placeholder,
 .stTextArea textarea::placeholder{
-    color: rgba(11,15,25,0.45) !important;
+  color: rgba(255,255,255,0.45) !important;
 }
 
-/* ---------- Selectbox (input itself) ---------- */
+.stTextInput input:focus,
+.stNumberInput input:focus,
+.stDateInput input:focus,
+.stTextArea textarea:focus,
+div[data-baseweb="input"] input:focus,
+div[data-baseweb="textarea"] textarea:focus{
+  border-color: rgba(255,45,85,0.55) !important;
+  box-shadow: 0 0 0 4px rgba(255,45,85,0.14),
+              inset 0 1px 0 rgba(255,255,255,0.06) !important;
+  outline: none !important;
+}
+
+/* ---------- Premium buttons ---------- */
+.stButton button,
+[data-testid="stDownloadButton"] button{
+  border-radius: 999px !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  padding: 0.62rem 1.05rem !important;
+  font-weight: 800 !important;
+  background: rgba(255,255,255,0.06) !important;
+  color: rgba(255,255,255,0.92) !important;
+  box-shadow: var(--shadow-soft) !important;
+}
+.stButton button:hover,
+[data-testid="stDownloadButton"] button:hover{
+  border-color: rgba(255,45,85,0.55) !important;
+  box-shadow: 0 0 0 4px rgba(255,45,85,0.10), var(--shadow) !important;
+  transform: translateY(-1px) !important;
+}
+
+/* ---------- File uploader + restore red browse + text visibility ---------- */
+[data-testid="stFileUploader"] section{
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  border-radius: 16px !important;
+  box-shadow: var(--shadow-soft) !important;
+}
+[data-testid="stFileUploader"] *{
+  color: rgba(255,255,255,0.86) !important; /* ✅ fixes “text not showing” */
+}
+[data-testid="stFileUploader"] button{
+  background: linear-gradient(90deg, var(--red) 0%, var(--red2) 100%) !important;
+  border: 1px solid rgba(255,45,85,0.55) !important;
+  color: #fff !important;
+  border-radius: 999px !important;
+  font-weight: 900 !important;
+  padding: 0.55rem 1.05rem !important;
+  box-shadow: 0 12px 35px rgba(255,45,85,0.22) !important;
+}
+[data-testid="stFileUploader"] button,
+[data-testid="stFileUploader"] button *{
+  color: #fff !important;
+}
+[data-testid="stFileUploader"] button:hover{
+  transform: translateY(-1px) !important;
+  box-shadow: 0 0 0 4px rgba(255,45,85,0.12), var(--shadow) !important;
+}
+
+/* Link-style preview CTAs */
+.mulyba-link-btn{
+  display:inline-block;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.92);
+  text-decoration: none;
+  font-weight: 800;
+}
+.mulyba-link-btn:hover{
+  border-color: rgba(255,45,85,0.55);
+  box-shadow: 0 0 0 4px rgba(255,45,85,0.14);
+}
+
+/* Premium selection */
+::selection{
+  background: rgba(255,45,85,0.35);
+  color: rgba(255,255,255,0.98);
+}
+
+/* ============================
+   RIGHT MARKETING RAIL (FIXED)
+   ============================ */
+
+/* Make room for the rail so main content doesn't sit underneath it */
+@media (min-width: 1200px){
+  [data-testid="stAppViewContainer"] .main .block-container{
+    padding-right: 420px !important; /* ✅ more breathing space */
+  }
+}
+
+/* The rail itself */
+#mulyba-rail{
+  position: fixed;
+  top: 140px;        /* ✅ sits nicer below hero/top */
+  right: 22px;
+  width: 330px;
+  z-index: 9999;
+}
+#mulyba-rail .rail-card{
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 18px;
+  padding: 14px 14px;
+  box-shadow: var(--shadow) !important;
+  margin-bottom: 12px;
+}
+#mulyba-rail .rail-title{
+  font-weight: 900;
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: rgba(255,255,255,0.95);
+}
+#mulyba-rail .rail-text{
+  font-size: 13px;
+  line-height: 1.55;
+  color: rgba(255,255,255,0.80);
+}
+#mulyba-rail .rail-list{
+  margin: 0;
+  padding-left: 18px;
+  color: rgba(255,255,255,0.84);
+  line-height: 1.55;
+  font-size: 13px;
+}
+#mulyba-rail .rail-badge{
+  display: inline-block;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.90);
+  font-weight: 800;
+  font-size: 12px;
+  margin: 6px 6px 0 0;
+}
+
+/* Hide rail on smaller screens */
+@media (max-width: 1199px){
+  #mulyba-rail{ display:none !important; }
+  [data-testid="stAppViewContainer"] .main .block-container{
+    padding-right: 2rem !important;
+  }
+}
+
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<div id="mulyba-rail">
+
+  <div class="rail-card">
+    <div class="rail-title">What you get</div>
+    <ul class="rail-list">
+      <li>Modern CV builder (UK-friendly)</li>
+      <li>AI improvements (summary, bullets)</li>
+      <li>Cover letters tailored to job ads</li>
+      <li>PDF + Word downloads</li>
+    </ul>
+    <div style="margin-top:10px;">
+      <span class="rail-badge">Fast</span>
+      <span class="rail-badge">Clean</span>
+      <span class="rail-badge">ATS-friendly</span>
+    </div>
+  </div>
+
+  <div class="rail-card">
+    <div class="rail-title">How it works</div>
+    <div class="rail-text">
+      1) Fill your details<br/>
+      2) Improve wording with AI<br/>
+      3) Generate & download PDF + Word
+    </div>
+  </div>
+
+  <div class="rail-card">
+    <div class="rail-title">Upgrade when ready</div>
+    <div class="rail-text">
+      Guests can build. Sign in only when you want downloads + saved history.
+    </div>
+  </div>
+
+</div>
+""", unsafe_allow_html=True)
+
+st.markdown("""
+<style>
+/* ===============================
+   INPUT TEXT VISIBILITY (WORKING)
+   White fields + dark typed text
+   =============================== */
+
+/* All inputs + textareas (catch-all) */
+[data-testid="stAppViewContainer"] input,
+[data-testid="stAppViewContainer"] textarea{
+  background: rgba(255,255,255,0.96) !important;
+  color: #0b0f19 !important;
+  -webkit-text-fill-color: #0b0f19 !important;  /* IMPORTANT for Chrome */
+  caret-color: #ff2d55 !important;
+  border: 1px solid rgba(0,0,0,0.10) !important;
+}
+
+/* BaseWeb wrappers (Streamlit uses these internally) */
+[data-testid="stAppViewContainer"] div[data-baseweb="input"] input,
+[data-testid="stAppViewContainer"] div[data-baseweb="textarea"] textarea{
+  background: rgba(255,255,255,0.96) !important;
+  color: #0b0f19 !important;
+  -webkit-text-fill-color: #0b0f19 !important;
+  caret-color: #ff2d55 !important;
+  border: 1px solid rgba(0,0,0,0.10) !important;
+  border-radius: 12px !important;
+}
+
+/* Streamlit wrappers */
+.stTextInput input,
+.stNumberInput input,
+.stDateInput input,
+.stTextArea textarea{
+  background: rgba(255,255,255,0.96) !important;
+  color: #0b0f19 !important;
+  -webkit-text-fill-color: #0b0f19 !important;
+}
+
+/* Placeholder */
+[data-testid="stAppViewContainer"] input::placeholder,
+[data-testid="stAppViewContainer"] textarea::placeholder{
+  color: rgba(11,15,25,0.45) !important;
+  -webkit-text-fill-color: rgba(11,15,25,0.45) !important;
+}
+
+/* Focus glow */
+[data-testid="stAppViewContainer"] input:focus,
+[data-testid="stAppViewContainer"] textarea:focus{
+  border-color: rgba(255,45,85,0.35) !important;
+  box-shadow: 0 0 0 3px rgba(255,45,85,0.10) !important;
+  outline: none !important;
+}
+
+/* Chrome autofill (stops the “ghost text” / wrong colors) */
+[data-testid="stAppViewContainer"] input:-webkit-autofill,
+[data-testid="stAppViewContainer"] textarea:-webkit-autofill{
+  -webkit-text-fill-color: #0b0f19 !important;
+  box-shadow: 0 0 0px 1000px rgba(255,255,255,0.96) inset !important;
+  transition: background-color 9999s ease-in-out 0s !important;
+}
+
+/* ===============================
+   SELECTBOX INPUT + DROPDOWN MENU
+   (these are from your working old CSS)
+   =============================== */
+
+/* Selectbox field */
 div[data-baseweb="select"] > div{
-    background: rgba(255,255,255,0.96) !important;
-    color: #0b0f19 !important;
-    border: 1px solid rgba(0,0,0,0.10) !important;
-    border-radius: var(--radius-sm) !important;
-    box-shadow: none !important;
-    outline: none !important;
+  background: rgba(255,255,255,0.96) !important;
+  color: #0b0f19 !important;
+  border: 1px solid rgba(0,0,0,0.10) !important;
+  border-radius: 12px !important;
 }
-
 div[data-baseweb="select"] span{
-    color: #0b0f19 !important;
-    font-weight: 700 !important;
+  color: #0b0f19 !important;
+  font-weight: 700 !important;
 }
-
 div[data-baseweb="select"] > div:focus,
 div[data-baseweb="select"] > div:focus-within{
-    border-color: rgba(255,45,85,0.35) !important;
-    box-shadow: 0 0 0 3px rgba(255,45,85,0.10) !important;
-    outline: none !important;
+  border-color: rgba(255,45,85,0.35) !important;
+  box-shadow: 0 0 0 3px rgba(255,45,85,0.10) !important;
 }
 
-/* ==================================================
-   DROPDOWN MENU (THE FIX YOU WANTED)
-   dark menu + dark selected strip + readable text
-   ================================================== */
-
+/* Dropdown popover */
 div[data-baseweb="popover"] > div{
-    background: rgba(8,10,16,0.98) !important;
-    border: 1px solid rgba(255,255,255,0.14) !important;
-    border-radius: 14px !important;
-    box-shadow: 0 22px 60px rgba(0,0,0,0.65) !important;
-    overflow: hidden !important;
+  background: rgba(8,10,16,0.98) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 22px 60px rgba(0,0,0,0.65) !important;
 }
-
-div[data-baseweb="popover"] [role="listbox"]{
-    max-height: 260px !important;
-    overflow-y: auto !important;
-    padding: 6px !important;
-    background: transparent !important;
-}
-
 div[data-baseweb="popover"] [role="option"]{
-    color: rgba(255,255,255,0.92) !important;
-    background: transparent !important;
-    padding: 10px 12px !important;
-    border-radius: 10px !important;
+  color: rgba(255,255,255,0.92) !important;
+  background: transparent !important;
+  padding: 10px 12px !important;
+  border-radius: 10px !important;
 }
-
 div[data-baseweb="popover"] [role="option"]:hover{
-    background: rgba(255,45,85,0.18) !important;
+  background: rgba(255,45,85,0.18) !important;
 }
-
 div[data-baseweb="popover"] [role="option"][aria-selected="true"]{
-    background: rgba(255,45,85,0.28) !important;  /* darker than before */
-    color: rgba(255,255,255,0.98) !important;
+  background: rgba(255,45,85,0.28) !important;
+  color: rgba(255,255,255,0.98) !important;
+}
+</style>
+""", unsafe_allow_html=True)                 
+st.markdown("""
+<style>
+/* ==========================
+   HARD OVERRIDE: AUTH MODAL
+   (BaseWeb modal surface)
+   Put this LAST
+   ========================== */
+
+/* BaseWeb modal containers (these are often the WHITE surface) */
+div[data-baseweb="modal"],
+div[data-baseweb="modal"] > div,
+div[data-baseweb="modal"] > div > div{
+  background: rgba(12,14,22,0.92) !important;
 }
 
-div[data-baseweb="popover"] *{
-    opacity: 1 !important;
-    filter: none !important;
+/* Streamlit dialog role targets */
+div[role="dialog"],
+div[role="dialog"] > div,
+div[role="dialog"] section,
+div[role="dialog"] header{
+  background: rgba(12,14,22,0.92) !important;
 }
 
-/* ---------- Buttons ---------- */
-.stButton button{
-    border-radius: 999px !important;
-    border: 1px solid rgba(255,255,255,0.14) !important;
-    padding: 0.62rem 1.05rem !important;
-    font-weight: 700 !important;
-    background: rgba(255,255,255,0.06) !important;
-    color: var(--text) !important;
-    box-shadow: var(--shadow-soft);
-    line-height: 1.2 !important;
-    white-space: normal !important;
+/* Nice border + shadow on the visible surface */
+div[data-baseweb="modal"] > div > div,
+div[role="dialog"]{
+  border: 1px solid rgba(255,255,255,0.10) !important;
+  border-radius: 22px !important;
+  box-shadow: 0 30px 120px rgba(0,0,0,0.75) !important;
 }
 
-.stButton button:hover{
-    border-color: rgba(255,45,85,0.55) !important;
-    box-shadow: 0 0 0 4px rgba(255,45,85,0.10), var(--shadow);
-    transform: translateY(-1px);
+/* Ensure text inside modal stays readable */
+div[data-baseweb="modal"] *,
+div[role="dialog"] *{
+  color: rgba(255,255,255,0.92) !important;
 }
 
-/* ---------- Download button ---------- */
-[data-testid="stDownloadButton"] button{
-    border-radius: 999px !important;
-    border: 1px solid rgba(255,255,255,0.14) !important;
-    background: rgba(255,255,255,0.06) !important;
-    color: var(--text) !important;
-    padding: 0.62rem 1.05rem !important;
-    box-shadow: var(--shadow-soft) !important;
+/* Inputs inside modal (this fixes “invisible typing” too) */
+div[data-baseweb="modal"] input,
+div[data-baseweb="modal"] textarea,
+div[role="dialog"] input,
+div[role="dialog"] textarea{
+  background: rgba(255,255,255,0.06) !important;
+  color: rgba(255,255,255,0.96) !important;
+  -webkit-text-fill-color: rgba(255,255,255,0.96) !important;
+  caret-color: #ff2d55 !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  border-radius: 14px !important;
 }
 
-[data-testid="stDownloadButton"] button *{
-    color: var(--text) !important;
-    fill: var(--text) !important;
+/* Placeholder */
+div[data-baseweb="modal"] input::placeholder,
+div[data-baseweb="modal"] textarea::placeholder,
+div[role="dialog"] input::placeholder,
+div[role="dialog"] textarea::placeholder{
+  color: rgba(255,255,255,0.45) !important;
+  -webkit-text-fill-color: rgba(255,255,255,0.45) !important;
 }
 
-/* ---------- Inline code pills ---------- */
-code{
-    background: rgba(255,255,255,0.10) !important;
-    color: rgba(255,255,255,0.92) !important;
-    border: 1px solid rgba(255,255,255,0.14) !important;
-    padding: 0.18rem 0.45rem !important;
-    border-radius: 999px !important;
-    font-size: 0.88rem !important;
-}
-
-/* ---------- File uploader ---------- */
-[data-testid="stFileUploader"] section{
-    background: rgba(255,255,255,0.06) !important;
-    border: 1px solid rgba(255,255,255,0.14) !important;
-    border-radius: 16px !important;
-    box-shadow: var(--shadow-soft) !important;
-    padding: 0.65rem 0.8rem !important;
-    height: auto !important;
-    min-height: unset !important;
-}
-
-[data-testid="stFileUploaderDropzone"]{
-    padding: 0.55rem 0.7rem !important;
-    min-height: 58px !important;
-}
-
-[data-testid="stFileUploader"] section *{
-    color: rgba(255,255,255,0.92) !important;
-}
-
-/* Browse files button */
-[data-testid="stFileUploader"] button{
-    background: linear-gradient(90deg, var(--red) 0%, var(--red2) 100%) !important;
-    border: 1px solid rgba(255,45,85,0.55) !important;
-    color: #fff !important;
-    border-radius: 999px !important;
-    font-weight: 800 !important;
-    padding: 0.55rem 1.05rem !important;
-    box-shadow: 0 12px 35px rgba(255,45,85,0.22) !important;
-}
-
-[data-testid="stFileUploader"] button:hover{
-    transform: translateY(-1px) !important;
-    box-shadow: 0 0 0 4px rgba(255,45,85,0.12), 0 18px 50px rgba(0,0,0,0.35) !important;
-}
-
-/* ---------- Prevent BaseWeb weirdness ---------- */
-div[data-baseweb] *{
-    letter-spacing: normal !important;
-    text-transform: none !important;
-}
-
-/* ---------- Remove Streamlit top chrome ---------- */
-header[data-testid="stHeader"]{
-    background: transparent !important;
+/* Modal buttons */
+div[data-baseweb="modal"] .stButton button,
+div[role="dialog"] .stButton button{
+  background: linear-gradient(90deg, #ff2d55 0%, #ff3b30 100%) !important;
+  color: #fff !important;
+  border: 1px solid rgba(255,45,85,0.55) !important;
+  border-radius: 999px !important;
+  font-weight: 900 !important;
+  box-shadow: 0 12px 35px rgba(255,45,85,0.22) !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <style>
-/* Narrower sidebar so the CV builder dominates */
-[data-testid="stSidebar"]{
-  width: 280px !important;
+/* =================================================
+   AUTH MODAL – FORCE WHITE INPUT + BLACK TEXT
+   (match main working inputs exactly)
+   ================================================= */
+
+/* Any auth modal / dialog */
+div[role="dialog"] input,
+div[role="dialog"] textarea,
+div[data-testid="stDialog"] input,
+div[data-testid="stDialog"] textarea,
+div[data-baseweb="modal"] input,
+div[data-baseweb="modal"] textarea,
+div[aria-modal="true"] input,
+div[aria-modal="true"] textarea{
+  background: rgba(255,255,255,0.96) !important;
+  background-color: rgba(255,255,255,0.96) !important;
+
+  color: #0b0f19 !important;                 /* ✅ BLACK TEXT */
+  -webkit-text-fill-color: #0b0f19 !important;
+
+  caret-color: #ff2d55 !important;
+  border: 1px solid rgba(0,0,0,0.10) !important;
+  border-radius: 14px !important;
+}
+
+/* BaseWeb wrapper (Streamlit uses this internally) */
+div[role="dialog"] div[data-baseweb="input"] input,
+div[data-baseweb="modal"] div[data-baseweb="input"] input,
+div[aria-modal="true"] div[data-baseweb="input"] input{
+  background: rgba(255,255,255,0.96) !important;
+  color: #0b0f19 !important;
+  -webkit-text-fill-color: #0b0f19 !important;
+}
+
+/* Placeholder */
+div[role="dialog"] input::placeholder{
+  color: rgba(11,15,25,0.45) !important;
+  -webkit-text-fill-color: rgba(11,15,25,0.45) !important;
+}
+
+/* Focus */
+div[role="dialog"] input:focus{
+  border-color: rgba(255,45,85,0.55) !important;
+  box-shadow: 0 0 0 4px rgba(255,45,85,0.14) !important;
+  outline: none !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("""
-<style>
-/* Premium red edge glow on sidebar */
-[data-testid="stSidebar"]{
-  box-shadow: inset -1px 0 0 rgba(255,255,255,0.06),
-              8px 0 30px rgba(255,45,85,0.10) !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<style>
-/* Hide the random empty "pill" container that appears under sidebar headers */
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"] > div:has(> div:empty) {
-  display: none !important;
-}
-
-/* Extra safety: remove empty containers that Streamlit renders as bars */
-[data-testid="stSidebar"] div:empty {
-  display: none !important;
-}
-</style>
-""", unsafe_allow_html=True)
 
 
-# Hide Streamlit's default sidebar page list (multi-page navigation)
-st.markdown(
-    """
-    <style>
-        section[data-testid="stSidebarNav"] {
-            display: none;
-        }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+# =========================
+# AUTH UI
+# =========================
+def auth_ui():
+    """Login / register / password reset UI."""
+    tab_login, tab_register, tab_forgot = st.tabs(
+        ["Sign in", "Create account", "Forgot password"]
+    )
+
+    # ---- LOGIN TAB ----
+    with tab_login:
+        login_email = st.text_input("Email", key="auth_login_email")
+        login_password = st.text_input("Password", type="password", key="auth_login_password")
+
+        if st.button("Sign in", key="auth_btn_login"):
+            if not login_email or not login_password:
+                st.error("Please enter both email and password.")
+            else:
+                user = authenticate_user(login_email, login_password)
+                if user:
+                    st.session_state["user"] = user
+                    st.session_state["auth_modal_open"] = False
+                    st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
+                    st.rerun()
+                else:
+                    st.error("Invalid email or password.")
+
+    # ---- REGISTER TAB ----
+    with tab_register:
+        reg_name = st.text_input("Full name", key="auth_reg_name")
+        reg_email = st.text_input("Email", key="auth_reg_email")
+        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
+        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
+
+        reg_referral_code = st.text_input(
+            "Referral code (optional)",
+            key="auth_reg_referral_code",
+            help="If a friend invited you, paste their referral code here.",
+        )
+
+        if st.button("Create account", key="auth_btn_register"):
+            if not reg_email or not reg_password or not reg_password2:
+                st.error("Please fill in all required fields.")
+            elif reg_password != reg_password2:
+                st.error("Passwords do not match.")
+            else:
+                referred_by_email = None
+
+                if reg_referral_code.strip():
+                    ref_user = get_user_by_referral_code(reg_referral_code.strip())
+                    if not ref_user:
+                        st.error("That referral code is not valid.")
+                        st.stop()
+                    referred_by_email = ref_user["email"]
+
+                ok = create_user(reg_email, reg_password, reg_name, referred_by=referred_by_email)
+
+                if ok:
+                    if referred_by_email:
+                        apply_referral_bonus(referred_by_email)
+
+                    st.session_state["accepted_policies"] = False
+
+                    user = authenticate_user(reg_email, reg_password)
+                    if user:
+                        st.session_state["user"] = user
+                        st.session_state["auth_modal_open"] = False
+                        st.rerun()
+                    else:
+                        st.success("Account created. Please sign in.")
+                else:
+                    st.error("That email is already registered.")
+
+    # ---- FORGOT PASSWORD TAB ----
+    with tab_forgot:
+        st.write("If you've forgotten your password, you can reset it here.")
+
+        st.subheader("1. Request a reset link")
+        fp_email = st.text_input("Email used for your account", key="auth_fp_email")
+
+        if st.button("Send reset link", key="auth_btn_send_reset"):
+            if not fp_email:
+                st.error("Please enter your email.")
+            else:
+                try:
+                    token = create_password_reset_token(fp_email)
+                    if token:
+                        send_password_reset_email(fp_email, token)
+                    st.success("If this email is registered, a reset link has been sent.")
+                except Exception as e:
+                    st.error(f"Error while sending reset email: {e}")
+
+        st.markdown("---")
+        st.subheader("2. Set a new password using your reset token")
+
+        fp_token = st.text_input("Reset token (from the email)", key="auth_fp_token")
+        fp_new_pwd = st.text_input("New password", type="password", key="auth_fp_new_pwd")
+        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="auth_fp_new_pwd2")
+
+        if st.button("Set new password", key="auth_btn_do_reset"):
+            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
+                st.error("Please fill in all fields.")
+            elif fp_new_pwd != fp_new_pwd2:
+                st.error("Passwords do not match.")
+            else:
+                ok = reset_password_with_token(fp_token, fp_new_pwd)
+                if ok:
+                    st.success(
+                        "Password reset successfully. You can now sign in with your new password."
+                    )
+                else:
+                    st.error(
+                        "Invalid or expired reset token. Please request a new reset link."
+                    )
+
+
+
+
 
 # =========================
 # INIT
@@ -751,8 +1257,6 @@ if "accepted_policies" not in st.session_state:
 if "policy_view" not in st.session_state:
     st.session_state["policy_view"] = None  # None | cookies | privacy | terms | accessibility
 
-if "auth_dialog_open" not in st.session_state:
-    st.session_state["auth_dialog_open"] = False
 
 # =========================
 # POLICY FILE READER
@@ -807,32 +1311,6 @@ def show_policy_page() -> bool:
 
 
 # =========================
-# BRAND (Munibs logo helper)
-# =========================
-def _render_munibs_logo():
-    """
-    Tries common local paths. If your logo file exists in one of these,
-    it will show automatically. Change/extend the list if needed.
-    """
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        candidates = [
-            os.path.join(here, "assets", "munibs_logo.png"),
-            os.path.join(here, "assets", "logo.png"),
-            os.path.join(here, "munibs_logo.png"),
-            os.path.join(here, "logo.png"),
-            os.path.join(here, "static", "munibs_logo.png"),
-            os.path.join(here, "static", "logo.png"),
-        ]
-        for p in candidates:
-            if os.path.exists(p):
-                st.image(p, width=120)
-                return
-    except Exception:
-        pass
-
-
-# =========================
 # CONSENT GATE (POST-LOGIN ONLY)
 # =========================
 def show_consent_gate():
@@ -852,29 +1330,26 @@ def show_consent_gate():
     except Exception:
         pass
 
-    # Munibs logo back on the consent gate
-    _render_munibs_logo()
-
     st.markdown(
-        """
-        <div style="
-            border-radius: 12px;
-            padding: 18px 20px;
-            margin-top: 12px;
-            background: #111827;
-            border: 1px solid #1f2937;
-            color: rgba(255,255,255,0.95);
-        ">
-            <h3 style="margin-top:0;">Before you continue</h3>
-            <p style="font-size:14px; line-height:1.5;">
-                We use cookies and process your data to run this CV builder,
-                improve the service, and keep your account secure.
-                Please open and read the following policies:
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    """
+    <div style="
+        border-radius: 12px;
+        padding: 18px 20px;
+        margin-top: 20px;
+        background: #111827;
+        border: 1px solid #1f2937;
+        color: rgba(255,255,255,0.95);
+    ">
+        <h3 style="margin-top:0;">Before you continue</h3>
+        <p style="font-size:14px; line-height:1.5;">
+            We use cookies and process your data to run this CV builder,
+            improve the service, and keep your account secure.
+            Please open and read the following policies:
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
     c1, c2, c3 = st.columns(3)
     with c1:
@@ -892,482 +1367,534 @@ def show_consent_gate():
 
     agree = st.checkbox("I agree to the Cookie Policy, Privacy Policy and Terms of Use")
 
-    
-
-# ============================================================
-# AUTH POPUP STATE + HELPERS (NEW)
-# ============================================================
-if "_show_auth_dialog" not in st.session_state:
-    st.session_state["_show_auth_dialog"] = False
-
-def open_auth_dialog():
-    st.session_state["_show_auth_dialog"] = True
-
-def close_auth_dialog():
-    st.session_state["_show_auth_dialog"] = False
-
-
-# ============================================================
-# AUTH UI (KEEP YOUR EXISTING auth_ui BODY)
-# ============================================================
-def auth_ui():
-    """Login / register / password reset UI."""
-    tab_login, tab_register, tab_forgot = st.tabs(
-        ["Sign in", "Create account", "Forgot password"]
-    )
-
-    # ---- LOGIN TAB ----
-    with tab_login:
-        login_email = st.text_input("Email", key="auth_login_email")
-        login_password = st.text_input("Password", type="password", key="auth_login_password")
-
-        if st.button("Sign in", key="auth_btn_login"):
-            if not login_email or not login_password:
-                st.error("Please enter both email and password.")
-            else:
-                user = authenticate_user(login_email, login_password)
-                if user:
-                    st.session_state["user"] = user
-                    st.session_state["_show_auth_dialog"] = False  # close popup
-                    st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
-                    st.rerun()
-                else:
-                    st.error("Invalid email or password.")
-
-    # ---- REGISTER TAB ----
-    with tab_register:
-        reg_name = st.text_input("Full name", key="auth_reg_name")
-        reg_email = st.text_input("Email", key="auth_reg_email")
-        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
-        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
-
-        reg_referral_code = st.text_input(
-            "Referral code (optional)",
-            key="auth_reg_referral_code",
-            help="If a friend invited you, paste their referral code here.",
-        )
-
-        if st.button("Create account", key="auth_btn_register"):
-            if not reg_email or not reg_password or not reg_password2:
-                st.error("Please fill in all required fields.")
-            elif reg_password != reg_password2:
-                st.error("Passwords do not match.")
-            else:
-                referred_by_email = None
-
-                if reg_referral_code.strip():
-                    ref_user = get_user_by_referral_code(reg_referral_code.strip())
-                    if not ref_user:
-                        st.error("That referral code is not valid.")
-                        st.stop()
-                    referred_by_email = ref_user["email"]
-
-                ok = create_user(reg_email, reg_password, reg_name, referred_by=referred_by_email)
-
-                if ok:
-                    if referred_by_email:
-                        apply_referral_bonus(referred_by_email)
-
-                    st.session_state["accepted_policies"] = False
-
-                    user = authenticate_user(reg_email, reg_password)
-                    if user:
-                        st.session_state["user"] = user
-                        st.session_state["_show_auth_dialog"] = False  # close popup
-                        st.rerun()
-                    else:
-                        st.success("Account created. Please sign in.")
-                else:
-                    st.error("That email is already registered.")
-
-    # ---- FORGOT PASSWORD TAB ----
-    with tab_forgot:
-        st.write("If you've forgotten your password, you can reset it here.")
-
-        st.subheader("1. Request a reset link")
-        fp_email = st.text_input("Email used for your account", key="auth_fp_email")
-
-        if st.button("Send reset link", key="auth_btn_send_reset"):
-            if not fp_email:
-                st.error("Please enter your email.")
-            else:
-                try:
-                    token = create_password_reset_token(fp_email)
-                    if token:
-                        send_password_reset_email(fp_email, token)
-                    st.success("If this email is registered, a reset link has been sent.")
-                except Exception as e:
-                    st.error(f"Error while sending reset email: {e}")
-
-        st.markdown("---")
-        st.subheader("2. Set a new password using your reset token")
-
-        fp_token = st.text_input("Reset token (from the email)", key="auth_fp_token")
-        fp_new_pwd = st.text_input("New password", type="password", key="auth_fp_new_pwd")
-        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="auth_fp_new_pwd2")
-
-        if st.button("Set new password", key="auth_btn_do_reset"):
-            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
-                st.error("Please fill in all fields.")
-            elif fp_new_pwd != fp_new_pwd2:
-                st.error("Passwords do not match.")
-            else:
-                ok = reset_password_with_token(fp_token, fp_new_pwd)
-                if ok:
-                    st.success("Password reset successfully. You can now sign in with your new password.")
-                else:
-                    st.error("Invalid or expired reset token. Please request a new reset link.")
-
-
-# ============================================================
-# AUTH DIALOG (HALF PAGE POPUP)
-# ============================================================
-@st.dialog("Sign in to unlock", width="large")
-def auth_dialog():
-    st.info("Create a free account or sign in to start using the tools.")
-    auth_ui()
-    st.markdown("---")
-    if st.button("Close", use_container_width=True, key="auth_dialog_close"):
-        close_auth_dialog()
+    if st.button("Accept and continue") and agree:
+        try:
+            mark_policies_accepted(email)
+        except Exception:
+            pass
+        st.session_state["accepted_policies"] = True
         st.rerun()
 
+    st.info("Please accept to continue using the site.")
+    st.stop()
 
-# ============================================================
-# LANDING (PUBLIC)
-# ============================================================
-def render_public_landing():
-    # “Logo” header (your text logo)
+# =========================
+# AUTH MODAL (friendly box)
+# =========================
+st.session_state.setdefault("auth_modal_open", False)
+st.session_state.setdefault("auth_modal_tab", "Sign in")
+st.session_state.setdefault("auth_modal_epoch", 0)
+
+# ---------- AUTH STATE ----------
+current_user = st.session_state.get("user")
+
+is_logged_in = (
+    isinstance(current_user, dict)
+    and bool(current_user.get("email"))
+)
+def is_logged_in_user() -> bool:
+    u = st.session_state.get("user")
+    return isinstance(u, dict) and bool(u.get("email"))
+
+def gate_premium(action_label: str = "use this feature", tab: str = "Sign in") -> bool:
+    """
+    Returns True if logged in.
+    If not logged in: opens modal + shows message, returns False.
+    IMPORTANT: does NOT stop the script.
+    """
+    if is_logged_in_user():
+        return True
+
+    st.toast(f"🔒 Sign in to {action_label}", icon="🔒")
+    open_auth_modal(tab)   # your existing modal opener
+    return False
+
+def open_auth_modal(default_tab: str = "Sign in"):
+    st.session_state["auth_modal_tab"] = default_tab
+    st.session_state["auth_modal_open"] = True
+    st.session_state["auth_modal_epoch"] += 1
+    st.rerun()
+
+def close_auth_modal():
+    st.session_state["auth_modal_open"] = False
+    st.rerun()
+
+@st.dialog("Welcome back 👋", width="large")
+def _auth_dialog():
     st.markdown(
         """
-        <div style="text-align:center; margin-top: 8px; margin-bottom: 18px;">
-            <div style="font-size: 44px; font-weight: 800; line-height: 1.05;">
-                Munibs
-            </div>
-            <div style="font-size: 16px; opacity: 0.85; margin-top: 6px;">
-                Career Support Tools
-            </div>
+        <div style="
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 16px;
+            padding: 14px 16px;
+            margin-bottom: 12px;
+        ">
+          <div style="font-weight:800; font-size:16px; margin-bottom:4px;">
+            Sign in to unlock the tools
+          </div>
+          <div style="opacity:0.85; font-size:13px; line-height:1.5;">
+            Create a modern CV, generate tailored cover letters, and summarise job ads in seconds.
+            Your data stays private to your account.
+          </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.write(
-        "Build a modern CV and tailored cover letter in minutes. "
-        "Use AI to improve your summary, bullets and cover letters, and "
-        "download everything as PDF or Word."
-    )
+    preferred = st.session_state.get("auth_modal_tab", "Sign in")
+    st.caption(f"Tip: You selected **{preferred}**")
 
+    # Call your real function
+    auth_ui()
+
+    c1, c2 = st.columns([1, 1])
+    with c2:
+        if st.button("Close", key=f"auth_modal_close_{st.session_state['auth_modal_epoch']}"):
+            close_auth_modal()
+
+
+def _is_logged_in_user(u) -> bool:
+    return bool(u and isinstance(u, dict) and u.get("email"))
+
+
+import streamlit as st
+
+# -------------------------
+# GLOBAL CSS (TOP LEVEL ONLY)
+# -------------------------
+st.markdown("""
+<style>
+/* put your CSS here (the full theme) */
+</style>
+""", unsafe_allow_html=True)
+
+# -------------------------
+# FUNCTIONS (MUST BE ABOVE ROUTING)
+# -------------------------
+
+def render_public_home():
     st.markdown(
         """
-        - ✅ Modern, clean CV templates  
-        - 🤖 AI help for summaries, bullet points and cover letters  
-        - 📄 Download as PDF and Word  
-        - 🔐 Your data stays private to your account  
-        """
+        <div style="
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 20px;
+            padding: 18px 20px;
+            box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+            margin-top: 6px;
+            margin-bottom: 18px;
+        ">
+          <div style="font-weight:900; font-size:30px; letter-spacing:-0.02em; line-height:1.1;">
+            Mulyba
+          </div>
+          <div style="opacity:0.86; font-size:13px; margin-top:8px; line-height:1.55;">
+            Career Suite • CV Builder • AI tools
+          </div>
+          <div style="margin-top:10px; font-size:12px; opacity:0.70;">
+            Guests can build. Sign in only when you want downloads + saved history.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    st.markdown("---")
-
-    # Primary CTA buttons (this is what you asked for)
-    c1, c2 = st.columns([1, 1])
-    with c1:
-        st.button("Sign in", use_container_width=True, on_click=open_auth_dialog, key="cta_sign_in")
-    with c2:
-        st.button("Create account", use_container_width=True, on_click=open_auth_dialog, key="cta_create")
 
 
-# ============================================================
-# SIDEBAR PREVIEW (NOT LOGGED IN) — LOCKED BUT CLICKABLE
-# ============================================================
-def render_sidebar_preview():
-    with st.sidebar:
-        st.markdown("### 🧭 Explore")
-        st.caption("Preview mode — sign in to unlock the tools.")
-
-        with st.expander("📄 CV Builder", expanded=True):
-            st.write("• Modern templates")
-            st.write("• AI bullet polishing")
-            st.button(
-                "Generate CV (Sign in required)",
-                use_container_width=True,
-                on_click=open_auth_dialog,
-                key="sb_preview_cv",
-            )
-
-        with st.expander("✉️ Cover Letters", expanded=False):
-            st.write("• Tailored letters from job descriptions")
-            st.button(
-                "Generate Letter (Sign in required)",
-                use_container_width=True,
-                on_click=open_auth_dialog,
-                key="sb_preview_cover",
-            )
-
-        with st.expander("🔒 Account", expanded=False):
-            st.write("Sign in to save your CVs and download PDF/Word.")
-            st.button(
-                "Sign in / Create account",
-                use_container_width=True,
-                on_click=open_auth_dialog,
-                key="sb_preview_auth",
-            )
-
-        st.markdown("---")
-        st.caption("Support: support@affiliateworldcommissions.com")
-
-
-# ============================================================
-# SIDEBAR LOGGED-IN (YOUR EXISTING LOGIC CAN STAY BELOW THIS)
-# NOTE: You said "don’t show role/user type in sidebar" — so we don’t.
-# ============================================================
-def render_sidebar_logged_in(current_user, user_email, my_ref_code, my_ref_count,
-                            PLAN_LIMITS, REFERRAL_CAP, BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI):
-    with st.sidebar:
-        st.markdown("### 📌 Menu")
-
-        with st.expander("📄 CV", expanded=True):
-            st.button("CV Builder", use_container_width=True, key="sb_cv_builder")
-
-        with st.expander("✉️ Cover Letter", expanded=False):
-            st.button("Cover Letter", use_container_width=True, key="sb_cover_letter")
-
-        with st.expander("📊 Usage", expanded=False):
-            plan = current_user.get("plan", "free")
-            referrals = min(current_user.get("referrals_count", 0) or 0, REFERRAL_CAP)
-            plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-
-            base_cv = plan_limits["cv"]
-            base_ai = plan_limits["ai"]
-
-            # Admin/owner unlimited stays in logic (we just don't show it)
-            if current_user.get("role") in {"owner", "admin"}:
-                base_cv = None
-                base_ai = None
-
-            used_cv = st.session_state.get("cv_generations", 0)
-            used_ai_total = (
-                st.session_state.get("summary_uses", 0)
-                + st.session_state.get("cover_uses", 0)
-                + st.session_state.get("bullets_uses", 0)
-                + st.session_state.get("job_summary_uses", 0)
-            )
-
-            bonus_cv = referrals * BONUS_PER_REFERRAL_CV
-            bonus_ai = referrals * BONUS_PER_REFERRAL_AI
-
-            if base_cv is None:
-                st.write("**CV Generations:** ♾️ Unlimited")
-            else:
-                remaining_cv = max(base_cv + bonus_cv - used_cv, 0)
-                st.write(f"**CV Remaining:** {remaining_cv}")
-
-            if base_ai is None:
-                st.write("**AI Tools:** ♾️ Unlimited")
-            else:
-                remaining_ai = max(base_ai + bonus_ai - used_ai_total, 0)
-                st.write(f"**AI Remaining:** {remaining_ai}")
-
-        with st.expander("🔗 Referral Program", expanded=False):
-            st.write(f"**Your code:** `{my_ref_code}`")
-            st.write(f"**Referrals used:** {my_ref_count} / {REFERRAL_CAP}")
-
-        with st.expander("📘 Help", expanded=False):
-            help_topic = st.radio(
-                "Choose a topic",
-                [
-                    "Quick Start",
-                    "AI Tools & Usage",
-                    "Cover Letter Rules",
-                    "Templates & Downloads",
-                    "Troubleshooting",
-                    "Privacy & Refunds",
-                ],
-                key="help_topic_sidebar",
-            )
-
-            if help_topic == "Quick Start":
-                st.markdown(
-                    """
-1) Fill **Personal Details**  
-2) Add **Skills**  
-3) Add **Experience** roles  
-4) Add **Education**  
-5) (Optional) paste a **Job Description**  
-6) Generate and download as **PDF** or **Word**
-                    """
-                )
-            elif help_topic == "AI Tools & Usage":
-                st.markdown(
-                    """
-- Improve summary  
-- Rewrite bullet points  
-- Generate tailored cover letters  
-Usage resets monthly based on plan.
-                    """
-                )
-            elif help_topic == "Cover Letter Rules":
-                st.markdown("Complete **Personal Details** so headers/sign-off are correct.")
-            elif help_topic == "Templates & Downloads":
-                st.markdown("PDF = best for applying. Word = best for editing.")
-            elif help_topic == "Troubleshooting":
-                st.markdown("If AI hangs, wait 10–30s and try once.")
-            elif help_topic == "Privacy & Refunds":
-                st.markdown("Upload only what you need. Payments non-refundable once used.")
-
-        st.markdown("---")
-        st.caption("Support: support@affiliateworldcommissions.com")
-
-        if st.button("Log out", use_container_width=True, key="sb_logout"):
-            st.session_state["user"] = None
-            st.rerun()
-
+# -------------------------
+# Auth State
+# -------------------------
+st.session_state.setdefault("auth_modal_open", False)
+st.session_state.setdefault("auth_modal_tab", "Sign in")
+st.session_state.setdefault("auth_modal_epoch", 0)
 
 # =========================
-# ROUTING (SINGLE SOURCE OF TRUTH)
+# ROUTING (preview-first)
 # =========================
+
 if show_policy_page():
     st.stop()
 
-# Always show landing (read-only)
-render_public_landing()
+st.session_state.setdefault("guest_started_builder", False)
 
-# Auth state
-user = st.session_state.get("user", None)
+current_user = st.session_state.get("user")
+is_logged_in = isinstance(current_user, dict) and bool(current_user.get("email"))
 
-# -------------------------
-# NOT LOGGED IN: preview only
-# -------------------------
-if user is None:
-    render_sidebar_preview()
+# 🔑 ALWAYS render auth modal first
+render_auth_modal_if_open()
 
-    # IMPORTANT:
-    # Do NOT call auth_ui() here unless you want inline login.
-    # If you want popup-only, only call auth_dialog() when a button sets a flag.
-    if st.session_state.get("_show_auth_dialog"):
-        auth_dialog()
+# Guest header / landing (non-blocking)
+if not is_logged_in:
+    render_public_home()
 
-    st.stop()
+# ---- Safe guest placeholders ----
+if not is_logged_in:
+    current_user = {
+        "full_name": "Guest",
+        "email": None,
+        "role": "guest",
+        "plan": "free",
+        "referral_code": None,
+        "referrals_count": 0,
+        "is_banned": False,
+        "accepted_policies": False,
+        "accepted_policies_at": None,
+    }
 
-# -------------------------
-# LOGGED IN ONLY BELOW HERE
-# -------------------------
-current_user = user
-user_email = current_user.get("email") or ""
+    st.session_state.setdefault("cv_generations", 0)
+    st.session_state.setdefault("summary_uses", 0)
+    st.session_state.setdefault("cover_uses", 0)
+    st.session_state.setdefault("bullets_uses", 0)
+    st.session_state.setdefault("job_summary_uses", 0)
 
-# Consent gate + init must run once and only here
-show_consent_gate()
-freeze_defaults()
+# ---- Safe guest placeholders ----
 
-# Admin flag stays in your logic
+# ✅ DEFINE THESE HERE (so they exist for everyone)
+user_email = current_user.get("email")
 is_admin = current_user.get("role") in {"owner", "admin"}
 
 
-# ============================================================
-# YOUR PLAN / USAGE CONFIG (KEEP AS YOU HAVE)
-# ============================================================
+
+
+# -------------------------
+# Usage + plan configuration (DEFINE BEFORE SIDEBAR USES IT)
+# -------------------------
 REFERRAL_CAP = 10
 BONUS_PER_REFERRAL_CV = 5
 BONUS_PER_REFERRAL_AI = 5
 
 PLAN_LIMITS = {
     "free": {"cv": 5, "ai": 5},
-    "monthly": {"cv": 20, "ai": 30},
-    "pro": {"cv": 50, "ai": 90},
+
+    # Public paid plans
+    "monthly": {"cv": 20, "ai": 30},   # £2.99 Jobseeker Monthly
+    "pro": {"cv": 50, "ai": 90},       # £5.99 Pro Monthly
+
+    # Optional legacy plans
     "one_time": {"cv": 40, "ai": 60},
     "yearly": {"cv": 300, "ai": 600},
+
+    # Internal-only (still metered)
     "premium": {"cv": 5000, "ai": 10000},
     "enterprise": {"cv": 5000, "ai": 10000},
 }
 
-# Referral code (needed before sidebar)
-my_ref_code = current_user.get("referral_code")
-if not my_ref_code:
-    my_ref_code = ensure_referral_code(user_email)
-    current_user["referral_code"] = my_ref_code
-    st.session_state["user"]["referral_code"] = my_ref_code
+AI_USAGE_KEYS = {"summary_uses", "cover_uses", "bullets_uses", "job_summary_uses"}
+CV_USAGE_KEYS = {"cv_generations"}
 
-my_ref_count = int(current_user.get("referrals_count", 0) or 0)
-my_ref_count = min(my_ref_count, REFERRAL_CAP)
+USAGE_KEYS_DEFAULTS = {
+    "upload_parses": 0,
+    "summary_uses": 0,
+    "cover_uses": 0,
+    "bullets_uses": 0,
+    "cv_generations": 0,
+    "job_summary_uses": 0,
+}
 
-# LOGGED-IN sidebar render
-render_sidebar_logged_in(
-    current_user=current_user,
-    user_email=user_email,
-    my_ref_code=my_ref_code,
-    my_ref_count=my_ref_count,
-    PLAN_LIMITS=PLAN_LIMITS,
-    REFERRAL_CAP=REFERRAL_CAP,
-    BONUS_PER_REFERRAL_CV=BONUS_PER_REFERRAL_CV,
-    BONUS_PER_REFERRAL_AI=BONUS_PER_REFERRAL_AI,
-)
+# Usage counters: only hydrate from DB user when logged in
+if current_user is not None:
+    for k, default in USAGE_KEYS_DEFAULTS.items():
+        if k not in st.session_state:
+            st.session_state[k] = current_user.get(k, default)
+else:
+    # Preview mode: safe defaults so app renders
+    for k, default in USAGE_KEYS_DEFAULTS.items():
+        st.session_state.setdefault(k, default)
+# -------------------------
+# Referral code (ONLY when logged in)
+# -------------------------
+my_ref_code = None
+my_ref_count = 0
 
-# Admin mode select (preserved)
+if is_logged_in and user_email:
+    # referral_code can be missing in DB / session; ensure it exists only for real users
+    my_ref_code = current_user.get("referral_code")
+    if not my_ref_code:
+        my_ref_code = ensure_referral_code(user_email)  # SAFE now (email is not None)
+        current_user["referral_code"] = my_ref_code
+        st.session_state["user"]["referral_code"] = my_ref_code
+
+    my_ref_count = int(current_user.get("referrals_count", 0) or 0)
+    my_ref_count = min(my_ref_count, REFERRAL_CAP)
+else:
+    # Preview mode
+    my_ref_code = None
+    my_ref_count = 0
+
+
+# -------------------------
+# Mode select (ADMIN ONLY)
+# -------------------------
 if is_admin:
     mode = st.sidebar.radio("Mode", ["Use app", "Admin dashboard"], index=0, key="mode_select")
 else:
     mode = "Use app"
 
-# If admin dashboard selected, keep your existing render_admin_dashboard() call here
-# if mode == "Admin dashboard":
-#     render_admin_dashboard()
-#     st.stop()
+def render_admin_dashboard():
+    st.title("👨‍💻 Admin Dashboard")
 
-# From here down: your normal app UI
-
-
-    # -------------------------
-    # Referral Program
-    # -------------------------
-    st.markdown("### 🔗 Referral Program")
-    st.write(f"**Your code:** `{my_ref_code}`")
-    st.write(f"**Referrals used:** {my_ref_count} / {REFERRAL_CAP}")
-
-    st.markdown("---")
-
-def has_free_quota(counter_key: str, limit: int, feature_label: str) -> bool:
-    global current_user
-
-    # Admins / owners are unlimited
-    if current_user.get("role") in {"owner", "admin"}:
-        return True
-
-    # Upload parsing is free onboarding
-    if counter_key == "upload_parses":
-        return True
-
-    plan = current_user.get("plan", "free")
-    plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-
-    if counter_key in CV_USAGE_KEYS:
-        base_limit = plan_limits["cv"]
-        bucket_keys = CV_USAGE_KEYS
-    else:
-        base_limit = plan_limits["ai"]
-        bucket_keys = AI_USAGE_KEYS
-
-    if base_limit is None:
-        return True
-
-    referrals = min(current_user.get("referrals_count", 0) or 0, REFERRAL_CAP)
-
-    bonus = (
-        referrals * BONUS_PER_REFERRAL_CV
-        if counter_key in CV_USAGE_KEYS
-        else referrals * BONUS_PER_REFERRAL_AI
+    users = get_all_users() or []
+    total_users = len(users)
+    total_paid = sum(
+        1 for u in users
+        if (u.get("plan") or "free") in {"monthly", "pro", "yearly", "one_time", "premium", "enterprise"}
+    )
+    total_cvs = sum(int(u.get("cv_generations", 0) or 0) for u in users)
+    total_ai = sum(
+        int(u.get("summary_uses", 0) or 0)
+        + int(u.get("cover_uses", 0) or 0)
+        + int(u.get("bullets_uses", 0) or 0)
+        + int(u.get("job_summary_uses", 0) or 0)
+        for u in users
     )
 
-    effective_limit = base_limit + bonus
-    used = sum(st.session_state.get(k, 0) for k in bucket_keys)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total users", total_users)
+    c2.metric("Paid users", total_paid)
+    c3.metric("CVs generated", total_cvs)
+    c4.metric("AI actions used", total_ai)
 
-    if used >= effective_limit:
-        st.warning(f"Free limit reached for {feature_label}. Upgrade or use referrals.")
-        return False
+    st.subheader("User list")
+    if users:
+        table_rows = []
+        for u in users:
+            table_rows.append({
+                "Email": u.get("email", ""),
+                "Name": u.get("full_name") or "",
+                "Plan": u.get("plan", "free"),
+                "Role": u.get("role", "user"),
+                "Banned": "Yes" if u.get("is_banned") else "No",
+                "Policies accepted": "Yes" if u.get("accepted_policies") else "No",
+                "Accepted at": (u.get("accepted_policies_at") or "")[:19],
+                "Created": (u.get("created_at") or "")[:19],
+                "CVs": u.get("cv_generations", 0),
+                "Summaries": u.get("summary_uses", 0),
+                "Covers": u.get("cover_uses", 0),
+                "Bullets": u.get("bullets_uses", 0),
+                "Job summaries": u.get("job_summary_uses", 0),
+                "Uploads": u.get("upload_parses", 0),
+                "Referrals": u.get("referrals_count", 0),
+                "Referred by": u.get("referred_by") or "",
+            })
 
-    return True
+        st.dataframe(table_rows, use_container_width=True, height=420)
 
-    # -------------------------
-    # Help Card (NO expander = no ghost)
-    # -------------------------
+        csv_buffer = io.StringIO()
+        writer = csv.DictWriter(csv_buffer, fieldnames=table_rows[0].keys())
+        writer.writeheader()
+        writer.writerows(table_rows)
+        st.download_button(
+            "Download users as CSV",
+            data=csv_buffer.getvalue(),
+            file_name="users.csv",
+            mime="text/csv",
+        )
+    else:
+        st.info("No users yet.")
+        return
+
+    st.markdown("---")
+    st.subheader("Manage user plans & status")
+
+    selected_email = st.selectbox(
+        "Select a user",
+        [u["email"] for u in users if u.get("email")],
+        key="admin_select_user",
+    )
+    selected_user = next((u for u in users if u.get("email") == selected_email), None)
+    if not selected_user:
+        return
+
+    role = selected_user.get("role", "user")
+    banned = bool(selected_user.get("is_banned"))
+    policies_ok = bool(selected_user.get("accepted_policies"))
+    accepted_at = (selected_user.get("accepted_policies_at") or "")[:19]
+
+    st.write(
+        f"**User:** {selected_user.get('full_name') or selected_email}\n\n"
+        f"**Plan:** `{selected_user.get('plan','free')}`  \n"
+        f"**Role:** `{role}`  \n"
+        f"**Banned:** {'Yes' if banned else 'No'}  \n"
+        f"**Policies accepted:** {'Yes' if policies_ok else 'No'}"
+        + (f" ({accepted_at})" if policies_ok and accepted_at else "")
+    )
+
+    plan_options = ["free", "monthly", "pro", "one_time", "yearly", "premium", "enterprise"]
+    current_plan = selected_user.get("plan", "free")
+    if current_plan not in plan_options:
+        current_plan = "free"
+    new_plan = st.selectbox("New plan", plan_options, index=plan_options.index(current_plan), key="admin_new_plan")
+
+    role_options = ["owner", "admin", "helper", "user"]
+    if role not in role_options:
+        role = "user"
+    new_role = st.selectbox("New role", role_options, index=role_options.index(role), key="admin_new_role")
+
+    col_a, col_b, col_c = st.columns(3)
+
+    with col_a:
+        if st.button("Update plan", key="btn_update_plan"):
+            set_plan(selected_email, new_plan)
+            st.success(f"Plan updated to `{new_plan}` for {selected_email}.")
+            st.rerun()
+
+    with col_b:
+        if st.button("Update role", key="btn_update_role"):
+            if new_role == "helper" and role != "helper":
+                helper_count = sum(1 for u in users if u.get("role") == "helper" and u.get("email") != selected_email)
+                if helper_count >= 4:
+                    st.error("You already have 4 helpers. Remove one before adding another.")
+                    st.stop()
+            set_role(selected_email, new_role)
+            st.success(f"Role updated to `{new_role}` for {selected_email}.")
+            st.rerun()
+
+    with col_c:
+        ban_label = "Unban user" if banned else "Ban user"
+        if st.button(ban_label, key="btn_toggle_ban"):
+            set_banned(selected_email, not banned)
+            st.success(f"{'Unbanned' if banned else 'Banned'} {selected_email}.")
+            st.rerun()
+
+    st.markdown("---")
+    with st.expander("Danger zone: Delete this user", expanded=False):
+        st.warning("This permanently deletes the user and their usage data. Export CSV first if needed.")
+        if st.button("Delete this user", key="btn_delete_user"):
+            delete_user(selected_email)
+            st.success(f"User {selected_email} deleted.")
+            if selected_email == current_user.get("email"):
+                st.session_state["user"] = None
+            st.rerun()
+
+# Only render admin when selected
+if mode == "Admin dashboard":
+    render_admin_dashboard()
+    st.stop()
+
+
+with st.sidebar:
+    current_user = st.session_state.get("user")
+    is_logged_in = bool(
+        current_user and isinstance(current_user, dict) and current_user.get("email")
+    )
+    role = (current_user or {}).get("role", "user")
+
+    # ---------- Brand ----------
+    render_mulyba_brand_header(is_logged_in)
+
+    # ---------- Mode badge ----------
+    if is_logged_in:
+        st.markdown(
+            """
+            <div class="mode-badge mode-live">
+              <span class="dot"></span> Live mode
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            """
+            <div class="mode-badge mode-guest">
+              <span class="dot"></span> Guest mode
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # ---------- Account ----------
+    st.markdown('<div class="sb-card">', unsafe_allow_html=True)
+    st.markdown("### 👤 Account")
+
+    if not is_logged_in:
+        st.markdown("**Guest mode**")
+        st.markdown(
+            '<div class="sb-muted">Sign in above to unlock downloads, AI tools, and saved history.</div>',
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("**Status:** ✅ Active")
+        st.markdown("**Policies accepted:** No")
+
+    else:
+        full_name = current_user.get("full_name") or "Member"
+        email = current_user.get("email") or "—"
+        plan = (current_user.get("plan") or "free").strip()
+
+        st.markdown(f"**{full_name}**")
+        st.markdown(f'<div class="sb-muted">{email}</div>', unsafe_allow_html=True)
+
+        # ✅ Plan line (no code pill / no weird white block)
+        st.markdown(f"**Plan:** {plan}")
+
+        if role in {"owner", "admin"}:
+            st.caption(f"Admin: {role}")
+
+        is_banned = current_user.get("is_banned", False)
+        st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
+
+        accepted = current_user.get("accepted_policies", False)
+        st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
+
+        if st.button("Log out", key="sb_logout_btn"):
+            st.session_state["user"] = None
+            st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+
+
+
+    # ---------- Usage ----------
+    st.markdown('<div class="sb-card">', unsafe_allow_html=True)
+    st.markdown("### 📊 Usage")
+
+    if not is_logged_in:
+        cv_left, cv_total = 5, 5
+        ai_left, ai_total = 5, 5
+    else:
+        referrals = min(current_user.get("referrals_count", 0) or 0, REFERRAL_CAP)
+        plan = current_user.get("plan", "free")
+        plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+
+        base_cv = None if role in {"owner", "admin"} else plan_limits["cv"]
+        base_ai = None if role in {"owner", "admin"} else plan_limits["ai"]
+
+        used_cv = st.session_state.get("cv_generations", 0)
+        used_ai = (
+            st.session_state.get("summary_uses", 0)
+            + st.session_state.get("cover_uses", 0)
+            + st.session_state.get("bullets_uses", 0)
+            + st.session_state.get("job_summary_uses", 0)
+            + st.session_state.get("upload_parses", 0)
+        )
+
+        bonus_cv = referrals * BONUS_PER_REFERRAL_CV
+        bonus_ai = referrals * BONUS_PER_REFERRAL_AI
+
+        cv_total = float("inf") if base_cv is None else base_cv + bonus_cv
+        ai_total = float("inf") if base_ai is None else base_ai + bonus_ai
+
+        cv_left = cv_total if base_cv is None else max(cv_total - used_cv, 0)
+        ai_left = ai_total if base_ai is None else max(ai_total - used_ai, 0)
+
+    if cv_total == float("inf"):
+        st.markdown("**CV Generations:** ♾️ Unlimited")
+    else:
+        st.markdown(f"**CV Remaining:** {cv_left}")
+        st.progress(cv_left / cv_total if cv_total else 0)
+
+    if ai_total == float("inf"):
+        st.markdown("**AI Tools:** ♾️ Unlimited")
+    else:
+        st.markdown(f"**AI Remaining:** {ai_left}")
+        st.progress(ai_left / ai_total if ai_total else 0)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ---------- Help ----------
+    st.markdown('<div class="sb-card">', unsafe_allow_html=True)
     st.markdown("### 📘 Help")
 
     help_topic = st.radio(
@@ -1381,128 +1908,87 @@ def has_free_quota(counter_key: str, limit: int, feature_label: str) -> bool:
             "Privacy & Refunds",
         ],
         key="help_topic_sidebar",
-        label_visibility="visible",
     )
 
-    st.markdown(
-        """
-        <div style="
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 16px;
-            padding: 12px 14px;
-            margin-top: 8px;
-            max-height: 260px;
-            overflow-y: auto;
-        ">
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if help_topic == "Quick Start":
-        st.markdown(
-            """
-**Quick start**
+    HELP_TEXT = {
+        "Quick Start": """
 1) Fill **Personal Details**  
 2) Add **Skills**  
-3) Add **Experience** roles  
+3) Add **Experience**  
 4) Add **Education**  
-5) (Optional) paste a **Job Description**  
-6) Generate and download your CV as **PDF** or **Word**
-            """
-        )
+5) Generate and download
+""",
+        "AI Tools & Usage": "AI improves summaries, bullets, and cover letters.",
+        "Cover Letter Rules": "Personal details are required for cover letters.",
+        "Templates & Downloads": "Templates affect layout only, not content.",
+        "Troubleshooting": "Use one tab. Wait if AI is busy.",
+        "Privacy & Refunds": "Only upload what’s necessary. Payments are non-refundable.",
+    }
 
-    elif help_topic == "AI Tools & Usage":
-        st.markdown(
-            """
-**What the AI tools do**
-- Improve your professional summary
-- Rewrite bullet points for clarity and impact
-- Generate tailored cover letters
-- Help structure content from uploaded CVs
-
-**Usage limits**
-Each plan includes a monthly allowance of AI actions and CV generations.
-Usage resets automatically each month.
-
-**Cooldown**
-AI buttons have a short cooldown to prevent accidental double clicks.
-            """
-        )
-
-    elif help_topic == "Cover Letter Rules":
-        st.markdown(
-            """
-**Before generating a cover letter**
-Make sure **Personal Details** are completed.
-
-Why?
-- Your name and contact details are used in the letter header
-- The letter ends with a proper sign-off (*Regards, Your Name*)
-            """
-        )
-
-    elif help_topic == "Templates & Downloads":
-        st.markdown(
-            """
-**Templates**
-Templates control the **visual style** of your CV (mainly the PDF).
-Your content stays the same.
-
-**PDF vs Word**
-- **PDF**: best for applications
-- **Word (.docx)**: best for editing
-            """
-        )
-
-    elif help_topic == "Troubleshooting":
-        st.markdown(
-            """
-**AI appears busy**
-Wait 10–30 seconds and try again once.
-
-**Text reset or disappeared**
-Use a single browser tab.
-
-**Formatting issues**
-Use shorter bullets, consistent dates, or try a different template.
-            """
-        )
-
-    elif help_topic == "Privacy & Refunds":
-        st.markdown(
-            """
-**Privacy**
-Only upload information you actually need.
-
-**Refunds**
-Payments are **non-refundable once used**.
-If you believe there was a billing error, contact support.
-            """
-        )
-
+    st.markdown(HELP_TEXT[help_topic])
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.markdown("**Support:** support@affiliateworldcommissions.com")
+    st.caption("Support: support@affiliateworldcommissions.com")
 
-# -------------------------
-# Helper: paywall + quota check
-# -------------------------
+
+
+
+# =========================
+# QUOTA HELPERS (keep OUTSIDE sidebar block)
+# =========================
+def has_free_quota(counter_key: str, limit: int, feature_label: str) -> bool:
+    # Use session user, not a global that might be None
+    u = st.session_state.get("user") or {}
+
+    # Not logged in => block paid features (except upload_parses if you want)
+    if not (isinstance(u, dict) and u.get("email")):
+        st.warning(f"Sign in to use {feature_label}.")
+        return False
+
+    if u.get("role") in {"owner", "admin"}:
+        return True
+
+    if counter_key == "upload_parses":
+        return True
+
+    plan = u.get("plan", "free")
+    plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+
+    if counter_key in CV_USAGE_KEYS:
+        base_limit = plan_limits["cv"]
+        bucket_keys = CV_USAGE_KEYS
+        bonus = min(u.get("referrals_count", 0) or 0, REFERRAL_CAP) * BONUS_PER_REFERRAL_CV
+    else:
+        base_limit = plan_limits["ai"]
+        bucket_keys = AI_USAGE_KEYS
+        bonus = min(u.get("referrals_count", 0) or 0, REFERRAL_CAP) * BONUS_PER_REFERRAL_AI
+
+    if base_limit is None:
+        return True
+
+    effective_limit = int(base_limit + bonus)
+    used = int(sum(st.session_state.get(k, 0) or 0 for k in bucket_keys))
+
+    if used >= effective_limit:
+        show_paywall(feature_label)
+        return False
+
+    return True
+
 def show_paywall(feature_label: str):
     st.markdown(
         f"""
         <div style="
-            border-radius: 12px;
+            border-radius: 14px;
             padding: 14px 16px;
-            margin: 10px 0 4px 0;
-            background: #eff6ff;
-            border: 1px solid #bfdbfe;
+            margin: 10px 0 6px 0;
+            background: rgba(59,130,246,0.12);
+            border: 1px solid rgba(59,130,246,0.35);
         ">
-            <div style="font-weight: 600; margin-bottom: 4px; color: #1d4ed8;">
+            <div style="font-weight:800; margin-bottom:6px;">
                 Free limit reached for {feature_label}.
             </div>
-            <div style="font-size: 12px; color: #1f2937; margin-bottom: 8px;">
+            <div style="font-size: 13px; opacity:0.85; margin-bottom: 10px;">
                 Upgrade your plan or use referrals to unlock more usage.
             </div>
         </div>
@@ -1511,176 +1997,8 @@ def show_paywall(feature_label: str):
     )
 
 
-
-# -------------------------
-# FROM HERE DOWN: main app logic
-# -------------------------
-st.title("📄 Modern CV Builder")
-
-st.write(
-    "Fill in your details below and generate a clean, modern CV as a PDF. "
-    "You can also tailor your CV and generate a cover letter for a specific job using AI."
-)
-
-def reset_generated_outputs_on_new_cv():
-    # Anything derived from the previous CV / job should be cleared
-    for k in [
-        "cover_letter",
-        "cover_letter_box",
-        "summary_ai",
-        "job_description",
-    ]:
-        st.session_state.pop(k, None)
-
-    # Also clear per-role AI bullet outputs if you store them
-    for i in range(5):
-        st.session_state.pop(f"description_ai_{i}", None)
-        st.session_state.pop(f"use_ai_{i}", None)
-
-# -------------------------
-# 0. Upload existing CV (optional)
-# -------------------------
-import hashlib
-
 st.subheader("Upload an existing CV (optional)")
-
-# Optional deps
-try:
-    from PyPDF2 import PdfReader
-except ImportError:
-    PdfReader = None
-
-try:
-    import docx2txt
-except ImportError:
-    docx2txt = None
-
-
-def _read_uploaded_cv_to_text(uploaded_file) -> str:
-    """Return extracted text from PDF/DOCX/TXT. Never raises; returns '' on failure."""
-    if not uploaded_file:
-        return ""
-
-    name = (uploaded_file.name or "").lower()
-
-    # Rewind to be safe (Streamlit can re-use the same file object on reruns)
-    try:
-        uploaded_file.seek(0)
-    except Exception:
-        pass
-
-    # PDF
-    if name.endswith(".pdf"):
-        if PdfReader is None:
-            st.error("PDF support not installed. Add PyPDF2 to requirements.")
-            return ""
-        try:
-            reader = PdfReader(uploaded_file)
-            return "\n".join((page.extract_text() or "") for page in reader.pages)
-        except Exception as e:
-            st.error(f"Could not read PDF: {e}")
-            return ""
-
-    # DOCX
-    if name.endswith(".docx"):
-        if docx2txt is None:
-            st.error("DOCX support not installed. Add docx2txt to requirements.")
-            return ""
-        try:
-            return docx2txt.process(uploaded_file) or ""
-        except Exception as e:
-            st.error(f"Could not read DOCX: {e}")
-            return ""
-
-    # TXT
-    try:
-        return uploaded_file.read().decode("utf-8", errors="ignore")
-    except Exception as e:
-        st.error(f"Could not read file: {e}")
-        return ""
-
-
-def _reset_outputs_on_new_cv():
-    """Clear anything derived from old CV/job so it doesn't leak into the next one."""
-    for k in [
-        "cover_letter",
-        "cover_letter_box",
-        "summary_ai",
-        "job_description",
-    ]:
-        st.session_state.pop(k, None)
-
-    # Clear per-role AI bullet outputs if you use them
-    for i in range(5):
-        st.session_state.pop(f"description_ai_{i}", None)
-        st.session_state.pop(f"use_ai_{i}", None)
-
-import os
-import logging
-
-logging.warning("OPENAI_API_KEY present? %s", bool(os.getenv("OPENAI_API_KEY")))
-def _apply_parsed_cv_to_session(parsed: dict) -> None:
-    """Apply parsed CV dict to Streamlit session_state. Safe defaults + cleanup."""
-
-    # --- Basic fields ---
-    st.session_state["full_name"] = parsed.get("full_name", "") or ""
-    st.session_state["title"] = parsed.get("title", "") or ""
-    st.session_state["email"] = parsed.get("email", "") or ""
-    st.session_state["phone"] = parsed.get("phone", "") or ""
-    st.session_state["location"] = parsed.get("location", "") or ""
-    st.session_state["summary"] = parsed.get("summary", "") or ""
-
-    # --- Skills ---
-    skills_data = parsed.get("skills", [])
-    if isinstance(skills_data, list):
-        st.session_state["skills_text"] = ", ".join([str(s).strip() for s in skills_data if str(s).strip()])
-    elif isinstance(skills_data, str):
-        st.session_state["skills_text"] = skills_data
-
-    # --- Experiences ---
-    exps = parsed.get("experiences", []) or []
-    if isinstance(exps, list) and exps:
-        count = min(len(exps), 5)
-        st.session_state["num_experiences"] = count
-
-        for i in range(count):
-            exp = exps[i] or {}
-            st.session_state[f"job_title_{i}"] = exp.get("job_title", "") or ""
-            st.session_state[f"company_{i}"] = exp.get("company", "") or ""
-            st.session_state[f"exp_location_{i}"] = exp.get("location", "") or ""
-            st.session_state[f"start_date_{i}"] = exp.get("start_date", "") or ""
-            st.session_state[f"end_date_{i}"] = exp.get("end_date", "") or ""
-            st.session_state[f"description_{i}"] = exp.get("description", "") or ""
-
-        # Cleanup extra roles from previous CV
-        for j in range(count, 5):
-            for k in ["job_title", "company", "exp_location", "start_date", "end_date", "description"]:
-                st.session_state.pop(f"{k}_{j}", None)
-
-    else:
-        st.session_state["num_experiences"] = 1
-
-    # --- Education (map up to 5) ---
-    edus = parsed.get("education", []) or []
-    if isinstance(edus, list) and edus:
-        edu_count = min(len(edus), 5)
-        st.session_state["num_education"] = edu_count
-
-        for i in range(edu_count):
-            edu = edus[i] or {}
-            st.session_state[f"degree_{i}"] = edu.get("degree", "") or ""
-            st.session_state[f"institution_{i}"] = edu.get("institution", "") or ""
-            st.session_state[f"edu_location_{i}"] = edu.get("location", "") or ""
-            st.session_state[f"edu_start_{i}"] = edu.get("start_date", "") or ""
-            st.session_state[f"edu_end_{i}"] = edu.get("end_date", "") or ""
-
-        # Cleanup extra education rows from previous CV
-        for j in range(edu_count, 5):
-            for k in ["degree", "institution", "edu_location", "edu_start", "edu_end"]:
-                st.session_state.pop(f"{k}_{j}", None)
-    else:
-        st.session_state["num_education"] = 1
-
+st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
 uploaded_cv = st.file_uploader(
     "Upload your current CV (PDF, DOCX or TXT)",
@@ -1688,51 +2006,45 @@ uploaded_cv = st.file_uploader(
     key="cv_uploader",
 )
 
-fill_clicked = st.button("Fill the form from this CV (AI)", key="btn_fill_from_cv")
+fill_clicked = locked_action_button(
+    "Fill the form from this CV (AI)",
+    key="btn_fill_from_cv",
+    feature_label="CV upload & parsing",
+    counter_key="upload_parses",          # <-- usage bucket
+    require_login=True,                  # set False if you want guests to try
+    default_tab="Sign in",
+    cooldown_name="upload_parse",
+    cooldown_seconds=5,
+)
 
 if uploaded_cv is not None and fill_clicked:
-    # upload_parses is not limited in your logic, but keep the call anyway
-    if not has_free_quota("upload_parses", 1, "CV upload & parsing"):
-        st.stop()
-
     raw_text = _read_uploaded_cv_to_text(uploaded_cv)
     if not raw_text.strip():
         st.warning("No readable text found in that file.")
         st.stop()
 
-    # Fingerprint CV content so we reset only when it's a NEW CV
     cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
     last_fp = st.session_state.get("_last_cv_fingerprint")
 
     with st.spinner("Reading and analysing your CV..."):
-        try:
-            parsed = extract_cv_data(raw_text)
-            if not isinstance(parsed, dict):
-                raise ValueError("extract_cv_data() did not return a dict")
+        parsed = extract_cv_data(raw_text)
+        if not isinstance(parsed, dict):
+            st.error("AI parser returned an unexpected format.")
+            st.stop()
 
-            if cv_fp != last_fp:
-                _reset_outputs_on_new_cv()
-                st.session_state["_last_cv_fingerprint"] = cv_fp
+        if cv_fp != last_fp:
+            _reset_outputs_on_new_cv()
+            st.session_state["_last_cv_fingerprint"] = cv_fp
 
-            _apply_parsed_cv_to_session(parsed)
+        _apply_parsed_cv_to_session(parsed)
 
-            st.session_state["_cv_parsed"] = parsed
-            st.session_state["_cv_autofill_enabled"] = True
+        st.session_state["_cv_parsed"] = parsed
+        st.session_state["_cv_autofill_enabled"] = True
 
-            st.success("Form fields updated from your CV. Scroll down to review and edit.")
-            st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-            increment_usage(user_email, "upload_parses")
-
-            st.rerun()
-
-        except Exception as e:
-            import logging, traceback
-            logging.error("CV PARSE FAILED: %s: %r", type(e).__name__, e)
-            logging.error(traceback.format_exc())
-            st.error(f"AI error while parsing CV: {e}")
-
-
-
+        st.success("Form fields updated from your CV. Scroll down to review and edit.")
+        st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
+        increment_usage(user_email, "upload_parses")
+        st.rerun()
 
 
 restore_skills_state()
@@ -1762,8 +2074,9 @@ btn_summary = st.button(
 )
 
 if btn_summary:
+    if not gate_premium("improve your professional summary"):
+        st.stop()  # optional: stop only the ACTION path (not the whole app render)
     ok, left = cooldown_ok("improve_summary", 5)
-
     if not ok:
         st.warning(f"⏳ Please wait {left}s before trying again.")
     else:
@@ -1832,6 +2145,8 @@ skills_text = st.text_area(
 btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
 
 if btn_skills:
+    if not gate_premium("improve your skills"):
+        st.stop()
     ok, left = cooldown_ok("improve_skills", 5)
     if not ok:
         st.warning(f"⏳ Please wait {left}s before trying again.")
@@ -1945,6 +2260,8 @@ for i in range(int(num_experiences)):
     # ✅ Button only schedules AI (no AI work inside loop)
     btn_role = st.button("Improve this role (AI)", key=f"btn_role_ai_{i}")
     if btn_role:
+        if not gate_premium(f"improve Role {i+1} with AI"):
+            st.stop()
         ok, left = cooldown_ok(f"improve_role_{i}", 5)
         if not ok:
             st.warning(f"⏳ Please wait {left}s before trying again.")
@@ -1972,12 +2289,11 @@ role_to_improve = st.session_state.get("ai_running_role")
 run_now = st.session_state.get("ai_run_now", False)
 
 if run_now and role_to_improve is not None:
-    i = int(role_to_improve)
-
-    # reset flags first so it doesn't loop
-    st.session_state["ai_running_role"] = None
-    st.session_state["ai_run_now"] = False
-
+    if not gate_premium("use AI role improvements"):
+        # reset flags so it doesn't keep trying
+        st.session_state["ai_running_role"] = None
+        st.session_state["ai_run_now"] = False
+        st.stop()
     desc_key    = f"description_{i}"
     pending_key = f"description_pending_{i}"
     current_text = (st.session_state.get(desc_key) or "").strip()
@@ -2154,6 +2470,9 @@ with col_jd2:
 
 # --- AI job-description summary (separate from professional summary) ---
 if job_summary_clicked:
+    if not gate_premium("generate a job summary"):
+        st.stop()
+    
     # ✅ Guard: must complete Section 1 first
     if not (full_name.strip() and email.strip()):
         st.warning(
@@ -2220,6 +2539,8 @@ st.session_state["_last_jd_fp"] = jd_fp
 
 # --- AI cover letter ---
 if ai_cover_letter_clicked:
+    if not gate_premium("generate a cover letter"):
+        st.stop()
     # ✅ Guard: must complete Section 1 first
     if not (full_name.strip() and email.strip()):
         st.warning(
@@ -2373,12 +2694,8 @@ TEMPLATE_MAP = {
 # 7. Generate CV
 # -------------------------
 
-# -------------------------
-# Template selection
-# -------------------------
 st.header("CV Template")
 
-# keep a stable default
 st.session_state.setdefault("template_label", "Blue")
 
 template_label = st.selectbox(
@@ -2389,81 +2706,88 @@ template_label = st.selectbox(
     key="template_label",
 )
 
-if st.button("Generate CV (PDF + Word)"):
+# 🔒 Premium-gated button (keeps app scrollable for guests)
+generate_clicked = locked_action_button(
+    "Generate CV (PDF + Word)",
+    action_label="generate and download your CV",
+    key="btn_generate_cv",
+)
+
+if generate_clicked:
+    # Must be logged in at this point (locked_action_button enforces it)
+    current_user = st.session_state.get("user") or {}
+    user_email = current_user.get("email")
+
     if not full_name or not email:
         st.error("Please fill in at least your full name and email.")
-    else:
-        if not has_free_quota("cv_generations", 1, "CV generation"):
-            # paywall already shown inside has_free_quota
-            pass
-        else:
-            try:
-                # 🔹 Use whatever is currently in the summary box
-                #    (already cleaned / AI-improved if the button was used)
-                raw_summary = st.session_state.get("summary", "") or ""
+        st.stop()
 
-                # Enforce word limit on the summary before putting it in the CV
-                cv_summary = enforce_word_limit(
-                    raw_summary,
-                    MAX_DOC_WORDS,
-                    "Professional summary",
-                )
+    # Optional: extra safety if user_email somehow missing
+    if not user_email:
+        st.error("Please sign in again.")
+        open_auth_modal("Sign in")
+        st.stop()
 
-                cv = CV(
-                    full_name=full_name,
-                    title=title or None,
-                    email=email,
-                    phone=phone or None,
-                    full_address=None,
-                    location=location or None,
-                    summary=cv_summary or None,
-                    skills=skills,
-                    experiences=experiences,
-                    education=education_items,
-                    references=references or None,
-                )
+    # Quota check stays exactly as you already had it
+    if not has_free_quota("cv_generations", 1, "CV generation"):
+        # paywall already shown inside has_free_quota
+        st.stop()
 
-                template_name = TEMPLATE_MAP.get(
-                st.session_state.get("template_label"),
-                "Blue Theme.html",
-                )
+    try:
+        raw_summary = st.session_state.get("summary", "") or ""
 
+        cv_summary = enforce_word_limit(
+            raw_summary,
+            MAX_DOC_WORDS,
+            "Professional summary",
+        )
 
-                pdf_bytes = render_cv_pdf_bytes(
-                cv,
-                template_name=template_name,
-                )                              
-                docx_bytes = render_cv_docx_bytes(cv)
+        cv = CV(
+            full_name=full_name,
+            title=title or None,
+            email=email,
+            phone=phone or None,
+            full_address=None,
+            location=location or None,
+            summary=cv_summary or None,
+            skills=skills,
+            experiences=experiences,
+            education=education_items,
+            references=references or None,
+        )
 
-                st.success("CV generated successfully! 🎉")
+        template_name = TEMPLATE_MAP.get(
+            st.session_state.get("template_label"),
+            "Blue Theme.html",
+        )
 
-                col_cv1, col_cv2 = st.columns(2)
-                with col_cv1:
-                    st.download_button(
-                        label="📄 Download CV as PDF",
-                        data=pdf_bytes,
-                        file_name="cv.pdf",
-                        mime="application/pdf",
-                    )
-                with col_cv2:
-                    st.download_button(
-                        label="📝 Download CV as Word (.docx)",
-                        data=docx_bytes,
-                        file_name="cv.docx",
-                        mime=(
-                            "application/vnd.openxmlformats-"
-                            "officedocument.wordprocessingml.document"
-                        ),
-                    )
+        pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
+        docx_bytes = render_cv_docx_bytes(cv)
 
-                # Count this as a CV generation
-                st.session_state["cv_generations"] = (
-                    st.session_state.get("cv_generations", 0) + 1
-                )
-                increment_usage(user_email, "cv_generations")
+        st.success("CV generated successfully! 🎉")
 
-            except Exception as e:
-                st.error(f"Something went wrong while generating the CV: {e}")
+        col_cv1, col_cv2 = st.columns(2)
+        with col_cv1:
+            st.download_button(
+                label="📄 Download CV as PDF",
+                data=pdf_bytes,
+                file_name="cv.pdf",
+                mime="application/pdf",
+            )
+        with col_cv2:
+            st.download_button(
+                label="📝 Download CV as Word (.docx)",
+                data=docx_bytes,
+                file_name="cv.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+        st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
+        increment_usage(user_email, "cv_generations")
+
+    except Exception as e:
+        st.error(f"Something went wrong while generating the CV: {e}")
+
 
 
 # -------------------------
