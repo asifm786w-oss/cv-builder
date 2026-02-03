@@ -1236,6 +1236,10 @@ div[role="dialog"] input:focus{
 # =========================
 def auth_ui():
     """Login / register / password reset UI."""
+    import os
+    import traceback
+    import streamlit as st
+
     tab_login, tab_register, tab_forgot = st.tabs(
         ["Sign in", "Create account", "Forgot password"]
     )
@@ -1316,11 +1320,33 @@ def auth_ui():
                 st.error("Please enter your email.")
             else:
                 try:
+                    # ---- DEBUG START ----
+                    print("\n=== RESET EMAIL REQUESTED ===")
+                    print("fp_email:", fp_email)
+
+                    resend_key = os.getenv("RESEND_API_KEY", "")
+                    from_email = os.getenv("FROM_EMAIL", "")
+                    app_url = os.getenv("APP_URL", "")
+
+                    print("RESEND_API_KEY present:", bool(resend_key))
+                    print("RESEND_API_KEY length:", len(resend_key))
+                    print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
+                    print("FROM_EMAIL present:", bool(from_email))
+                    print("APP_URL present:", bool(app_url))
+                    # ---- DEBUG END ----
+
                     token = create_password_reset_token(fp_email)
+                    print("token created:", bool(token))
+
                     if token:
                         send_password_reset_email(fp_email, token)
+                        print("send_password_reset_email() finished without raising")
+
                     st.success("If this email is registered, a reset link has been sent.")
+
                 except Exception as e:
+                    print("=== RESET EMAIL ERROR ===")
+                    traceback.print_exc()
                     st.error(f"Error while sending reset email: {e}")
 
         st.markdown("---")
@@ -1345,6 +1371,7 @@ def auth_ui():
                     st.error(
                         "Invalid or expired reset token. Please request a new reset link."
                     )
+
 
 
 
