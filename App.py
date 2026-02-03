@@ -364,6 +364,62 @@ def restore_education_state(max_rows: int = 5):
         st.session_state[f"edu_start_{i}"] = row.get("start", "")
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
 
+import os
+import requests
+
+RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
+
+def send_password_reset_email(email: str, token: str) -> None:
+    """
+    Sends a password reset email via Resend.
+    Raises RuntimeError on failure so caller can surface a friendly error.
+    """
+    key = (os.getenv("RESEND_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("RESEND_API_KEY is missing in environment variables.")
+
+    # Safe debug (no secrets leaked)
+    print("=== RESEND RESET EMAIL ===")
+    print("RESEND_API_KEY prefix:", key[:3], "len:", len(key))
+
+    from_email = (os.getenv("FROM_EMAIL") or "").strip() or "onboarding@resend.dev"
+    app_url = (os.getenv("APP_URL") or "").strip()
+
+    # Build a link if you have a URL; otherwise just include the token
+    if app_url:
+        reset_link = f"{app_url.rstrip('/')}/?reset_token={token}"
+        body_html = f"""
+        <p>Click to reset your password:</p>
+        <p><a href="{reset_link}">{reset_link}</a></p>
+        <p>If the link doesn’t work, use this reset token: <b>{token}</b></p>
+        """
+    else:
+        body_html = f"""
+        <p>Your password reset token is:</p>
+        <p><b>{token}</b></p>
+        """
+
+    headers = {
+        "Authorization": f"Bearer {key}",   # <-- THIS is required
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "from": from_email,
+        "to": [email],
+        "subject": "Reset your password",
+        "html": body_html,
+    }
+
+    r = requests.post(
+        "https://api.resend.com/emails",
+        headers=headers,
+        json=payload,
+        timeout=20,
+    )
+
+    if r.status_code >= 400:
+        raise RuntimeError(f"Resend failed: {r.status_code} {r.text}")
 
 # -------------------------------------------------------------------
 # OpenAI helpers (kept for future use if needed)
