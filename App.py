@@ -444,6 +444,56 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 open_auth_modal("Create account")
                 st.rerun()
 
+def _read_uploaded_cv_to_text(uploaded_cv) -> str:
+    """
+    uploaded_cv: streamlit UploadedFile
+    returns extracted text (best-effort)
+    """
+    if uploaded_cv is None:
+        return ""
+
+    name = (uploaded_cv.name or "").lower()
+    ext = os.path.splitext(name)[1]
+
+    # Streamlit UploadedFile supports getvalue()
+    data: bytes = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
+
+    if not data:
+        return ""
+
+    if ext == ".txt":
+        # Try utf-8, fall back to latin-1
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data.decode("latin-1", errors="ignore")
+
+    if ext == ".docx":
+        try:
+            import docx  # python-docx
+        except ImportError:
+            raise RuntimeError("Missing dependency: python-docx (pip install python-docx)")
+
+        doc = docx.Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs if p.text)
+
+    if ext == ".pdf":
+        # Prefer pypdf (lightweight)
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise RuntimeError("Missing dependency: pypdf (pip install pypdf)")
+
+        reader = PdfReader(io.BytesIO(data))
+        parts = []
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            if txt.strip():
+                parts.append(txt)
+        return "\n\n".join(parts)
+
+    # Unknown extension
+    return ""
 
 
 def locked_action_button(
