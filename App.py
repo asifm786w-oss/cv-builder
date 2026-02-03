@@ -470,6 +470,44 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 open_auth_modal("Create account")
                 st.rerun()
 
+def _apply_parsed_cv_to_session(parsed: dict):
+    """
+    Takes parsed CV data (dict) and writes it into st.session_state
+    so your form fields auto-fill.
+
+    Safe: only sets keys that exist in parsed.
+    """
+    if not isinstance(parsed, dict):
+        return
+
+    # Common patterns: parsed may contain nested dicts
+    # e.g. {"personal": {...}, "summary": "...", "skills": [...], ...}
+    # We'll support both flat and nested.
+
+    # 1) Flat keys directly -> session_state
+    for k, v in parsed.items():
+        if isinstance(v, (str, int, float, bool)) or v is None:
+            st.session_state[k] = v
+
+    # 2) Known nested sections (adjust names to match your extractor)
+    sections = ["personal", "contact", "education", "experience", "projects", "links"]
+    for sec in sections:
+        block = parsed.get(sec)
+        if isinstance(block, dict):
+            for k, v in block.items():
+                st.session_state[f"{sec}_{k}"] = v
+
+    # 3) Lists (skills, bullets, etc.) – store as-is
+    list_sections = ["skills", "certifications", "languages"]
+    for sec in list_sections:
+        if isinstance(parsed.get(sec), list):
+            st.session_state[sec] = parsed[sec]
+
+    # Flags your UI likely expects
+    st.session_state["_cv_parsed"] = parsed
+    st.session_state["_cv_autofill_enabled"] = True
+
+
 def _read_uploaded_cv_to_text(uploaded_cv) -> str:
     """
     uploaded_cv: streamlit UploadedFile
