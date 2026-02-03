@@ -1,56 +1,35 @@
-# email_utils.py
 import os
-import requests
-
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 def send_password_reset_email(to_email: str, reset_token: str):
-    api_key = os.getenv("RESEND_API_KEY")
-    from_email = os.getenv("FROM_EMAIL")  # e.g. "Munib Support <support@affiliateworldcommissions.com>"
-    app_url = (os.getenv("APP_URL") or "").strip().rstrip("/")  # optional pre-launch
+    # Railway Variables: 
+    # FROM_EMAIL = your full wix/google email
+    # GMAIL_APP_PASSWORD = that 16-character code
+    sender_email = os.getenv("FROM_EMAIL")
+    password = os.getenv("GMAIL_APP_PASSWORD") 
+    app_url = (os.getenv("APP_URL") or "").strip().rstrip("/")
 
-    if not api_key:
-        raise RuntimeError("Missing RESEND_API_KEY env var")
-    if not from_email:
-        raise RuntimeError("Missing FROM_EMAIL env var")
-
-    reset_link = f"{app_url}/?reset_token={reset_token}" if app_url else None
+    if not password or not sender_email:
+        raise RuntimeError("Missing Google credentials in Railway variables")
 
     subject = "Password reset for your account"
+    reset_link = f"{app_url}/?reset_token={reset_token}" if app_url else reset_token
+    
+    msg = MIMEMultipart()
+    msg['From'] = f"Support <{sender_email}>"
+    msg['To'] = to_email
+    msg['Subject'] = subject
+    
+    body = f"Use this link to reset your password: {reset_link}\n\nToken: {reset_token}"
+    msg.attach(MIMEText(body, 'plain'))
 
-    link_block = (
-        f"""
-        <p>
-          <b>Reset link:</b><br/>
-          <a href="{reset_link}">{reset_link}</a>
-        </p>
-        """
-        if reset_link
-        else "<p><b>Reset link:</b> (not available yet — use the token below)</p>"
-    )
-
-    html = f"""
-    <p>Hi,</p>
-    <p>We received a request to reset the password for your account.</p>
-    {link_block}
-    <p><b>Token:</b> {reset_token}</p>
-    <p>If you did not request this, you can safely ignore this email.</p>
-    <p>Thanks,<br/>Munib's Career Support Tools</p>
-    """
-
-    r = requests.post(
-        "https://api.resend.com/emails",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "from": from_email,
-            "to": [to_email],
-            "subject": subject,
-            "html": html,
-        },
-        timeout=20,
-    )
-
-    if r.status_code >= 300:
-        raise RuntimeError(f"Resend failed: {r.status_code} {r.text}")
+    try:
+        # Google uses Port 587 with TLS
+        with smtplib.SMTP("smtp.gmail.com", 587) as server:
+            server.starttls()
+            server.login(sender_email, password)
+            server.sendmail(sender_email, to_email, msg.as_string())
+    except Exception as e:
+        raise RuntimeError(f"Google Mail failed: {str(e)}")
