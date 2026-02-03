@@ -369,7 +369,7 @@ import requests
 
 RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
 
-def send_password_reset_email(email: str, token: str) -> None:
+def _send_password_reset_email_local_DO_NOT_USE(...):
     """
     Sends a password reset email via Resend.
     Raises RuntimeError on failure so caller can surface a friendly error.
