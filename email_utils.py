@@ -1,20 +1,28 @@
 # email_utils.py
 import os
+import sys
 import requests
 
 
 def send_password_reset_email(to_email: str, reset_token: str):
-    api_key = os.getenv("RESEND_API_KEY")
-    from_email = os.getenv("FROM_EMAIL")  # e.g. "Munib Support <support@affiliateworldcommissions.com>"
-    app_url = (os.getenv("APP_URL") or "").strip().rstrip("/")  # optional pre-launch
+    # Clean key aggressively (handles quotes/newlines)
+    api_key = (os.getenv("RESEND_API_KEY") or "").strip().strip('"').strip("'")
+    from_email = (os.getenv("FROM_EMAIL") or "").strip()
+    app_url = (os.getenv("APP_URL") or "").strip().rstrip("/")
+
+    # SAFE debug -> Railway logs
+    print("=== RESEND RESET EMAIL ===", file=sys.stderr, flush=True)
+    print(f"key_prefix={api_key[:3]} key_len={len(api_key)}", file=sys.stderr, flush=True)
+    print(f"from_email_set={bool(from_email)} app_url_set={bool(app_url)}", file=sys.stderr, flush=True)
 
     if not api_key:
         raise RuntimeError("Missing RESEND_API_KEY env var")
+    if not api_key.startswith("re_"):
+        raise RuntimeError("RESEND_API_KEY does not look valid (expected prefix re_)")
     if not from_email:
         raise RuntimeError("Missing FROM_EMAIL env var")
 
     reset_link = f"{app_url}/?reset_token={reset_token}" if app_url else None
-
     subject = "Password reset for your account"
 
     link_block = (
