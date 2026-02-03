@@ -1569,12 +1569,7 @@ def render_public_home():
     )
 
 
-SITE_PASSWORD = os.getenv("SITE_PASSWORD")
 
-if SITE_PASSWORD:
-    pw = st.text_input("🔒 Private access", type="password")
-    if pw != SITE_PASSWORD:
-        st.stop()
 # -------------------------
 # Auth State
 # -------------------------
