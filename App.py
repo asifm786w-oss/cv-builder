@@ -55,11 +55,14 @@ from auth import (
 
 from email_utils import send_password_reset_email
 import traceback
-
-import streamlit as st
 import time
 
+SITE_PASSWORD = os.getenv("SITE_PASSWORD")
 
+if SITE_PASSWORD:
+    pw = st.text_input("🔒 Private access", type="password")
+    if pw != SITE_PASSWORD:
+        st.stop()
 # -------------------------
 # GLOBAL PLAN + REFERRAL CONFIG
 # -------------------------
@@ -229,6 +232,33 @@ def restore_experience_from_parsed():
         _restore(f"description_{i}",  desc)
 
 
+def _reset_outputs_on_new_cv():
+    """
+    Clears derived/generated outputs when a new CV is uploaded,
+    so users don't see stale results.
+    """
+    keys_to_clear = [
+        # CV parsing / autofill
+        "_cv_parsed",
+        "_cv_autofill_enabled",
+
+        # Generated outputs (rename/add keys to match your app)
+        "generated_cv",
+        "generated_cover_letter",
+        "generated_summary",
+        "suggested_bullets",
+        "ats_score",
+        "final_pdf_bytes",
+        "final_docx_bytes",
+
+        # Any UI state tied to old results
+        "selected_template",
+        "download_ready",
+    ]
+
+    for k in keys_to_clear:
+        if k in st.session_state:
+            del st.session_state[k]
 
 
 def normalize_experience_state(max_roles: int = 5):
