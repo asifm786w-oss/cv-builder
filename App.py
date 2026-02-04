@@ -2289,12 +2289,27 @@ fill_clicked = locked_action_button(
     "Fill the form from this CV (AI)",
     key="btn_fill_from_cv",
     feature_label="CV upload & parsing",
-    counter_key="upload_parses",          # <-- usage bucket
-    require_login=True,                  # set False if you want guests to try
+    counter_key="upload_parses",
+    require_login=True,
     default_tab="Sign in",
     cooldown_name="upload_parse",
     cooldown_seconds=5,
 )
+
+def _clear_education_persistence_for_new_cv():
+    """Clear education keys that can override new parsed education on rerun."""
+    # remove per-row keys
+    for k in list(st.session_state.keys()):
+        if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
+            st.session_state.pop(k, None)
+
+    # remove row count + cached list
+    st.session_state.pop("num_education", None)
+    st.session_state.pop("education_items", None)
+
+    # if your backup/restore uses any of these, clear them too (safe even if absent)
+    st.session_state.pop("_education_backup", None)
+    st.session_state.pop("_education_backup_fp", None)
 
 if uploaded_cv is not None and fill_clicked:
     raw_text = _read_uploaded_cv_to_text(uploaded_cv)
@@ -2311,10 +2326,22 @@ if uploaded_cv is not None and fill_clicked:
             st.error("AI parser returned an unexpected format.")
             st.stop()
 
-        if cv_fp != last_fp:
+        is_new_cv = (cv_fp != last_fp)
+
+        if is_new_cv:
+            # ✅ clear AI outputs + any other non-user outputs
             _reset_outputs_on_new_cv()
+
+            # ✅ CRITICAL: clear education persistence so it doesn't override new parsed edu
+            _clear_education_persistence_for_new_cv()
+
+            # ✅ mark new CV fingerprint
             st.session_state["_last_cv_fingerprint"] = cv_fp
 
+            # ✅ one-time flag to prevent restore_* from overwriting right after autofill
+            st.session_state["_just_autofilled_from_cv"] = True
+
+        # ✅ apply parsed data after resets/clears
         _apply_parsed_cv_to_session(parsed)
 
         st.session_state["_cv_parsed"] = parsed
@@ -2324,6 +2351,7 @@ if uploaded_cv is not None and fill_clicked:
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
         increment_usage(user_email, "upload_parses")
         st.rerun()
+
 
 
 restore_skills_state()
@@ -2610,7 +2638,8 @@ if run_now and role_to_improve is not None:
             st.error(f"AI error: {e}")
 
 
-restore_education_state()
+if not st.session_state.pop("_just_autofilled_from_cv", False):
+    restore_education_state()
 # -------------------------
 # 4. Education (multiple entries)
 # -------------------------
