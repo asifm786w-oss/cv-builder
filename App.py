@@ -2362,45 +2362,82 @@ def _clear_education_persistence_for_new_cv():
 
 
 
-if uploaded_cv is not None and fill_clicked:
-    raw_text = _read_uploaded_cv_to_text(uploaded_cv)
-    if not raw_text.strip():
-        st.warning("No readable text found in that file.")
-        st.stop()
+    # -------------------------
+    # 0. Upload CV (optional)
+    # -------------------------
+    st.header("0. Upload an existing CV (optional)")
+    st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
-    cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
-    last_fp = st.session_state.get("_last_cv_fingerprint")
+    uploaded_cv = st.file_uploader(
+        "Upload your current CV (PDF, DOCX or TXT)",
+        type=["pdf", "docx", "txt"],
+        key="cv_uploader_main",
+    )
 
-    with st.spinner("Reading and analysing your CV..."):
-        parsed = extract_cv_data(raw_text)
-        if not isinstance(parsed, dict):
-            st.error("AI parser returned an unexpected format.")
+    fill_clicked = False
+
+    if uploaded_cv is None:
+        st.info("Choose a file above to enable autofill.")
+    else:
+        fill_clicked = locked_action_button(
+            "Fill the form from this CV (AI)",
+            key="btn_fill_from_cv",
+            feature_label="CV upload & parsing",
+            counter_key="upload_parses",
+            require_login=True,
+            default_tab="Sign in",
+            cooldown_name="upload_parse",
+            cooldown_seconds=5,
+        )
+
+    if uploaded_cv is not None and fill_clicked:
+        raw_text = _read_uploaded_cv_to_text(uploaded_cv)
+        if not raw_text.strip():
+            st.warning("No readable text found in that file.")
             st.stop()
 
-        is_new_cv = (cv_fp != last_fp)
+        cv_fp = hashlib.sha256(
+            raw_text.encode("utf-8", errors="ignore")
+        ).hexdigest()
 
-        if is_new_cv:
-            _reset_outputs_on_new_cv()
-            _clear_education_persistence_for_new_cv()
+        last_fp = st.session_state.get("_last_cv_fingerprint")
 
-            st.session_state["_last_cv_fingerprint"] = cv_fp
+        with st.spinner("Reading and analysing your CV..."):
+            parsed = extract_cv_data(raw_text)
+            if not isinstance(parsed, dict):
+                st.error("AI parser returned an unexpected format.")
+                st.stop()
 
-        # ✅ prevent restore_education_state() from restoring old backups on the rerun
-        st.session_state["_skip_restore_education_once"] = True
+            is_new_cv = (cv_fp != last_fp)
 
-        # ✅ apply parsed data
-        _apply_parsed_cv_to_session(parsed)
+            if is_new_cv:
+                _reset_outputs_on_new_cv()
+                _clear_education_persistence_for_new_cv()
+                st.session_state["_last_cv_fingerprint"] = cv_fp
 
-        # ✅ optional but recommended: snapshot after apply so future reruns have a backup
-        backup_education_state()
+            # prevent restore_education_state() from overwriting on rerun
+            st.session_state["_skip_restore_education_once"] = True
 
-        st.session_state["_cv_parsed"] = parsed
-        st.session_state["_cv_autofill_enabled"] = True
+            # apply parsed data
+            _apply_parsed_cv_to_session(parsed)
 
-        st.success("Form fields updated from your CV. Scroll down to review and edit.")
-        st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-        increment_usage(user_email, "upload_parses")
-        st.rerun()
+            # snapshot education so reruns don't wipe it
+            backup_education_state()
+
+            st.session_state["_cv_parsed"] = parsed
+            st.session_state["_cv_autofill_enabled"] = True
+
+            st.success(
+                "Form fields updated from your CV. Scroll down to review and edit."
+            )
+
+            st.session_state["upload_parses"] = (
+                st.session_state.get("upload_parses", 0) + 1
+            )
+
+            increment_usage(user_email, "upload_parses")
+            st.rerun()
+
 
 
 
