@@ -1486,7 +1486,7 @@ def show_policy_page() -> bool:
         return False
 
     title_map = {
-        "accessibility": "Accessibility",
+        "accessibility": "accessibility",
         "cookies": "Cookie Policy",
         "privacy": "Privacy Policy",
         "terms": "Terms of Use",
