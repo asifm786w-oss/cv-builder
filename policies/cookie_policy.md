@@ -1,5 +1,3 @@
-st.markdown("""
-<div class="sb-card">
 
 _Last updated: 4 December 2025_
 
@@ -95,5 +93,4 @@ If you have any questions about this Cookie Policy, please contact:
 **Support**  
 Email: **support@affiliateworldcommissions.com**
 
-</div>
-""", unsafe_allow_html=True)
+

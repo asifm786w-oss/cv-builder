@@ -1,5 +1,4 @@
-st.markdown("""
-<div class="sb-card">
+
 
 _Last updated: 4 December 2025_
 
@@ -197,5 +196,4 @@ For questions about this Privacy Policy or personal data handling, please contac
 **Support**  
 Email: **support@affiliateworldcommissions.com**
 
-</div>
-""", unsafe_allow_html=True)
+

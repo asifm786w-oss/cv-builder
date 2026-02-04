@@ -1,5 +1,4 @@
-st.markdown("""
-<div class="sb-card">
+
 
 _Last updated: 4 December 2025_
 
@@ -92,5 +91,4 @@ If you are based in the UK and are dissatisfied with our response to an accessib
 
 **Mulyba Digital Tools** remains committed to improving accessibility and addressing reasonable concerns brought to our attention.
 
-</div>
-""", unsafe_allow_html=True)
+
