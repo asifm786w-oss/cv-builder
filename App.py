@@ -692,6 +692,48 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="expanded",
 )
+import streamlit as st
+
+st.set_page_config(layout="wide")
+
+# 👇 PUT THIS RIGHT AFTER set_page_config
+st.markdown("""
+<style>
+/* 1️⃣ Sidebar background – make it opaque */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div {
+  background: #0b0f19 !important;
+  opacity: 1 !important;
+}
+
+/* 2️⃣ Ensure sidebar is ABOVE content */
+section[data-testid="stSidebar"] {
+  z-index: 9999 !important;
+}
+
+/* 3️⃣ Mobile overlay to stop see-through collision */
+@media (max-width: 768px) {
+  .stApp::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  section[data-testid="stSidebar"] {
+    position: fixed;
+    z-index: 10000 !important;
+  }
+
+  .stApp {
+    position: relative;
+    z-index: 2;
+  }
+}
+</style>
+""", unsafe_allow_html=True)
 
 st.markdown("""
 <style>
@@ -1285,7 +1327,42 @@ div[role="dialog"] input:focus{
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown("""
+<style>
+/* Sidebar container */
+section[data-testid="stSidebar"] {
+  background: #0b0f19 !important;  /* pick your dark */
+  opacity: 1 !important;
+}
 
+/* Sidebar inner */
+section[data-testid="stSidebar"] > div {
+  background: #0b0f19 !important;
+}
+</style>
+""", unsafe_allow_html=True)
+st.markdown("""
+<style>
+/* When sidebar is visible on small screens, dim the app root */
+@media (max-width: 768px) {
+  .stApp::before{
+    content:"";
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.55);
+    pointer-events: none;
+    z-index: 0;
+  }
+  section[data-testid="stSidebar"]{
+    z-index: 10;
+  }
+  .stApp{
+    position: relative;
+    z-index: 1;
+  }
+}
+</style>
+""", unsafe_allow_html=True)
 
 # =========================
 # AUTH UI
