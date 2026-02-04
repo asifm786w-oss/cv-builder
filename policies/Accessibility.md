@@ -1,6 +1,9 @@
+st.markdown("""
+<div class="sb-card">
+
 _Last updated: 4 December 2025_
 
-**Munibs Career Support Tools** is committed to making our CV and cover letter builder accessible and usable for as many people as possible, including users with disabilities and different access needs.
+**Mulyba Digital Tools** is committed to making its CV and cover letter builder accessible and usable for as many people as possible, including users with disabilities and varying access needs.
 
 ---
 
@@ -8,81 +11,86 @@ _Last updated: 4 December 2025_
 
 We aim to:
 
-- Design pages with clear structure and headings  
-- Use legible fonts and sufficient contrast where possible  
-- Keep layout simple and predictable  
+- Provide clear page structure and consistent headings  
+- Use readable fonts and reasonable colour contrast where possible  
+- Keep layouts simple, predictable, and easy to follow  
 - Support use on modern desktop and mobile browsers  
-- Make content understandable and navigable, including with keyboard controls  
+- Ensure content is understandable and usable with keyboard navigation  
 
-This is an ongoing process and we are continually working to improve.
-
----
-
-## 2. Current status
-
-The Service is built using web technologies (including Streamlit) and is primarily:
-
-- Navigable via standard web browsers  
-- Usable with keyboard navigation for main actions  
-- Designed with relatively simple layout and clear sections  
-
-However, we recognise that the Service may **not yet fully meet** all requirements of WCAG 2.1 AA or equivalent accessibility standards.
-
-Areas that may present challenges include:
-
-- Some colour contrasts may not be optimal in all templates  
-- Certain UI components are provided by underlying frameworks and may have limitations  
-- Dynamic content updates may not always be announced by assistive technologies  
-
-We are working to identify and improve these areas over time.
+Accessibility is an ongoing consideration and improvements are made where feasible.
 
 ---
 
-## 3. Tips for improving your experience
+## 2. Current accessibility status
 
-You may find the Service easier to use if you:
+The Service is built using modern web technologies (including Streamlit) and is generally:
 
-- Zoom the page (e.g. Ctrl + + / Cmd + +) to increase text size  
-- Use your browser’s reader mode (where available)  
-- Use high-contrast mode in your operating system or browser  
-- Adjust font and colour settings in your device accessibility options  
+- Accessible through standard web browsers  
+- Usable with keyboard navigation for primary actions  
+- Structured with clear sections and logical flow  
 
----
+However, the Service may **not fully conform** to WCAG 2.1 AA or equivalent accessibility standards at this time.
 
-## 4. Future improvements
+Known limitations may include:
 
-We plan to explore:
+- Colour contrast variations across templates  
+- UI components provided by third-party frameworks  
+- Dynamic updates that may not always be announced to assistive technologies  
 
-- Improved contrast and font options  
-- A “simple mode” with more minimal layout  
-- Better support and labelling for assistive technologies  
-- Additional keyboard shortcuts for common actions  
-
-Accessibility is an ongoing journey and we welcome feedback.
+We continue to review and improve these areas.
 
 ---
 
-## 5. Feedback and contact
+## 3. Improving your experience
+
+You may find the Service easier to use by:
+
+- Adjusting browser zoom levels to increase text size  
+- Using reader or simplified viewing modes where available  
+- Enabling high-contrast or accessibility settings on your device  
+- Customising font and display preferences in your operating system  
+
+---
+
+## 4. Planned improvements
+
+Where possible, we intend to explore:
+
+- Enhanced contrast and font configuration options  
+- A simplified interface mode  
+- Improved labelling for assistive technologies  
+- Additional keyboard navigation enhancements  
+
+Feedback helps guide future improvements.
+
+---
+
+## 5. Feedback and support
 
 If you:
-- Have difficulty using any part of the Service  
-- Need content in a different format  
-- Wish to report an accessibility problem  
 
-Contact:
+- Encounter accessibility difficulties  
+- Require content in an alternative format  
+- Wish to report an accessibility issue  
+
+Please contact:
 
 **Support**  
 Email: **support@affiliateworldcommissions.com**
 
-When you contact us, it helps if you include:
-- The page or feature you were using  
-- The issue you encountered  
-- Any assistive technology or device you are using  
+When reaching out, it is helpful to include:
+
+- The page or feature in use  
+- A brief description of the issue  
+- Any assistive technology, browser, or device involved  
 
 ---
 
 ## 6. Enforcement
 
-In the UK, if you are unhappy with our response to an accessibility issue, you may be able to seek advice from relevant consumer or equality bodies.
+If you are based in the UK and are dissatisfied with our response to an accessibility concern, you may be able to seek advice from relevant consumer or equality organisations.
 
-We are committed to improving accessibility and will take reasonable steps to address issues that are brought to our attention.
+**Mulyba Digital Tools** remains committed to improving accessibility and addressing reasonable concerns brought to our attention.
+
+</div>
+""", unsafe_allow_html=True)

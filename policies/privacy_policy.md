@@ -1,6 +1,9 @@
+st.markdown("""
+<div class="sb-card">
+
 _Last updated: 4 December 2025_
 
-This Privacy Policy explains how **Munibs Career Support Tools** (“we”, “us”, “our”) collects, uses and protects your personal data when you use our CV and cover letter builder (the “Service”).
+This Privacy Policy explains how **Mulyba Digital Tools** (“we”, “us”, “our”) collects, uses, and protects your personal data when you use our CV and cover letter builder (the “Service”).
 
 By using the Service, you agree to the collection and use of information in accordance with this Policy.
 
@@ -8,7 +11,7 @@ By using the Service, you agree to the collection and use of information in acco
 
 ## 1. Who we are
 
-**Service name:** Munibs Career Support Tools  
+**Service name:** Mulyba Digital Tools  
 
 We act as the **data controller** for personal data processed through the Service.
 
@@ -46,7 +49,7 @@ This data helps us understand how the Service is used and improve reliability an
 
 ### c) AI interaction data
 
-When you use AI features (such as improving summaries, bullets or generating cover letters), the text you provide and the generated output may be temporarily processed by third-party AI providers.
+When you use AI features (such as improving summaries, bullets, or generating cover letters), the text you provide and the generated output may be temporarily processed by third-party AI providers.
 
 We do **not** sell personal data.
 
@@ -57,14 +60,14 @@ We do **not** sell personal data.
 We use personal data for the following purposes:
 
 1. **To provide the Service**
-   - Generate CVs, cover letters and related documents  
+   - Generate CVs, cover letters, and related documents  
    - Apply templates and AI suggestions  
-   - Enable downloads and previews  
+   - Enable previews and downloads  
 
 2. **To improve and maintain the Service**
    - Monitor usage and performance  
    - Fix bugs and technical issues  
-   - Develop new features  
+   - Develop and refine features  
 
 3. **To communicate with you**
    - Respond to support requests  
@@ -74,7 +77,7 @@ We use personal data for the following purposes:
    - Maintain required records  
    - Respond to lawful requests from authorities  
 
-We may also use anonymised or aggregated data that no longer identifies you.
+We may also use anonymised or aggregated data that does not identify you.
 
 ---
 
@@ -83,8 +86,8 @@ We may also use anonymised or aggregated data that no longer identifies you.
 We process personal data under the following legal bases:
 
 - **Performance of a contract** – to deliver the Service you choose to use  
-- **Legitimate interests** – to secure, maintain and improve the Service  
-- **Consent** – where required (for example, future optional analytics or communications)
+- **Legitimate interests** – to secure, maintain, and improve the Service  
+- **Consent** – where required (for example, optional analytics or communications)
 
 You may withdraw consent at any time where consent is the lawful basis.
 
@@ -114,7 +117,7 @@ We do **not** sell personal data.
 
 Some service providers may operate outside the UK or EEA.
 
-Where this occurs, we take appropriate safeguards in line with UK data protection law, such as:
+Where this occurs, we apply appropriate safeguards in line with UK data protection law, such as:
 - Adequacy decisions  
 - Standard contractual clauses  
 - Other recognised safeguards  
@@ -133,7 +136,7 @@ We retain personal data only for as long as necessary to:
 In practice:
 - CV and cover letter data may be stored while you actively use the Service  
 - Logs and analytics data are retained for limited periods  
-- Data may be anonymised for long-term analytics  
+- Data may be anonymised for longer-term analysis  
 
 You may request deletion of your data (see “Your rights”).
 
@@ -151,7 +154,7 @@ You have the following rights, subject to conditions:
 - Right to object  
 - Right to withdraw consent  
 
-Requests can be made via the contact details below.  
+Requests can be made using the contact details below.  
 We may need to verify your identity before responding.
 
 You also have the right to lodge a complaint with the UK Information Commissioner’s Office (ICO).
@@ -160,10 +163,10 @@ You also have the right to lodge a complaint with the UK Information Commissione
 
 ## 9. Security
 
-We take reasonable technical and organisational measures to protect data, including:
+We take reasonable technical and organisational measures to protect personal data, including:
 
 - Access controls  
-- Secure connections where possible  
+- Secure connections where appropriate  
 - Regular software updates  
 
 No online service is completely risk-free, and users should avoid sharing unnecessary sensitive information.
@@ -174,7 +177,7 @@ No online service is completely risk-free, and users should avoid sharing unnece
 
 The Service is not intended for children.
 
-If you believe a child has provided personal data without appropriate consent, please contact us so we can take action.
+If you believe a child has provided personal data without appropriate consent, please contact us so we can take appropriate action.
 
 ---
 
@@ -183,13 +186,16 @@ If you believe a child has provided personal data without appropriate consent, p
 We may update this Privacy Policy from time to time.
 
 The “Last updated” date will be revised accordingly.  
-Significant changes may be highlighted in the Service.
+Significant changes may be highlighted within the Service.
 
 ---
 
 ## 12. Contact
 
-For questions about this Privacy Policy or personal data:
+For questions about this Privacy Policy or personal data handling, please contact:
 
 **Support**  
 Email: **support@affiliateworldcommissions.com**
+
+</div>
+""", unsafe_allow_html=True)

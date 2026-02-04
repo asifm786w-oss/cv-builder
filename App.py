@@ -2116,23 +2116,98 @@ with st.sidebar:
 
     HELP_TEXT = {
         "Quick Start": """
-1) Fill **Personal Details**  
-2) Add **Skills**  
-3) Add **Experience**  
-4) Add **Education**  
-5) Generate and download
+### Quick start (recommended order)
+
+1️⃣ **Fill Personal Details**  
+Enter your name, contact details, and location.  
+These details appear exactly as entered on your CV and cover letter.
+
+2️⃣ **Add Skills**  
+List your most relevant skills, one per line.  
+Focus on skills recruiters and ATS systems expect.
+
+3️⃣ **Add Experience**  
+Add your work history, starting with your most recent role.  
+Use concise bullet points highlighting achievements and impact.
+
+4️⃣ **Add Education**  
+Include degrees, certifications, or training.  
+Dates are optional and can be edited before download.
+
+5️⃣ **Review, Generate & Download**  
+Preview carefully before downloading.  
+You are responsible for checking spelling, dates, and accuracy.
 """,
-        "AI Tools & Usage": "AI improves summaries, bullets, and cover letters.",
-        "Cover Letter Rules": "Personal details are required for cover letters.",
-        "Templates & Downloads": "Templates affect layout only, not content.",
-        "Troubleshooting": "Use one tab. Wait if AI is busy.",
-        "Privacy & Refunds": "Only upload what’s necessary. Payments are non-refundable.",
+
+        "AI Tools & Usage": """
+### AI tools & usage
+
+AI can help:
+- Improve summaries and wording
+- Rewrite experience bullet points
+- Generate tailored cover letters
+
+AI output is **assistance only**.  
+Always review and edit before final use.
+
+⏳ Please wait while AI is running before clicking again.
+""",
+
+        "Cover Letter Rules": """
+### Cover letter rules
+
+To generate a cover letter:
+- Personal details must be completed
+- At least one experience role is recommended
+- Adding a job description improves results
+
+Always review and customise cover letters before sending.
+""",
+
+        "Templates & Downloads": """
+### Templates & downloads
+
+- Templates affect layout and styling only
+- Content does not change when switching templates
+- You can preview before downloading
+
+Once downloaded, files cannot be edited inside the app.
+""",
+
+        "Troubleshooting": """
+### Troubleshooting
+
+- Use one browser tab only
+- Do not refresh while AI is running
+- Wait for AI actions to complete
+- Scroll to review all sections before download
+""",
+
+        "Privacy & Refunds": """
+### Privacy & refunds
+
+- Upload only information you are comfortable sharing
+- Files are processed securely
+- You are responsible for final content accuracy
+
+⚠️ Payments are non-refundable due to instant digital delivery.
+""",
     }
 
+    # Render selected help topic
     st.markdown(HELP_TEXT[help_topic])
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    st.caption("Support: support@affiliateworldcommissions.com")
+    # Support footer
+    st.markdown("""
+---
+📩 **Need help or spotted an issue?**  
+Contact **support@affiliateworldcommissions.com**
+
+Please ensure your details are reviewed before downloading.
+""")
+
+    # Close card wrapper
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 

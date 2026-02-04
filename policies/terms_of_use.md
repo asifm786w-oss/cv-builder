@@ -1,6 +1,9 @@
+st.markdown("""
+<div class="sb-card">
+
 _Last updated: 4 December 2025_
 
-These Terms of Use (“Terms”) govern your access to and use of the **Munibs Career Support Tools** web application (the “Service”).
+These Terms of Use (“Terms”) govern your access to and use of the **Mulyba Digital Tools** web application (the “Service”).
 
 By accessing or using the Service, you agree to be bound by these Terms.  
 If you do not agree, you must not use the Service.
@@ -9,9 +12,9 @@ If you do not agree, you must not use the Service.
 
 ## 1. About the Service
 
-Munibs Career Support Tools is an online platform that helps users create CVs, cover letters and related career documents, including with the assistance of artificial intelligence (“AI”).
+**Mulyba Digital Tools** is an online platform that helps users create CVs, cover letters, and related career documents, including with the assistance of artificial intelligence (“AI”).
 
-References to “we”, “us” or “our” mean Munibs Career Support Tools.
+References to “we”, “us”, or “our” mean Mulyba Digital Tools.
 
 ---
 
@@ -37,7 +40,7 @@ We may introduce:
 
 You are responsible for:
 - The accuracy of information you provide  
-- Keeping any login credentials secure (if applicable)  
+- Keeping any login credentials secure (where applicable)  
 - All activity carried out using your access  
 
 We may suspend or restrict access where we reasonably believe these Terms have been breached.
@@ -47,14 +50,14 @@ We may suspend or restrict access where we reasonably believe these Terms have b
 ## 4. Acceptable use
 
 You may use the Service to:
-- Create, edit and download CVs and cover letters  
+- Create, edit, and download CVs and cover letters  
 - Use AI tools to improve career documents for personal or professional job-search purposes  
 
 You must **not**:
-- Use the Service for unlawful, fraudulent or harmful purposes  
+- Use the Service for unlawful, fraudulent, or harmful purposes  
 - Attempt to gain unauthorised access to systems or infrastructure  
-- Copy, resell or commercially exploit the Service, templates or underlying code  
-- Upload content that is abusive, discriminatory, defamatory or illegal  
+- Copy, resell, or commercially exploit the Service, templates, or underlying code  
+- Upload content that is abusive, discriminatory, defamatory, or illegal  
 - Use the Service to generate knowingly false or misleading information  
 
 We reserve the right to restrict or block access where misuse or abuse is suspected.
@@ -71,17 +74,17 @@ The Service uses AI to:
 You acknowledge that:
 - AI-generated content may contain errors or inaccuracies  
 - Outputs may not be suitable for your specific circumstances  
-- You are responsible for reviewing, editing and verifying all content before use  
+- You are responsible for reviewing, editing, and verifying all content before use  
 
-The Service does **not** provide legal, financial, medical or professional advice, and AI outputs should not be relied upon as such.
+The Service does **not** provide legal, financial, medical, or professional advice, and AI outputs should not be relied upon as such.
 
 ---
 
 ## 6. Your content
 
 “Your Content” includes any information you upload or enter, such as:
-- CVs, cover letters and employment history  
-- Skills, education and experience  
+- CVs, cover letters, and employment history  
+- Skills, education, and experience  
 - Job descriptions  
 - Free-text notes or references  
 
@@ -102,7 +105,7 @@ You confirm that:
 ## 7. Intellectual property
 
 Unless otherwise stated:
-- The Service, templates, design, code and branding are owned by or licensed to Munibs Career Support Tools  
+- The Service, templates, design, code, and branding are owned by or licensed to Mulyba Digital Tools  
 - You are granted a **personal, non-exclusive, non-transferable, revocable licence** to use the Service for job-search purposes  
 
 You must not:
@@ -164,12 +167,12 @@ Nothing in these Terms limits liability for:
 - Liability that cannot be excluded under law  
 
 To the fullest extent permitted by law, we are not liable for:
-- Loss of profits, income or business  
+- Loss of profits, income, or business  
 - Loss or corruption of data  
 - Loss of opportunity or reputation  
 - Indirect or consequential losses  
 
-Our total liability will be limited to:
+Our total liability is limited to:
 - The amount paid by you in the 12 months before the claim arose, or  
 - £0 if you have not paid for the Service  
 
@@ -202,3 +205,6 @@ For questions about these Terms:
 
 **Support**  
 Email: **support@affiliateworldcommissions.com**
+
+</div>
+""", unsafe_allow_html=True)
