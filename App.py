@@ -276,6 +276,9 @@ def normalize_experience_state(max_roles: int = 5):
         st.session_state.setdefault(f"end_date_{i}", "")
         st.session_state.setdefault(f"description_{i}", "")
 
+
+
+
 # -------------------------
 # Word limit helpers
 # -------------------------
@@ -321,27 +324,29 @@ def backup_education_state(max_rows: int = 5):
 
     for i in range(max_rows):
         row = {
-            "degree": st.session_state.get(f"degree_{i}", "") or "",
-            "institution": st.session_state.get(f"institution_{i}", "") or "",
-            "location": st.session_state.get(f"edu_location_{i}", "") or "",
-            "start": st.session_state.get(f"edu_start_{i}", "") or "",
-            "end": st.session_state.get(f"edu_end_{i}", "") or "",
+            "degree": (st.session_state.get(f"degree_{i}", "") or "").strip(),
+            "institution": (st.session_state.get(f"institution_{i}", "") or "").strip(),
+            "location": (st.session_state.get(f"edu_location_{i}", "") or "").strip(),
+            "start": (st.session_state.get(f"edu_start_{i}", "") or "").strip(),
+            "end": (st.session_state.get(f"edu_end_{i}", "") or "").strip(),
         }
 
         # keep row if it has anything meaningful
-        if any(v.strip() for v in row.values()):
+        if any(row.values()):
             edu_rows.append(row)
 
     if edu_rows:
         st.session_state["_edu_backup"] = edu_rows
 
 
-
-
 def restore_education_state(max_rows: int = 5):
     """
     If education keys became blank after a rerun, restore from backup.
     """
+    # ✅ If we just autofilled, don't overwrite with old backups on the rerun
+    if st.session_state.pop("_skip_restore_education_once", False):
+        return
+
     backup = st.session_state.get("_edu_backup")
     if not isinstance(backup, list) or not backup:
         return
@@ -356,6 +361,9 @@ def restore_education_state(max_rows: int = 5):
     if current_has_data:
         return  # don't overwrite real current data
 
+    # ✅ Set UI row count to match backup (clamped)
+    st.session_state["num_education"] = max(1, min(max_rows, len(backup)))
+
     # Restore
     for i, row in enumerate(backup[:max_rows]):
         st.session_state[f"degree_{i}"] = row.get("degree", "")
@@ -363,6 +371,7 @@ def restore_education_state(max_rows: int = 5):
         st.session_state[f"edu_location_{i}"] = row.get("location", "")
         st.session_state[f"edu_start_{i}"] = row.get("start", "")
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
+
 
 import os
 import requests
@@ -2296,20 +2305,83 @@ fill_clicked = locked_action_button(
     cooldown_seconds=5,
 )
 
-def _clear_education_persistence_for_new_cv():
-    """Clear education keys that can override new parsed education on rerun."""
+def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
+    # ... your existing personal details / skills / experience mapping ...
+
+    # -------------------------
+    # EDUCATION mapping
+    # -------------------------
+    edu_list = (
+        parsed.get("education")
+        or parsed.get("educations")
+        or parsed.get("education_history")
+        or []
+    )
+
+    if not isinstance(edu_list, list):
+        edu_list = []
+
+    # normalise + trim
+    cleaned = []
+    for e in edu_list:
+        if not isinstance(e, dict):
+            continue
+
+        degree = (e.get("degree") or e.get("qualification") or e.get("title") or "").strip()
+        institution = (e.get("institution") or e.get("school") or e.get("university") or "").strip()
+        location = (e.get("location") or e.get("city") or "").strip()
+
+        start = (e.get("start_date") or e.get("start") or "").strip()
+        end = (e.get("end_date") or e.get("end") or "").strip()
+
+        # keep if meaningful
+        if degree or institution:
+            cleaned.append(
+                {
+                    "degree": degree,
+                    "institution": institution,
+                    "location": location,
+                    "start": start,
+                    "end": end,
+                }
+            )
+
+    cleaned = cleaned[:max_edu]
+
+    # set row count (at least 1 so UI renders)
+    st.session_state["num_education"] = max(1, len(cleaned))
+
+    # write to the exact keys your UI uses
+    for i in range(st.session_state["num_education"]):
+        row = cleaned[i] if i < len(cleaned) else {}
+
+        st.session_state[f"degree_{i}"] = row.get("degree", "")
+        st.session_state[f"institution_{i}"] = row.get("institution", "")
+        st.session_state[f"edu_location_{i}"] = row.get("location", "")
+        st.session_state[f"edu_start_{i}"] = row.get("start", "")
+        st.session_state[f"edu_end_{i}"] = row.get("end", "")
+
+    # optional: keep a copy of parsed edu for debugging/exports
+    st.session_state["education_items"] = cleaned
+
+
+def _clear_education_persistence_for_new_cv(max_rows: int = 5):
+    """Clear education keys + backups so a new parsed CV can populate cleanly."""
     # remove per-row keys
-    for k in list(st.session_state.keys()):
-        if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
-            st.session_state.pop(k, None)
+    for i in range(max_rows):
+        st.session_state.pop(f"degree_{i}", None)
+        st.session_state.pop(f"institution_{i}", None)
+        st.session_state.pop(f"edu_location_{i}", None)
+        st.session_state.pop(f"edu_start_{i}", None)
+        st.session_state.pop(f"edu_end_{i}", None)
 
     # remove row count + cached list
     st.session_state.pop("num_education", None)
     st.session_state.pop("education_items", None)
 
-    # if your backup/restore uses any of these, clear them too (safe even if absent)
-    st.session_state.pop("_education_backup", None)
-    st.session_state.pop("_education_backup_fp", None)
+    # ✅ remove the actual backup key your helpers use
+    st.session_state.pop("_edu_backup", None)
+
 
 if uploaded_cv is not None and fill_clicked:
     raw_text = _read_uploaded_cv_to_text(uploaded_cv)
@@ -2329,20 +2401,19 @@ if uploaded_cv is not None and fill_clicked:
         is_new_cv = (cv_fp != last_fp)
 
         if is_new_cv:
-            # ✅ clear AI outputs + any other non-user outputs
             _reset_outputs_on_new_cv()
-
-            # ✅ CRITICAL: clear education persistence so it doesn't override new parsed edu
             _clear_education_persistence_for_new_cv()
 
-            # ✅ mark new CV fingerprint
             st.session_state["_last_cv_fingerprint"] = cv_fp
 
-            # ✅ one-time flag to prevent restore_* from overwriting right after autofill
-            st.session_state["_just_autofilled_from_cv"] = True
+        # ✅ prevent restore_education_state() from restoring old backups on the rerun
+        st.session_state["_skip_restore_education_once"] = True
 
-        # ✅ apply parsed data after resets/clears
+        # ✅ apply parsed data
         _apply_parsed_cv_to_session(parsed)
+
+        # ✅ optional but recommended: snapshot after apply so future reruns have a backup
+        backup_education_state()
 
         st.session_state["_cv_parsed"] = parsed
         st.session_state["_cv_autofill_enabled"] = True
@@ -2351,6 +2422,7 @@ if uploaded_cv is not None and fill_clicked:
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
         increment_usage(user_email, "upload_parses")
         st.rerun()
+
 
 
 
