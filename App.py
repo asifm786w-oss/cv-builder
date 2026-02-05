@@ -1708,6 +1708,31 @@ if mode == "Admin dashboard":
     render_admin_dashboard()
     st.stop()
 
+
+
+def render_mulyba_brand_header(is_logged_in: bool):
+    st.markdown(
+        """
+        <div class="sb-card">
+            <div style="font-size:20px; font-weight:900;">🏷️ Mulyba</div>
+            <div class="sb-muted">Career Suite • CV Builder • AI tools</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not is_logged_in:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🔐 Sign in", key="brand_signin_btn"):
+                open_auth_modal("Sign in")
+                st.rerun()
+        with c2:
+            if st.button("✨ Create", key="brand_create_btn"):
+                open_auth_modal("Create account")
+                st.rerun()
+
+
 # =========================
 # SIDEBAR (full)
 # =========================
