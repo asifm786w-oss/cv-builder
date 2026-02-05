@@ -3,26 +3,19 @@ import io
 import csv
 import os
 import hashlib
-
-import openai
-
-from utils import verify_postgres_connection
-
-verify_postgres_connection()
-
+import time
+import traceback
+import requests
 
 from openai import OpenAI
-from auth import init_db
-init_db()
 
-
-
+from utils import verify_postgres_connection
 from models import CV, Experience, Education
 from utils import (
     render_cv_pdf_bytes,
     render_cover_letter_pdf_bytes,
-    render_cv_docx_bytes,            # DOCX CV
-    render_cover_letter_docx_bytes,  # DOCX Cover letter
+    render_cv_docx_bytes,
+    render_cover_letter_docx_bytes,
 )
 from ai_v2 import (
     generate_tailored_summary,
@@ -31,8 +24,6 @@ from ai_v2 import (
     extract_cv_data,
     generate_job_summary,
 )
-
-
 from auth import (
     init_db,
     create_user,
@@ -54,34 +45,42 @@ from auth import (
 )
 
 from email_utils import send_password_reset_email
-import traceback
-import time
+
+
+# -------------------------
+# PAGE CONFIG (MUST BE FIRST st.* CALL)
+# -------------------------
+st.set_page_config(
+    page_title="Mulyba",
+    page_icon="📄",
+    layout="centered",
+    initial_sidebar_state="expanded",
+)
+
+
+# -------------------------
+# INIT (run once)
+# -------------------------
+verify_postgres_connection()
+init_db()
 
 
 # -------------------------
 # GLOBAL PLAN + REFERRAL CONFIG
 # -------------------------
-
 REFERRAL_CAP = 10
 BONUS_PER_REFERRAL_CV = 5
 BONUS_PER_REFERRAL_AI = 5
 
 PLAN_LIMITS = {
     "free": {"cv": 5, "ai": 5},
-
-    # Public plans
     "monthly": {"cv": 20, "ai": 30},
     "pro": {"cv": 50, "ai": 90},
-
-    # Legacy / optional
     "one_time": {"cv": 40, "ai": 60},
     "yearly": {"cv": 300, "ai": 600},
-
-    # Internal only
     "premium": {"cv": 5000, "ai": 10000},
     "enterprise": {"cv": 5000, "ai": 10000},
 }
-
 
 USAGE_KEYS_DEFAULTS = {
     "upload_parses": 0,
@@ -97,6 +96,7 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
+
 def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
     """
     Per-user cooldown for a given action_key.
@@ -110,6 +110,7 @@ def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
     st.session_state[f"_cooldown_{action_key}"] = now
     return True, 0
 
+
 def freeze_defaults():
     # Never overwrite user-entered or AI-generated data
     for k in [
@@ -121,17 +122,19 @@ def freeze_defaults():
         if k in st.session_state and st.session_state[k] is None:
             st.session_state[k] = ""
 
+
 def backup_skills_state():
     """Keep the last non-empty skills text so reruns can't wipe it to defaults."""
     val = st.session_state.get("skills_text")
     if isinstance(val, str) and val.strip():
         st.session_state["_skills_backup"] = val
 
+
 def render_auth_modal_if_open():
-	
     if not st.session_state.get("auth_modal_open", False):
         return
     _auth_dialog()  # your existing dialog function
+
 
 def restore_skills_state():
     """
@@ -142,54 +145,60 @@ def restore_skills_state():
     val = st.session_state.get("skills_text")
 
     if val is None or (isinstance(val, str) and not val.strip()):
-        # 1) restore from backup (best)
         backup = st.session_state.get("_skills_backup")
         if isinstance(backup, str) and backup.strip():
             st.session_state["skills_text"] = backup
             return
 
-        # 2) restore from parsed CV (fallback)
         parsed = st.session_state.get("_cv_parsed")
         if isinstance(parsed, dict):
             skills_data = parsed.get("skills")
             if isinstance(skills_data, list) and skills_data:
-                st.session_state["skills_text"] = ", ".join([str(s).strip() for s in skills_data if str(s).strip()])
+                st.session_state["skills_text"] = ", ".join(
+                    [str(s).strip() for s in skills_data if str(s).strip()]
+                )
                 return
             if isinstance(skills_data, str) and skills_data.strip():
                 st.session_state["skills_text"] = skills_data.strip()
                 return
 
-        # 3) final fallback: empty (NOT "Python, SQL, Communication")
         st.session_state["skills_text"] = ""
 
+
 def normalize_skills_state():
-    # If skills got wiped to None (or missing), restore to safe value
     if st.session_state.get("skills_text") is None:
         st.session_state["skills_text"] = ""
 
-    # If we have a parsed CV cached, restore from it when skills goes blank
     parsed = st.session_state.get("_cv_parsed")
     if isinstance(parsed, dict):
         skills_data = parsed.get("skills")
         if st.session_state.get("skills_text", "").strip() == "":
             if isinstance(skills_data, list) and skills_data:
-                st.session_state["skills_text"] = ", ".join([s for s in skills_data if str(s).strip()])
+                st.session_state["skills_text"] = ", ".join(
+                    [str(s).strip() for s in skills_data if str(s).strip()]
+                )
             elif isinstance(skills_data, str) and skills_data.strip():
                 st.session_state["skills_text"] = skills_data.strip()
 
 
 def tripwire_none_experience_keys():
     keys = ["num_experiences", "job_title_0", "company_0", "description_0"]
-    bad = {k: st.session_state.get(k) for k in keys if k in st.session_state and st.session_state.get(k) is None}
+    bad = {
+        k: st.session_state.get(k)
+        for k in keys
+        if k in st.session_state and st.session_state.get(k) is None
+    }
     if bad:
         st.sidebar.error(f"🚨 Experience keys set to None: {bad}")
         st.sidebar.code("".join(traceback.format_stack(limit=25)))
 
+
 if st.session_state.get("debug_mode", False):
     tripwire_none_experience_keys()
 
+
 def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
-    # ... your existing personal details / skills / experience mapping ...
+    # NOTE: keep your existing personal details / skills / experience mapping above this.
 
     # -------------------------
     # EDUCATION mapping
@@ -204,7 +213,6 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
     if not isinstance(edu_list, list):
         edu_list = []
 
-    # normalise + trim
     cleaned = []
     for e in edu_list:
         if not isinstance(e, dict):
@@ -213,11 +221,9 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
         degree = (e.get("degree") or e.get("qualification") or e.get("title") or "").strip()
         institution = (e.get("institution") or e.get("school") or e.get("university") or "").strip()
         location = (e.get("location") or e.get("city") or "").strip()
-
         start = (e.get("start_date") or e.get("start") or "").strip()
         end = (e.get("end_date") or e.get("end") or "").strip()
 
-        # keep if meaningful
         if degree or institution:
             cleaned.append(
                 {
@@ -231,65 +237,37 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
 
     cleaned = cleaned[:max_edu]
 
-    # set row count (at least 1 so UI renders)
     st.session_state["num_education"] = max(1, len(cleaned))
 
-    # write to the exact keys your UI uses
     for i in range(st.session_state["num_education"]):
         row = cleaned[i] if i < len(cleaned) else {}
-
         st.session_state[f"degree_{i}"] = row.get("degree", "")
         st.session_state[f"institution_{i}"] = row.get("institution", "")
         st.session_state[f"edu_location_{i}"] = row.get("location", "")
         st.session_state[f"edu_start_{i}"] = row.get("start", "")
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
 
-    # optional: keep a copy of parsed edu for debugging/exports
     st.session_state["education_items"] = cleaned
+
 
 def _queue_cv_parse():
     """
     Schedule CV parsing to run on the next Streamlit rerun.
-    This avoids relying on transient button return values.
     """
     st.session_state["_do_cv_parse"] = True
 
 
-
 def _clear_education_persistence_for_new_cv():
+    """
+    Clear education persistence so a new CV upload doesn't get overwritten by old backups.
+    """
     for k in list(st.session_state.keys()):
         if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
             st.session_state.pop(k, None)
 
     st.session_state.pop("num_education", None)
     st.session_state.pop("education_items", None)
-
-    # ✅ IMPORTANT: this must match backup_education_state()
     st.session_state.pop("_edu_backup", None)
-
-
-
-    st.subheader("Upload an existing CV (optional)")
-    st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
-
-    uploaded_cv = st.file_uploader(
-        "Upload your current CV (PDF, DOCX or TXT)",
-        type=["pdf", "docx", "txt"],
-        key="cv_uploader_main",  # unique key to avoid collisions
-    )
-
-    # No cooldown while testing (login + quota already protect this)
-    fill_clicked = locked_action_button(
-        "Fill the form from this CV (AI)",
-        key="btn_fill_from_cv",
-        feature_label="CV upload & parsing",
-        counter_key="upload_parses",
-        require_login=True,
-        default_tab="Sign in",
-        cooldown_name=None,
-        cooldown_seconds=0,
-    )
-
 
 
 def restore_experience_from_parsed():
@@ -307,40 +285,35 @@ def restore_experience_from_parsed():
 
     count = min(len(exps), 5)
 
-    # Keep num_experiences consistent if it got lost/changed
     if st.session_state.get("num_experiences") in (None, 0, ""):
         st.session_state["num_experiences"] = count
 
     for i in range(count):
         exp = exps[i] or {}
 
-        # Only restore if value is missing OR blank
         def _restore(key, value):
             if st.session_state.get(key) in (None, "") and isinstance(value, str) and value.strip():
                 st.session_state[key] = value
 
-        _restore(f"job_title_{i}",    exp.get("job_title", "") or "")
-        _restore(f"company_{i}",      exp.get("company", "") or "")
+        _restore(f"job_title_{i}", exp.get("job_title", "") or "")
+        _restore(f"company_{i}", exp.get("company", "") or "")
         _restore(f"exp_location_{i}", exp.get("location", "") or "")
-        _restore(f"start_date_{i}",   exp.get("start_date", "") or "")
-        _restore(f"end_date_{i}",     exp.get("end_date", "") or "")
+        _restore(f"start_date_{i}", exp.get("start_date", "") or "")
+        _restore(f"end_date_{i}", exp.get("end_date", "") or "")
+
         desc = exp.get("description", "") or ""
         if isinstance(desc, list):
             desc = "\n".join([str(x) for x in desc if str(x).strip()])
-        _restore(f"description_{i}",  desc)
+        _restore(f"description_{i}", desc)
 
 
 def _reset_outputs_on_new_cv():
     """
-    Clears derived/generated outputs when a new CV is uploaded,
-    so users don't see stale results.
+    Clears derived/generated outputs when a new CV is uploaded.
     """
     keys_to_clear = [
-        # CV parsing / autofill
         "_cv_parsed",
         "_cv_autofill_enabled",
-
-        # Generated outputs (rename/add keys to match your app)
         "generated_cv",
         "generated_cover_letter",
         "generated_summary",
@@ -348,30 +321,23 @@ def _reset_outputs_on_new_cv():
         "ats_score",
         "final_pdf_bytes",
         "final_docx_bytes",
-
-        # Any UI state tied to old results
         "selected_template",
         "download_ready",
     ]
-
     for k in keys_to_clear:
-        if k in st.session_state:
-            del st.session_state[k]
+        st.session_state.pop(k, None)
 
 
 def normalize_experience_state(max_roles: int = 5):
-    # Fix count if it ever becomes None
     if st.session_state.get("num_experiences") is None:
         st.session_state["num_experiences"] = st.session_state.get("parsed_num_experiences", 1)
 
-    # Fix any role fields that became None
     for i in range(max_roles):
         for k in ["job_title", "company", "exp_location", "start_date", "end_date", "description"]:
             key = f"{k}_{i}"
             if key in st.session_state and st.session_state[key] is None:
                 st.session_state[key] = ""
 
-        # Ensure keys exist so widgets never create them as None
         st.session_state.setdefault(f"job_title_{i}", "")
         st.session_state.setdefault(f"company_{i}", "")
         st.session_state.setdefault(f"exp_location_{i}", "")
@@ -380,18 +346,15 @@ def normalize_experience_state(max_roles: int = 5):
         st.session_state.setdefault(f"description_{i}", "")
 
 
-
-
 # -------------------------
 # Word limit helpers
 # -------------------------
-MAX_PANEL_WORDS = 100      # e.g. free-text panels
-MAX_DOC_WORDS = 300        # CV summary, job description, etc.
-MAX_LETTER_WORDS = 300     # cover letter body limit
+MAX_PANEL_WORDS = 100
+MAX_DOC_WORDS = 300
+MAX_LETTER_WORDS = 300
 
 
 def limit_words(text: str, max_words: int) -> str:
-    """Truncate text to at most `max_words` words."""
     words = text.split()
     if len(words) <= max_words:
         return text
@@ -402,7 +365,6 @@ def clean_cover_letter_body(text: str) -> str:
     cleaned_lines = []
     for line in text.splitlines():
         s = line.strip()
-        # drop placeholder-like lines such as [Your Name], [Your Address]
         if s.startswith("[") and s.endswith("]"):
             continue
         cleaned_lines.append(line)
@@ -418,6 +380,7 @@ def enforce_word_limit(text: str, max_words: int, label: str = "") -> str:
         )
         return " ".join(words[:max_words])
     return text
+
 
 def backup_education_state(max_rows: int = 5):
     edu_rows = []
@@ -437,7 +400,6 @@ def backup_education_state(max_rows: int = 5):
 
 
 def restore_education_state(max_rows: int = 5):
-    # if we just autofilled from CV, do NOT restore old backup once
     if st.session_state.pop("_skip_restore_education_once", False):
         return
 
@@ -445,7 +407,6 @@ def restore_education_state(max_rows: int = 5):
     if not isinstance(backup, list) or not backup:
         return
 
-    # only restore if all current education fields are empty
     for i in range(max_rows):
         if (st.session_state.get(f"degree_{i}", "") or "").strip() or (st.session_state.get(f"institution_{i}", "") or "").strip():
             return
@@ -458,30 +419,20 @@ def restore_education_state(max_rows: int = 5):
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
 
 
-
-
-import os
-import requests
-
+# -------------------------
+# Resend helper (kept local)
+# -------------------------
 RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
 
+
 def _send_password_reset_email_local_DO_NOT_USE(email: str, token: str) -> None:
-    """
-    Sends a password reset email via Resend.
-    Raises RuntimeError on failure so caller can surface a friendly error.
-    """
     key = (os.getenv("RESEND_API_KEY") or "").strip()
     if not key:
         raise RuntimeError("RESEND_API_KEY is missing in environment variables.")
 
-    # Safe debug (no secrets leaked)
-    print("=== RESEND RESET EMAIL ===")
-    print("RESEND_API_KEY prefix:", key[:3], "len:", len(key))
-
     from_email = (os.getenv("FROM_EMAIL") or "").strip() or "onboarding@resend.dev"
     app_url = (os.getenv("APP_URL") or "").strip()
 
-    # Build a link if you have a URL; otherwise just include the token
     if app_url:
         reset_link = f"{app_url.rstrip('/')}/?reset_token={token}"
         body_html = f"""
@@ -496,7 +447,7 @@ def _send_password_reset_email_local_DO_NOT_USE(email: str, token: str) -> None:
         """
 
     headers = {
-        "Authorization": f"Bearer {key}",   # <-- THIS is required
+        "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
 
@@ -517,20 +468,11 @@ def _send_password_reset_email_local_DO_NOT_USE(email: str, token: str) -> None:
     if r.status_code >= 400:
         raise RuntimeError(f"Resend failed: {r.status_code} {r.text}")
 
-# -------------------------------------------------------------------
-# OpenAI helpers (kept for future use if needed)
-# -------------------------------------------------------------------
+
 def _get_openai_client() -> OpenAI:
-    """
-    Try to construct an OpenAI client using:
-    - OPENAI_API_KEY env var, or
-    - several common keys in st.secrets, or
-    - any secret that looks like an OpenAI key (starts with 'sk-')
-    """
     api_key = os.getenv("OPENAI_API_KEY")
 
     if not api_key:
-        # Try some common secret names
         if "OPENAI_API_KEY" in st.secrets:
             api_key = st.secrets["OPENAI_API_KEY"]
         elif "OPENAI_KEY" in st.secrets:
@@ -551,99 +493,24 @@ def _get_openai_client() -> OpenAI:
         )
 
     return OpenAI(api_key=api_key)
-def is_preview_mode() -> bool:
-    return st.session_state.get("user") is None
 
-def preview_topbar():
-    if not is_preview_mode():
-        return
-    st.markdown(
-        """
-        <div style="
-            position: sticky;
-            top: 0;
-            z-index: 999;
-            margin: 0 0 14px 0;
-            padding: 10px 12px;
-            border-radius: 14px;
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.14);
-            backdrop-filter: blur(8px);
-        ">
-          <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
-            <div>
-              <div style="font-weight:900; letter-spacing:-0.02em;">Preview mode</div>
-              <div style="opacity:0.85; font-size:12.5px;">Sign in to generate downloads, use AI, and save your data.</div>
-            </div>
-            <div style="display:flex; gap:8px;">
-              <a style="text-decoration:none;" href="#">
-                <span style="
-                    display:inline-block;
-                    padding:8px 12px;
-                    border-radius:999px;
-                    border:1px solid rgba(255,255,255,0.18);
-                    font-weight:800;
-                    font-size:12.5px;">
-                    🔒 Premium
-                </span>
-              </a>
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 def _is_logged_in_user(u) -> bool:
     return bool(u and isinstance(u, dict) and u.get("email"))
 
-def render_mulyba_brand_header(is_logged_in: bool):
-    st.markdown(
-        """
-        <div class="sb-card">
-            <div style="font-size:20px; font-weight:900;">🏷️ Mulyba</div>
-            <div class="sb-muted">Career Suite • CV Builder • AI tools</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # --- Auth buttons under brand (GUEST ONLY) ---
-    if not is_logged_in:
-        c1, c2 = st.columns(2)
-
-        with c1:
-            if st.button("🔐 Sign in", key="brand_signin_btn"):
-                open_auth_modal("Sign in")
-                st.rerun()
-
-        with c2:
-            if st.button("✨ Create", key="brand_create_btn"):
-                open_auth_modal("Create account")
-                st.rerun()
-
-
-
 
 def _read_uploaded_cv_to_text(uploaded_cv) -> str:
-    """
-    uploaded_cv: streamlit UploadedFile
-    returns extracted text (best-effort)
-    """
     if uploaded_cv is None:
         return ""
 
     name = (uploaded_cv.name or "").lower()
     ext = os.path.splitext(name)[1]
-
-    # Streamlit UploadedFile supports getvalue()
     data: bytes = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
 
     if not data:
         return ""
 
     if ext == ".txt":
-        # Try utf-8, fall back to latin-1
         try:
             return data.decode("utf-8")
         except UnicodeDecodeError:
@@ -651,7 +518,7 @@ def _read_uploaded_cv_to_text(uploaded_cv) -> str:
 
     if ext == ".docx":
         try:
-            import docx  # python-docx
+            import docx
         except ImportError:
             raise RuntimeError("Missing dependency: python-docx (pip install python-docx)")
 
@@ -659,7 +526,6 @@ def _read_uploaded_cv_to_text(uploaded_cv) -> str:
         return "\n".join(p.text for p in doc.paragraphs if p.text)
 
     if ext == ".pdf":
-        # Prefer pypdf (lightweight)
         try:
             from pypdf import PdfReader
         except ImportError:
@@ -673,10 +539,7 @@ def _read_uploaded_cv_to_text(uploaded_cv) -> str:
                 parts.append(txt)
         return "\n\n".join(parts)
 
-    # Unknown extension
     return ""
-
-
 
 
 def locked_action_button(
@@ -691,16 +554,8 @@ def locked_action_button(
     cooldown_name: str | None = None,
     cooldown_seconds: int = 5,
     disabled: bool = False,
-    **_ignore,  # <-- makes it compatible with any older calls
+    **_ignore,
 ) -> bool:
-    """
-    Single safe button:
-    - If require_login and guest -> opens auth modal, returns False
-    - If cooldown active -> warns, returns False
-    - If counter_key provided -> checks has_free_quota(counter_key, cost, feature_label)
-    - Else -> returns True when clicked
-    """
-
     user = st.session_state.get("user")
     is_logged_in = _is_logged_in_user(user)
 
@@ -708,20 +563,17 @@ def locked_action_button(
     if not clicked:
         return False
 
-    # Login gate
     if require_login and not is_logged_in:
         st.warning("Sign in to unlock this feature.")
         open_auth_modal(default_tab)
         st.stop()
 
-    # Cooldown gate (optional)
     if cooldown_name:
         ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
         if not ok:
             st.warning(f"⏳ Please wait {left}s before trying again.")
             st.stop()
 
-    # Quota gate (optional)
     if counter_key:
         if not has_free_quota(counter_key, cost, feature_label):
             st.stop()
@@ -729,8 +581,9 @@ def locked_action_button(
     return True
 
 
-
-
+# -------------------------
+# CV upload (top-level, rerun-safe)
+# -------------------------
 uploaded_cv = st.file_uploader(
     "Upload CV",
     type=["pdf", "docx", "txt"],
@@ -769,7 +622,7 @@ if st.session_state.get("_do_cv_parse", False):
     is_new_cv = (cv_fp != last_fp)
     if is_new_cv:
         _reset_outputs_on_new_cv()
-        _clear_education_persistence_for_new_cv()   # ✅ now exists
+        _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
 
     st.session_state["_skip_restore_education_once"] = True
@@ -780,13 +633,12 @@ if st.session_state.get("_do_cv_parse", False):
     st.session_state["_cv_autofill_enabled"] = True
 
     st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-    if user_email:
-        increment_usage(user_email, "upload_parses")
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    if email_for_usage:
+        increment_usage(email_for_usage, "upload_parses")
 
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
-
-
 
 
 # -------------------------
@@ -803,16 +655,11 @@ TEMPLATE_MAP = {
 
 
 # -------------------------
-# Basic page config
+# GLOBAL THEME + LAYOUT CSS
+# (NO st.set_page_config() here — keep that at the top of the file only)
 # -------------------------
-st.set_page_config(
-    page_title="Mulyba",
-    page_icon="📄",
-    layout="centered",
-    initial_sidebar_state="expanded",
-)
-
-st.markdown("""
+st.markdown(
+    """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
@@ -845,34 +692,31 @@ html, body, [data-testid="stAppViewContainer"]{
 /* Remove Streamlit top chrome */
 header[data-testid="stHeader"]{ background: transparent !important; }
 
-/* ✅ Premium “air” around the whole main area (your side spacing request) */
+/* Premium “air” around main */
 [data-testid="stAppViewContainer"] .main{
   padding-left: clamp(16px, 4vw, 64px) !important;
   padding-right: clamp(16px, 4vw, 64px) !important;
 }
 
-/* ---------- MAIN WIDTH / CENTERING ---------- */
+/* Main width / centering */
 [data-testid="stAppViewContainer"] .main .block-container{
   padding-top: 2rem !important;
   padding-bottom: 3rem !important;
-
-  max-width: 980px !important;     /* 👈 sweet spot with rail */
+  max-width: 980px !important;
   margin-left: auto !important;
   margin-right: auto !important;
-
   padding-left: 2rem !important;
   padding-right: 2rem !important;
 }
 
-/* ---------- Typography ---------- */
+/* Typography */
 h1,h2,h3,h4,h5,h6{ color: var(--text) !important; letter-spacing: -0.02em; }
 h1{ font-weight: 800 !important; }
 h2{ font-weight: 750 !important; }
 p, li { color: var(--text) !important; }
-
 .stCaption, [data-testid="stCaptionContainer"]{ color: var(--muted) !important; }
 
-/* ✅ Safer markdown styling (won’t kill widget text like uploader) */
+/* Safer markdown styling */
 [data-testid="stAppViewContainer"] .main [data-testid="stMarkdownContainer"]{
   color: var(--text) !important;
 }
@@ -884,9 +728,9 @@ p, li { color: var(--text) !important; }
   color: var(--text) !important;
 }
 
-/* ---------- Sidebar ---------- */
+/* Sidebar */
 [data-testid="stSidebar"]{
-  background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02)) !important;
+  background: #0b0f19 !important;
   border-right: 1px solid rgba(255,255,255,0.10) !important;
   width: 280px !important;
   box-shadow:
@@ -895,7 +739,7 @@ p, li { color: var(--text) !important; }
   position: relative;
 }
 
-/* Red glow divider between sidebar & content */
+/* Red glow divider */
 [data-testid="stSidebar"]::after{
   content: "";
   position: absolute;
@@ -914,33 +758,16 @@ p, li { color: var(--text) !important; }
   pointer-events: none;
 }
 
-/* Hide Streamlit sidebar page list */
 section[data-testid="stSidebarNav"]{ display:none !important; }
 
-/* Sidebar brightness override */
-section[data-testid="stSidebar"] > div,
-section[data-testid="stSidebar"] > div > div,
-section[data-testid="stSidebar"] [data-testid="stSidebarContent"],
-section[data-testid="stSidebar"] [data-testid="stVerticalBlock"],
-section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"]{
-  opacity: 1 !important;
-  filter: none !important;
-}
+/* Ensure sidebar text visible */
 section[data-testid="stSidebar"] *{
   color: rgba(255,255,255,0.96) !important;
   opacity: 1 !important;
   filter: none !important;
 }
-section[data-testid="stSidebar"] strong,
-section[data-testid="stSidebar"] b{
-  color: rgba(255,255,255,0.98) !important;
-  text-shadow: 0 1px 10px rgba(255,45,85,0.18) !important;
-}
 
-/* Remove empty sidebar bars */
-[data-testid="stSidebar"] div:empty{ display:none !important; }
-
-/* ---------- Expanders ---------- */
+/* Expanders */
 [data-testid="stExpander"]{
   background: var(--panel) !important;
   border: 1px solid var(--border) !important;
@@ -948,62 +775,8 @@ section[data-testid="stSidebar"] b{
   box-shadow: var(--shadow-soft) !important;
   overflow: hidden !important;
 }
-[data-testid="stExpander"] summary{
-  padding: 0.7rem 0.9rem !important;
-  font-weight: 700 !important;
-  color: var(--text) !important;
-}
-[data-testid="stSidebar"] [data-testid="stExpander"] div[role="region"]{
-  background: rgba(0,0,0,0.32) !important;
-  border-top: 1px solid rgba(255,255,255,0.10) !important;
-  padding: 0.75rem 0.8rem !important;
-  max-height: 240px !important;
-  overflow-y: auto !important;
-}
-[data-testid="stSidebar"] [data-testid="stExpander"] div[role="region"] *{
-  color: rgba(255,255,255,0.95) !important;
-  opacity: 1 !important;
-  visibility: visible !important;
-  font-weight: 600 !important;
-}
 
-/* ---------- Inputs (premium dark glass) ---------- */
-.stTextInput input,
-.stNumberInput input,
-.stDateInput input,
-.stTextArea textarea,
-div[data-baseweb="input"] input,
-div[data-baseweb="textarea"] textarea{
-  background: rgba(255,255,255,0.06) !important;
-  color: rgba(255,255,255,0.92) !important;
-  caret-color: var(--red) !important;
-  border: 1px solid rgba(255,255,255,0.14) !important;
-  border-radius: var(--radius-sm) !important;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.05) !important;
-  font-size: 0.98rem !important;
-  line-height: 1.45 !important;
-}
-.stTextArea textarea{ padding: 0.85rem 0.95rem !important; }
-.stTextInput input, .stNumberInput input{ padding: 0.65rem 0.85rem !important; }
-
-.stTextInput input::placeholder,
-.stTextArea textarea::placeholder{
-  color: rgba(255,255,255,0.45) !important;
-}
-
-.stTextInput input:focus,
-.stNumberInput input:focus,
-.stDateInput input:focus,
-.stTextArea textarea:focus,
-div[data-baseweb="input"] input:focus,
-div[data-baseweb="textarea"] textarea:focus{
-  border-color: rgba(255,45,85,0.55) !important;
-  box-shadow: 0 0 0 4px rgba(255,45,85,0.14),
-              inset 0 1px 0 rgba(255,255,255,0.06) !important;
-  outline: none !important;
-}
-
-/* ---------- Premium buttons ---------- */
+/* Buttons */
 .stButton button,
 [data-testid="stDownloadButton"] button{
   border-radius: 999px !important;
@@ -1021,7 +794,7 @@ div[data-baseweb="textarea"] textarea:focus{
   transform: translateY(-1px) !important;
 }
 
-/* ---------- File uploader + restore red browse + text visibility ---------- */
+/* File uploader styling + text visibility */
 [data-testid="stFileUploader"] section{
   background: rgba(255,255,255,0.06) !important;
   border: 1px solid rgba(255,255,255,0.14) !important;
@@ -1029,7 +802,7 @@ div[data-baseweb="textarea"] textarea:focus{
   box-shadow: var(--shadow-soft) !important;
 }
 [data-testid="stFileUploader"] *{
-  color: rgba(255,255,255,0.86) !important; /* ✅ fixes “text not showing” */
+  color: rgba(255,255,255,0.86) !important;
 }
 [data-testid="stFileUploader"] button{
   background: linear-gradient(90deg, var(--red) 0%, var(--red2) 100%) !important;
@@ -1040,52 +813,18 @@ div[data-baseweb="textarea"] textarea:focus{
   padding: 0.55rem 1.05rem !important;
   box-shadow: 0 12px 35px rgba(255,45,85,0.22) !important;
 }
-[data-testid="stFileUploader"] button,
-[data-testid="stFileUploader"] button *{
-  color: #fff !important;
-}
-[data-testid="stFileUploader"] button:hover{
-  transform: translateY(-1px) !important;
-  box-shadow: 0 0 0 4px rgba(255,45,85,0.12), var(--shadow) !important;
-}
-
-/* Link-style preview CTAs */
-.mulyba-link-btn{
-  display:inline-block;
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.12);
-  color: rgba(255,255,255,0.92);
-  text-decoration: none;
-  font-weight: 800;
-}
-.mulyba-link-btn:hover{
-  border-color: rgba(255,45,85,0.55);
-  box-shadow: 0 0 0 4px rgba(255,45,85,0.14);
-}
-
-/* Premium selection */
-::selection{
-  background: rgba(255,45,85,0.35);
-  color: rgba(255,255,255,0.98);
-}
 
 /* ============================
    RIGHT MARKETING RAIL (FIXED)
    ============================ */
-
-/* Make room for the rail so main content doesn't sit underneath it */
 @media (min-width: 1200px){
   [data-testid="stAppViewContainer"] .main .block-container{
-    padding-right: 420px !important; /* ✅ more breathing space */
+    padding-right: 420px !important;
   }
 }
-
-/* The rail itself */
 #mulyba-rail{
   position: fixed;
-  top: 140px;        /* ✅ sits nicer below hero/top */
+  top: 140px;
   right: 22px;
   width: 330px;
   z-index: 9999;
@@ -1127,21 +866,21 @@ div[data-baseweb="textarea"] textarea:focus{
   font-size: 12px;
   margin: 6px 6px 0 0;
 }
-
-/* Hide rail on smaller screens */
 @media (max-width: 1199px){
   #mulyba-rail{ display:none !important; }
   [data-testid="stAppViewContainer"] .main .block-container{
     padding-right: 2rem !important;
   }
 }
-
 </style>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
-st.markdown("""
+# Rail HTML (unchanged)
+st.markdown(
+    """
 <div id="mulyba-rail">
-
   <div class="rail-card">
     <div class="rail-title">What you get</div>
     <ul class="rail-list">
@@ -1172,28 +911,28 @@ st.markdown("""
       Guests can build. Sign in only when you want downloads + saved history.
     </div>
   </div>
-
 </div>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
-st.markdown("""
+# -------------------------
+# INPUT VISIBILITY (WHITE INPUTS + DARK TEXT) — MAIN APP
+# -------------------------
+st.markdown(
+    """
 <style>
-/* ===============================
-   INPUT TEXT VISIBILITY (WORKING)
-   White fields + dark typed text
-   =============================== */
-
-/* All inputs + textareas (catch-all) */
+/* Inputs + textareas */
 [data-testid="stAppViewContainer"] input,
 [data-testid="stAppViewContainer"] textarea{
   background: rgba(255,255,255,0.96) !important;
   color: #0b0f19 !important;
-  -webkit-text-fill-color: #0b0f19 !important;  /* IMPORTANT for Chrome */
+  -webkit-text-fill-color: #0b0f19 !important;
   caret-color: #ff2d55 !important;
   border: 1px solid rgba(0,0,0,0.10) !important;
 }
 
-/* BaseWeb wrappers (Streamlit uses these internally) */
+/* BaseWeb wrappers */
 [data-testid="stAppViewContainer"] div[data-baseweb="input"] input,
 [data-testid="stAppViewContainer"] div[data-baseweb="textarea"] textarea{
   background: rgba(255,255,255,0.96) !important;
@@ -1204,16 +943,6 @@ st.markdown("""
   border-radius: 12px !important;
 }
 
-/* Streamlit wrappers */
-.stTextInput input,
-.stNumberInput input,
-.stDateInput input,
-.stTextArea textarea{
-  background: rgba(255,255,255,0.96) !important;
-  color: #0b0f19 !important;
-  -webkit-text-fill-color: #0b0f19 !important;
-}
-
 /* Placeholder */
 [data-testid="stAppViewContainer"] input::placeholder,
 [data-testid="stAppViewContainer"] textarea::placeholder{
@@ -1221,82 +950,27 @@ st.markdown("""
   -webkit-text-fill-color: rgba(11,15,25,0.45) !important;
 }
 
-/* Focus glow */
-[data-testid="stAppViewContainer"] input:focus,
-[data-testid="stAppViewContainer"] textarea:focus{
-  border-color: rgba(255,45,85,0.35) !important;
-  box-shadow: 0 0 0 3px rgba(255,45,85,0.10) !important;
-  outline: none !important;
-}
-
-/* Chrome autofill (stops the “ghost text” / wrong colors) */
-[data-testid="stAppViewContainer"] input:-webkit-autofill,
-[data-testid="stAppViewContainer"] textarea:-webkit-autofill{
+/* Autofill */
+[data-testid="stAppViewContainer"] input:-webkit-autofill{
   -webkit-text-fill-color: #0b0f19 !important;
   box-shadow: 0 0 0px 1000px rgba(255,255,255,0.96) inset !important;
-  transition: background-color 9999s ease-in-out 0s !important;
-}
-
-/* ===============================
-   SELECTBOX INPUT + DROPDOWN MENU
-   (these are from your working old CSS)
-   =============================== */
-
-/* Selectbox field */
-div[data-baseweb="select"] > div{
-  background: rgba(255,255,255,0.96) !important;
-  color: #0b0f19 !important;
-  border: 1px solid rgba(0,0,0,0.10) !important;
-  border-radius: 12px !important;
-}
-div[data-baseweb="select"] span{
-  color: #0b0f19 !important;
-  font-weight: 700 !important;
-}
-div[data-baseweb="select"] > div:focus,
-div[data-baseweb="select"] > div:focus-within{
-  border-color: rgba(255,45,85,0.35) !important;
-  box-shadow: 0 0 0 3px rgba(255,45,85,0.10) !important;
-}
-
-/* Dropdown popover */
-div[data-baseweb="popover"] > div{
-  background: rgba(8,10,16,0.98) !important;
-  border: 1px solid rgba(255,255,255,0.14) !important;
-  border-radius: 14px !important;
-  box-shadow: 0 22px 60px rgba(0,0,0,0.65) !important;
-}
-div[data-baseweb="popover"] [role="option"]{
-  color: rgba(255,255,255,0.92) !important;
-  background: transparent !important;
-  padding: 10px 12px !important;
-  border-radius: 10px !important;
-}
-div[data-baseweb="popover"] [role="option"]:hover{
-  background: rgba(255,45,85,0.18) !important;
-}
-div[data-baseweb="popover"] [role="option"][aria-selected="true"]{
-  background: rgba(255,45,85,0.28) !important;
-  color: rgba(255,255,255,0.98) !important;
 }
 </style>
-""", unsafe_allow_html=True)                 
-st.markdown("""
-<style>
-/* ==========================
-   HARD OVERRIDE: AUTH MODAL
-   (BaseWeb modal surface)
-   Put this LAST
-   ========================== */
+    """,
+    unsafe_allow_html=True,
+)
 
-/* BaseWeb modal containers (these are often the WHITE surface) */
+# -------------------------
+# AUTH MODAL OVERRIDES (WHITE INPUTS + BLACK TEXT INSIDE MODAL)
+# Put this after the general input CSS so it wins inside dialogs.
+# -------------------------
+st.markdown(
+    """
+<style>
+/* Modal surface */
 div[data-baseweb="modal"],
 div[data-baseweb="modal"] > div,
-div[data-baseweb="modal"] > div > div{
-  background: rgba(12,14,22,0.92) !important;
-}
-
-/* Streamlit dialog role targets */
+div[data-baseweb="modal"] > div > div,
 div[role="dialog"],
 div[role="dialog"] > div,
 div[role="dialog"] section,
@@ -1304,7 +978,7 @@ div[role="dialog"] header{
   background: rgba(12,14,22,0.92) !important;
 }
 
-/* Nice border + shadow on the visible surface */
+/* Modal border/shadow */
 div[data-baseweb="modal"] > div > div,
 div[role="dialog"]{
   border: 1px solid rgba(255,255,255,0.10) !important;
@@ -1312,32 +986,33 @@ div[role="dialog"]{
   box-shadow: 0 30px 120px rgba(0,0,0,0.75) !important;
 }
 
-/* Ensure text inside modal stays readable */
+/* Modal text */
 div[data-baseweb="modal"] *,
 div[role="dialog"] *{
   color: rgba(255,255,255,0.92) !important;
 }
 
-/* Inputs inside modal (this fixes “invisible typing” too) */
+/* Modal inputs: WHITE background + BLACK text */
+div[role="dialog"] input,
+div[role="dialog"] textarea,
 div[data-baseweb="modal"] input,
 div[data-baseweb="modal"] textarea,
-div[role="dialog"] input,
-div[role="dialog"] textarea{
-  background: rgba(255,255,255,0.06) !important;
-  color: rgba(255,255,255,0.96) !important;
-  -webkit-text-fill-color: rgba(255,255,255,0.96) !important;
+div[aria-modal="true"] input,
+div[aria-modal="true"] textarea{
+  background: rgba(255,255,255,0.96) !important;
+  background-color: rgba(255,255,255,0.96) !important;
+  color: #0b0f19 !important;
+  -webkit-text-fill-color: #0b0f19 !important;
   caret-color: #ff2d55 !important;
-  border: 1px solid rgba(255,255,255,0.14) !important;
+  border: 1px solid rgba(0,0,0,0.10) !important;
   border-radius: 14px !important;
 }
 
-/* Placeholder */
-div[data-baseweb="modal"] input::placeholder,
-div[data-baseweb="modal"] textarea::placeholder,
+/* Modal placeholders */
 div[role="dialog"] input::placeholder,
 div[role="dialog"] textarea::placeholder{
-  color: rgba(255,255,255,0.45) !important;
-  -webkit-text-fill-color: rgba(255,255,255,0.45) !important;
+  color: rgba(11,15,25,0.45) !important;
+  -webkit-text-fill-color: rgba(11,15,25,0.45) !important;
 }
 
 /* Modal buttons */
@@ -1351,73 +1026,9 @@ div[role="dialog"] .stButton button{
   box-shadow: 0 12px 35px rgba(255,45,85,0.22) !important;
 }
 </style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<style>
-/* =================================================
-   AUTH MODAL – FORCE WHITE INPUT + BLACK TEXT
-   (match main working inputs exactly)
-   ================================================= */
-
-/* Any auth modal / dialog */
-div[role="dialog"] input,
-div[role="dialog"] textarea,
-div[data-testid="stDialog"] input,
-div[data-testid="stDialog"] textarea,
-div[data-baseweb="modal"] input,
-div[data-baseweb="modal"] textarea,
-div[aria-modal="true"] input,
-div[aria-modal="true"] textarea{
-  background: rgba(255,255,255,0.96) !important;
-  background-color: rgba(255,255,255,0.96) !important;
-
-  color: #0b0f19 !important;                 /* ✅ BLACK TEXT */
-  -webkit-text-fill-color: #0b0f19 !important;
-
-  caret-color: #ff2d55 !important;
-  border: 1px solid rgba(0,0,0,0.10) !important;
-  border-radius: 14px !important;
-}
-
-/* BaseWeb wrapper (Streamlit uses this internally) */
-div[role="dialog"] div[data-baseweb="input"] input,
-div[data-baseweb="modal"] div[data-baseweb="input"] input,
-div[aria-modal="true"] div[data-baseweb="input"] input{
-  background: rgba(255,255,255,0.96) !important;
-  color: #0b0f19 !important;
-  -webkit-text-fill-color: #0b0f19 !important;
-}
-
-/* Placeholder */
-div[role="dialog"] input::placeholder{
-  color: rgba(11,15,25,0.45) !important;
-  -webkit-text-fill-color: rgba(11,15,25,0.45) !important;
-}
-
-/* Focus */
-div[role="dialog"] input:focus{
-  border-color: rgba(255,45,85,0.55) !important;
-  box-shadow: 0 0 0 4px rgba(255,45,85,0.14) !important;
-  outline: none !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-st.markdown("""
-<style>
-/* Sidebar container */
-section[data-testid="stSidebar"] {
-  background: #0b0f19 !important;  /* pick your dark */
-  opacity: 1 !important;
-}
-
-/* Sidebar inner */
-section[data-testid="stSidebar"] > div {
-  background: #0b0f19 !important;
-}
-</style>
-""", unsafe_allow_html=True)
+    """,
+    unsafe_allow_html=True,
+)
 
 
 
@@ -1564,23 +1175,15 @@ def auth_ui():
 
 
 
-
-
-
 # =========================
-# INIT
+# INIT (run once, early)
 # =========================
 init_db()
 
-if "user" not in st.session_state:
-    st.session_state["user"] = None
-
-if "accepted_policies" not in st.session_state:
-    st.session_state["accepted_policies"] = False
-
-if "policy_view" not in st.session_state:
-    st.session_state["policy_view"] = None  # None | cookies | privacy | terms | accessibility
-
+st.session_state.setdefault("user", None)
+st.session_state.setdefault("accepted_policies", False)
+st.session_state.setdefault("policy_view", None)  # None | cookies | privacy | terms | accessibility
+st.session_state.setdefault("guest_started_builder", False)
 
 # =========================
 # POLICY FILE READER
@@ -1596,7 +1199,6 @@ def _read_policy_file(rel_path: str) -> str:
         pass
     return ""
 
-
 # =========================
 # POLICY PAGE VIEW
 # =========================
@@ -1606,7 +1208,7 @@ def show_policy_page() -> bool:
         return False
 
     title_map = {
-        "accessibility": "accessibility",
+        "accessibility": "Accessibility",
         "cookies": "Cookie Policy",
         "privacy": "Privacy Policy",
         "terms": "Terms of Use",
@@ -1633,13 +1235,12 @@ def show_policy_page() -> bool:
 
     return True
 
-
 # =========================
 # CONSENT GATE (POST-LOGIN ONLY)
 # =========================
-def show_consent_gate():
+def show_consent_gate() -> None:
     user = st.session_state.get("user")
-    if not user:
+    if not (isinstance(user, dict) and user.get("email")):
         return
 
     email = user.get("email")
@@ -1655,43 +1256,43 @@ def show_consent_gate():
         pass
 
     st.markdown(
-    """
-    <div style="
-        border-radius: 12px;
-        padding: 18px 20px;
-        margin-top: 20px;
-        background: #111827;
-        border: 1px solid #1f2937;
-        color: rgba(255,255,255,0.95);
-    ">
-        <h3 style="margin-top:0;">Before you continue</h3>
-        <p style="font-size:14px; line-height:1.5;">
-            We use cookies and process your data to run this CV builder,
-            improve the service, and keep your account secure.
-            Please open and read the following policies:
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+        """
+        <div style="
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-top: 20px;
+            background: #111827;
+            border: 1px solid #1f2937;
+            color: rgba(255,255,255,0.95);
+        ">
+            <h3 style="margin-top:0;">Before you continue</h3>
+            <p style="font-size:14px; line-height:1.5;">
+                We use cookies and process your data to run this CV builder,
+                improve the service, and keep your account secure.
+                Please open and read the following policies:
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("Cookie Policy"):
+        if st.button("Cookie Policy", key="btn_policy_cookies"):
             st.session_state["policy_view"] = "cookies"
             st.rerun()
     with c2:
-        if st.button("Privacy Policy"):
+        if st.button("Privacy Policy", key="btn_policy_privacy"):
             st.session_state["policy_view"] = "privacy"
             st.rerun()
     with c3:
-        if st.button("Terms of Use"):
+        if st.button("Terms of Use", key="btn_policy_terms"):
             st.session_state["policy_view"] = "terms"
             st.rerun()
 
-    agree = st.checkbox("I agree to the Cookie Policy, Privacy Policy and Terms of Use")
+    agree = st.checkbox("I agree to the Cookie Policy, Privacy Policy and Terms of Use", key="chk_policy_agree")
 
-    if st.button("Accept and continue") and agree:
+    if st.button("Accept and continue", key="btn_policy_accept") and agree:
         try:
             mark_policies_accepted(email)
         except Exception:
@@ -1703,48 +1304,37 @@ def show_consent_gate():
     st.stop()
 
 # =========================
-# AUTH MODAL (friendly box)
+# AUTH MODAL (friendly box) - define ONCE
 # =========================
 st.session_state.setdefault("auth_modal_open", False)
 st.session_state.setdefault("auth_modal_tab", "Sign in")
 st.session_state.setdefault("auth_modal_epoch", 0)
 
-# ---------- AUTH STATE ----------
-current_user = st.session_state.get("user")
+def _is_logged_in_user(u) -> bool:
+    return bool(u and isinstance(u, dict) and u.get("email"))
 
-is_logged_in = (
-    isinstance(current_user, dict)
-    and bool(current_user.get("email"))
-)
 def is_logged_in_user() -> bool:
-    u = st.session_state.get("user")
-    return isinstance(u, dict) and bool(u.get("email"))
+    return _is_logged_in_user(st.session_state.get("user"))
 
-def gate_premium(action_label: str = "use this feature", tab: str = "Sign in") -> bool:
-    """
-    Returns True if logged in.
-    If not logged in: opens modal + shows message, returns False.
-    IMPORTANT: does NOT stop the script.
-    """
-    if is_logged_in_user():
-        return True
-
-    st.toast(f"🔒 Sign in to {action_label}", icon="🔒")
-    open_auth_modal(tab)   # your existing modal opener
-    return False
-
-def open_auth_modal(default_tab: str = "Sign in"):
+def open_auth_modal(default_tab: str = "Sign in") -> None:
     st.session_state["auth_modal_tab"] = default_tab
     st.session_state["auth_modal_open"] = True
     st.session_state["auth_modal_epoch"] += 1
     st.rerun()
 
-def close_auth_modal():
+def close_auth_modal() -> None:
     st.session_state["auth_modal_open"] = False
     st.rerun()
 
+def gate_premium(action_label: str = "use this feature", tab: str = "Sign in") -> bool:
+    if is_logged_in_user():
+        return True
+    st.toast(f"🔒 Sign in to {action_label}", icon="🔒")
+    open_auth_modal(tab)
+    return False
+
 @st.dialog("Welcome back 👋", width="large")
-def _auth_dialog():
+def _auth_dialog() -> None:
     st.markdown(
         """
         <div style="
@@ -1769,7 +1359,7 @@ def _auth_dialog():
     preferred = st.session_state.get("auth_modal_tab", "Sign in")
     st.caption(f"Tip: You selected **{preferred}**")
 
-    # Call your real function
+    # Your real auth renderer
     auth_ui()
 
     c1, c2 = st.columns([1, 1])
@@ -1777,27 +1367,14 @@ def _auth_dialog():
         if st.button("Close", key=f"auth_modal_close_{st.session_state['auth_modal_epoch']}"):
             close_auth_modal()
 
+def render_auth_modal_if_open() -> None:
+    if st.session_state.get("auth_modal_open", False):
+        _auth_dialog()
 
-def _is_logged_in_user(u) -> bool:
-    return bool(u and isinstance(u, dict) and u.get("email"))
-
-
-import streamlit as st
-
-# -------------------------
-# GLOBAL CSS (TOP LEVEL ONLY)
-# -------------------------
-st.markdown("""
-<style>
-/* put your CSS here (the full theme) */
-</style>
-""", unsafe_allow_html=True)
-
-# -------------------------
-# FUNCTIONS (MUST BE ABOVE ROUTING)
-# -------------------------
-
-def render_public_home():
+# =========================
+# PUBLIC HOME (guest header)
+# =========================
+def render_public_home() -> None:
     st.markdown(
         """
         <div style="
@@ -1823,35 +1400,114 @@ def render_public_home():
         unsafe_allow_html=True,
     )
 
+# =========================
+# PLAN + REFERRAL CONFIG (define ONCE)
+# =========================
+REFERRAL_CAP = 10
+BONUS_PER_REFERRAL_CV = 5
+BONUS_PER_REFERRAL_AI = 5
 
+PLAN_LIMITS = {
+    "free": {"cv": 5, "ai": 5},
+    "monthly": {"cv": 20, "ai": 30},
+    "pro": {"cv": 50, "ai": 90},
+    "one_time": {"cv": 40, "ai": 60},
+    "yearly": {"cv": 300, "ai": 600},
+    "premium": {"cv": 5000, "ai": 10000},
+    "enterprise": {"cv": 5000, "ai": 10000},
+}
 
-# -------------------------
-# Auth State
-# -------------------------
-st.session_state.setdefault("auth_modal_open", False)
-st.session_state.setdefault("auth_modal_tab", "Sign in")
-st.session_state.setdefault("auth_modal_epoch", 0)
+# IMPORTANT: upload_parses counts as AI usage (NOT free)
+AI_USAGE_KEYS = {"summary_uses", "cover_uses", "bullets_uses", "job_summary_uses", "upload_parses"}
+CV_USAGE_KEYS = {"cv_generations"}
+
+USAGE_KEYS_DEFAULTS = {
+    "upload_parses": 0,
+    "summary_uses": 0,
+    "cover_uses": 0,
+    "bullets_uses": 0,
+    "cv_generations": 0,
+    "job_summary_uses": 0,
+}
+
+# =========================
+# PAYWALL + QUOTA HELPERS
+# =========================
+def show_paywall(feature_label: str) -> None:
+    st.markdown(
+        f"""
+        <div style="
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin: 10px 0 6px 0;
+            background: rgba(59,130,246,0.12);
+            border: 1px solid rgba(59,130,246,0.35);
+        ">
+            <div style="font-weight:800; margin-bottom:6px;">
+                Limit reached for {feature_label}.
+            </div>
+            <div style="font-size: 13px; opacity:0.85; margin-bottom: 10px;">
+                Upgrade your plan or use referrals to unlock more usage.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
+    u = st.session_state.get("user") or {}
+
+    # No free roamers (you said uploads cost money)
+    if not (isinstance(u, dict) and u.get("email")):
+        st.warning(f"Sign in to use {feature_label}.")
+        return False
+
+    if u.get("role") in {"owner", "admin"}:
+        return True
+
+    plan = (u.get("plan") or "free").strip()
+    plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+
+    referrals = min(int(u.get("referrals_count", 0) or 0), REFERRAL_CAP)
+
+    if counter_key in CV_USAGE_KEYS:
+        base_limit = plan_limits["cv"]
+        bucket_keys = CV_USAGE_KEYS
+        bonus = referrals * BONUS_PER_REFERRAL_CV
+    else:
+        base_limit = plan_limits["ai"]
+        bucket_keys = AI_USAGE_KEYS
+        bonus = referrals * BONUS_PER_REFERRAL_AI
+
+    if base_limit is None:
+        return True
+
+    effective_limit = int(base_limit + bonus)
+    used = int(sum(st.session_state.get(k, 0) or 0 for k in bucket_keys))
+
+    if used + int(cost) > effective_limit:
+        show_paywall(feature_label)
+        return False
+
+    return True
 
 # =========================
 # ROUTING (preview-first)
 # =========================
-
 if show_policy_page():
     st.stop()
 
-st.session_state.setdefault("guest_started_builder", False)
-
-current_user = st.session_state.get("user")
-is_logged_in = isinstance(current_user, dict) and bool(current_user.get("email"))
-
-# 🔑 ALWAYS render auth modal first
+# render modal early (non-blocking)
 render_auth_modal_if_open()
 
-# Guest header / landing (non-blocking)
+current_user = st.session_state.get("user")
+is_logged_in = _is_logged_in_user(current_user)
+
+# Guest header (non-blocking)
 if not is_logged_in:
     render_public_home()
 
-# ---- Safe guest placeholders ----
+# Safe guest placeholder for UI (DO NOT treat as logged in)
 if not is_logged_in:
     current_user = {
         "full_name": "Guest",
@@ -1865,95 +1521,42 @@ if not is_logged_in:
         "accepted_policies_at": None,
     }
 
-    st.session_state.setdefault("cv_generations", 0)
-    st.session_state.setdefault("summary_uses", 0)
-    st.session_state.setdefault("cover_uses", 0)
-    st.session_state.setdefault("bullets_uses", 0)
-    st.session_state.setdefault("job_summary_uses", 0)
-
-# ---- Safe guest placeholders ----
-
-# ✅ DEFINE THESE HERE (so they exist for everyone)
+# Always define these (kills NameError)
 user_email = (current_user or {}).get("email")  # None for guests
 is_admin = (current_user or {}).get("role") in {"owner", "admin"}
 
-
-
-# -------------------------
-# Usage + plan configuration (DEFINE BEFORE SIDEBAR USES IT)
-# -------------------------
-REFERRAL_CAP = 10
-BONUS_PER_REFERRAL_CV = 5
-BONUS_PER_REFERRAL_AI = 5
-
-PLAN_LIMITS = {
-    "free": {"cv": 5, "ai": 5},
-
-    # Public paid plans
-    "monthly": {"cv": 20, "ai": 30},   # £2.99 Jobseeker Monthly
-    "pro": {"cv": 50, "ai": 90},       # £5.99 Pro Monthly
-
-    # Optional legacy plans
-    "one_time": {"cv": 40, "ai": 60},
-    "yearly": {"cv": 300, "ai": 600},
-
-    # Internal-only (still metered)
-    "premium": {"cv": 5000, "ai": 10000},
-    "enterprise": {"cv": 5000, "ai": 10000},
-}
-
-AI_USAGE_KEYS = {"summary_uses", "cover_uses", "bullets_uses", "job_summary_uses"}
-CV_USAGE_KEYS = {"cv_generations"}
-
-USAGE_KEYS_DEFAULTS = {
-    "upload_parses": 0,
-    "summary_uses": 0,
-    "cover_uses": 0,
-    "bullets_uses": 0,
-    "cv_generations": 0,
-    "job_summary_uses": 0,
-}
-
-# Usage counters: only hydrate from DB user when logged in
-if current_user is not None:
+# Hydrate counters (real user only) else safe defaults
+if is_logged_in and isinstance(st.session_state.get("user"), dict):
+    real_user = st.session_state["user"]
     for k, default in USAGE_KEYS_DEFAULTS.items():
         if k not in st.session_state:
-            st.session_state[k] = current_user.get(k, default)
+            st.session_state[k] = real_user.get(k, default)
 else:
-    # Preview mode: safe defaults so app renders
     for k, default in USAGE_KEYS_DEFAULTS.items():
         st.session_state.setdefault(k, default)
-# -------------------------
+
+# Consent gate for logged-in users only
+show_consent_gate()
+
+# =========================
 # Referral code (ONLY when logged in)
-# -------------------------
+# =========================
 my_ref_code = None
 my_ref_count = 0
 
 if is_logged_in and user_email:
-    # referral_code can be missing in DB / session; ensure it exists only for real users
-    my_ref_code = current_user.get("referral_code")
+    my_ref_code = (st.session_state.get("user") or {}).get("referral_code")
     if not my_ref_code:
-        my_ref_code = ensure_referral_code(user_email)  # SAFE now (email is not None)
-        current_user["referral_code"] = my_ref_code
+        my_ref_code = ensure_referral_code(user_email)
         st.session_state["user"]["referral_code"] = my_ref_code
 
-    my_ref_count = int(current_user.get("referrals_count", 0) or 0)
+    my_ref_count = int((st.session_state.get("user") or {}).get("referrals_count", 0) or 0)
     my_ref_count = min(my_ref_count, REFERRAL_CAP)
-else:
-    # Preview mode
-    my_ref_code = None
-    my_ref_count = 0
 
-
-# -------------------------
-# Mode select (ADMIN ONLY)
-# -------------------------
-if is_admin:
-    mode = st.sidebar.radio("Mode", ["Use app", "Admin dashboard"], index=0, key="mode_select")
-else:
-    mode = "Use app"
-
-def render_admin_dashboard():
+# =========================
+# Admin dashboard
+# =========================
+def render_admin_dashboard() -> None:
     st.title("👨‍💻 Admin Dashboard")
 
     users = get_all_users() or []
@@ -1968,6 +1571,7 @@ def render_admin_dashboard():
         + int(u.get("cover_uses", 0) or 0)
         + int(u.get("bullets_uses", 0) or 0)
         + int(u.get("job_summary_uses", 0) or 0)
+        + int(u.get("upload_parses", 0) or 0)
         for u in users
     )
 
@@ -2064,7 +1668,10 @@ def render_admin_dashboard():
     with col_b:
         if st.button("Update role", key="btn_update_role"):
             if new_role == "helper" and role != "helper":
-                helper_count = sum(1 for u in users if u.get("role") == "helper" and u.get("email") != selected_email)
+                helper_count = sum(
+                    1 for u in users
+                    if u.get("role") == "helper" and u.get("email") != selected_email
+                )
                 if helper_count >= 4:
                     st.error("You already have 4 helpers. Remove one before adding another.")
                     st.stop()
@@ -2085,28 +1692,35 @@ def render_admin_dashboard():
         if st.button("Delete this user", key="btn_delete_user"):
             delete_user(selected_email)
             st.success(f"User {selected_email} deleted.")
-            if selected_email == current_user.get("email"):
+            if (st.session_state.get("user") or {}).get("email") == selected_email:
                 st.session_state["user"] = None
             st.rerun()
 
-# Only render admin when selected
+# =========================
+# Mode select (ADMIN ONLY)
+# =========================
+if is_admin:
+    mode = st.sidebar.radio("Mode", ["Use app", "Admin dashboard"], index=0, key="mode_select")
+else:
+    mode = "Use app"
+
 if mode == "Admin dashboard":
     render_admin_dashboard()
     st.stop()
 
-
+# =========================
+# SIDEBAR (full)
+# =========================
 with st.sidebar:
-    current_user = st.session_state.get("user")
-    is_logged_in = bool(
-        current_user and isinstance(current_user, dict) and current_user.get("email")
-    )
-    role = (current_user or {}).get("role", "user")
+    session_user = st.session_state.get("user")
+    sidebar_logged_in = _is_logged_in_user(session_user)
+    sidebar_role = (session_user or {}).get("role", "user")
 
-    # ---------- Brand ----------
-    render_mulyba_brand_header(is_logged_in)
+    # Brand header (your existing function)
+    render_mulyba_brand_header(sidebar_logged_in)
 
-    # ---------- Mode badge ----------
-    if is_logged_in:
+    # Mode badge
+    if sidebar_logged_in:
         st.markdown(
             """
             <div class="mode-badge mode-live">
@@ -2129,34 +1743,30 @@ with st.sidebar:
     st.markdown('<div class="sb-card">', unsafe_allow_html=True)
     st.markdown("### 👤 Account")
 
-    if not is_logged_in:
+    if not sidebar_logged_in:
         st.markdown("**Guest mode**")
         st.markdown(
             '<div class="sb-muted">Sign in above to unlock downloads, AI tools, and saved history.</div>',
             unsafe_allow_html=True,
         )
-
         st.markdown("**Status:** ✅ Active")
         st.markdown("**Policies accepted:** No")
-
     else:
-        full_name = current_user.get("full_name") or "Member"
-        email = current_user.get("email") or "—"
-        plan = (current_user.get("plan") or "free").strip()
+        full_name = session_user.get("full_name") or "Member"
+        email = session_user.get("email") or "—"
+        plan = (session_user.get("plan") or "free").strip()
 
         st.markdown(f"**{full_name}**")
         st.markdown(f'<div class="sb-muted">{email}</div>', unsafe_allow_html=True)
-
-        # ✅ Plan line (no code pill / no weird white block)
         st.markdown(f"**Plan:** {plan}")
 
-        if role in {"owner", "admin"}:
-            st.caption(f"Admin: {role}")
+        if sidebar_role in {"owner", "admin"}:
+            st.caption(f"Admin: {sidebar_role}")
 
-        is_banned = current_user.get("is_banned", False)
+        is_banned = bool(session_user.get("is_banned"))
         st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
 
-        accepted = current_user.get("accepted_policies", False)
+        accepted = bool(session_user.get("accepted_policies"))
         st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
 
         if st.button("Log out", key="sb_logout_btn"):
@@ -2165,32 +1775,28 @@ with st.sidebar:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-
-
-
-
     # ---------- Usage ----------
     st.markdown('<div class="sb-card">', unsafe_allow_html=True)
     st.markdown("### 📊 Usage")
 
-    if not is_logged_in:
+    if not sidebar_logged_in:
         cv_left, cv_total = 5, 5
         ai_left, ai_total = 5, 5
     else:
-        referrals = min(current_user.get("referrals_count", 0) or 0, REFERRAL_CAP)
-        plan = current_user.get("plan", "free")
+        referrals = min(int(session_user.get("referrals_count", 0) or 0), REFERRAL_CAP)
+        plan = session_user.get("plan", "free")
         plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
 
-        base_cv = None if role in {"owner", "admin"} else plan_limits["cv"]
-        base_ai = None if role in {"owner", "admin"} else plan_limits["ai"]
+        base_cv = None if sidebar_role in {"owner", "admin"} else plan_limits["cv"]
+        base_ai = None if sidebar_role in {"owner", "admin"} else plan_limits["ai"]
 
-        used_cv = st.session_state.get("cv_generations", 0)
-        used_ai = (
-            st.session_state.get("summary_uses", 0)
-            + st.session_state.get("cover_uses", 0)
-            + st.session_state.get("bullets_uses", 0)
-            + st.session_state.get("job_summary_uses", 0)
-            + st.session_state.get("upload_parses", 0)
+        used_cv = int(st.session_state.get("cv_generations", 0) or 0)
+        used_ai = int(
+            (st.session_state.get("summary_uses", 0) or 0)
+            + (st.session_state.get("cover_uses", 0) or 0)
+            + (st.session_state.get("bullets_uses", 0) or 0)
+            + (st.session_state.get("job_summary_uses", 0) or 0)
+            + (st.session_state.get("upload_parses", 0) or 0)
         )
 
         bonus_cv = referrals * BONUS_PER_REFERRAL_CV
@@ -2257,7 +1863,6 @@ Dates are optional and can be edited before download.
 Preview carefully before downloading.  
 You are responsible for checking spelling, dates, and accuracy.
 """,
-
         "AI Tools & Usage": """
 ### AI tools & usage
 
@@ -2265,13 +1870,13 @@ AI can help:
 - Improve summaries and wording
 - Rewrite experience bullet points
 - Generate tailored cover letters
+- Parse uploaded CVs into the form
 
 AI output is **assistance only**.  
 Always review and edit before final use.
 
 ⏳ Please wait while AI is running before clicking again.
 """,
-
         "Cover Letter Rules": """
 ### Cover letter rules
 
@@ -2282,7 +1887,6 @@ To generate a cover letter:
 
 Always review and customise cover letters before sending.
 """,
-
         "Templates & Downloads": """
 ### Templates & downloads
 
@@ -2292,7 +1896,6 @@ Always review and customise cover letters before sending.
 
 Once downloaded, files cannot be edited inside the app.
 """,
-
         "Troubleshooting": """
 ### Troubleshooting
 
@@ -2301,7 +1904,6 @@ Once downloaded, files cannot be edited inside the app.
 - Wait for AI actions to complete
 - Scroll to review all sections before download
 """,
-
         "Privacy & Refunds": """
 ### Privacy & refunds
 
@@ -2313,87 +1915,19 @@ Once downloaded, files cannot be edited inside the app.
 """,
     }
 
-    # Render selected help topic
     st.markdown(HELP_TEXT[help_topic])
 
-    # Support footer
-    st.markdown("""
+    st.markdown(
+        """
 ---
 📩 **Need help or spotted an issue?**  
 Contact **support@affiliateworldcommissions.com**
 
 Please ensure your details are reviewed before downloading.
-""")
-
-    # Close card wrapper
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-
-
-# =========================
-# QUOTA HELPERS (keep OUTSIDE sidebar block)
-# =========================
-def has_free_quota(counter_key: str, limit: int, feature_label: str) -> bool:
-    # Use session user, not a global that might be None
-    u = st.session_state.get("user") or {}
-
-    # Not logged in => block paid features (except upload_parses if you want)
-    if not (isinstance(u, dict) and u.get("email")):
-        st.warning(f"Sign in to use {feature_label}.")
-        return False
-
-    if u.get("role") in {"owner", "admin"}:
-        return True
-
-    if counter_key == "upload_parses":
-        return True
-
-    plan = u.get("plan", "free")
-    plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
-
-    if counter_key in CV_USAGE_KEYS:
-        base_limit = plan_limits["cv"]
-        bucket_keys = CV_USAGE_KEYS
-        bonus = min(u.get("referrals_count", 0) or 0, REFERRAL_CAP) * BONUS_PER_REFERRAL_CV
-    else:
-        base_limit = plan_limits["ai"]
-        bucket_keys = AI_USAGE_KEYS
-        bonus = min(u.get("referrals_count", 0) or 0, REFERRAL_CAP) * BONUS_PER_REFERRAL_AI
-
-    if base_limit is None:
-        return True
-
-    effective_limit = int(base_limit + bonus)
-    used = int(sum(st.session_state.get(k, 0) or 0 for k in bucket_keys))
-
-    if used >= effective_limit:
-        show_paywall(feature_label)
-        return False
-
-    return True
-
-def show_paywall(feature_label: str):
-    st.markdown(
-        f"""
-        <div style="
-            border-radius: 14px;
-            padding: 14px 16px;
-            margin: 10px 0 6px 0;
-            background: rgba(59,130,246,0.12);
-            border: 1px solid rgba(59,130,246,0.35);
-        ">
-            <div style="font-weight:800; margin-bottom:6px;">
-                Free limit reached for {feature_label}.
-            </div>
-            <div style="font-size: 13px; opacity:0.85; margin-bottom: 10px;">
-                Upgrade your plan or use referrals to unlock more usage.
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+""",
     )
 
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 
@@ -2442,8 +1976,10 @@ def show_paywall(feature_label: str):
                 st.session_state.get("upload_parses", 0) + 1
             )
 
-            increment_usage(user_email, "upload_parses")
-            st.rerun()
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    if email_for_usage:
+        increment_usage(email_for_usage, "upload_parses")
+
 
 
 
@@ -2515,14 +2051,15 @@ if btn_summary:
                     st.session_state["summary_pending"] = improved_limited
 
                     st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
-                    increment_usage(user_email, "summary_uses")
+                    email_for_usage = (st.session_state.get("user") or {}).get("email")
+                    if email_for_usage:
+                        increment_usage(email_for_usage, "summary_uses")
 
                     st.success("AI summary applied into your main box.")
                     st.rerun()
 
                 except Exception as e:
                     st.error(f"AI error (summary improvement): {e}")
-
 
 
 normalize_skills_state()
@@ -2582,7 +2119,9 @@ if btn_skills:
                 st.session_state["skills_pending"] = improved_limited
 
                 st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
-                increment_usage(user_email, "bullets_uses")
+                email_for_usage = (st.session_state.get("user") or {}).get("email")
+                if email_for_usage:
+                    increment_usage(email_for_usage, "bullets_uses")
 
                 st.success("AI skills applied.")
                 st.rerun()
@@ -2604,7 +2143,6 @@ st.header("3. Experience (multiple roles)")
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
-
 
 # Keep count stable (parsed -> UI)
 if "num_experiences" not in st.session_state or st.session_state["num_experiences"] is None:
@@ -2726,7 +2264,9 @@ if run_now and role_to_improve is not None:
             st.session_state[pending_key] = improved_limited
 
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
-            increment_usage(user_email, "bullets_uses")
+            email_for_usage = (st.session_state.get("user") or {}).get("email")
+            if email_for_usage:
+                increment_usage(email_for_usage, "bullets_uses")
 
             st.success(f"Role {i+1} updated.")
             st.rerun()
@@ -2737,6 +2277,7 @@ if run_now and role_to_improve is not None:
 
 if not st.session_state.pop("_just_autofilled_from_cv", False):
     restore_education_state()
+
 # -------------------------
 # 4. Education (multiple entries)
 # -------------------------
@@ -2849,7 +2390,7 @@ with col_jd2:
 if job_summary_clicked:
     if not gate_premium("generate a job summary"):
         st.stop()
-    
+
     # ✅ Guard: must complete Section 1 first
     if not (full_name.strip() and email.strip()):
         st.warning(
@@ -2880,7 +2421,9 @@ if job_summary_clicked:
                 st.session_state["job_summary_uses"] = (
                     st.session_state.get("job_summary_uses", 0) + 1
                 )
-                increment_usage(user_email, "job_summary_uses")
+                email_for_usage = (st.session_state.get("user") or {}).get("email")
+                if email_for_usage:
+                    increment_usage(email_for_usage, "job_summary_uses")
 
                 st.success(
                     "AI job summary generated below. "
@@ -2970,7 +2513,9 @@ if ai_cover_letter_clicked:
 
                 st.session_state["cover_letter"] = final_letter
                 st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
-                increment_usage(user_email, "cover_uses")
+                email_for_usage = (st.session_state.get("user") or {}).get("email")
+                if email_for_usage:
+                    increment_usage(email_for_usage, "cover_uses")
 
                 st.success(
                     "AI cover letter generated below. "
@@ -3034,9 +2579,6 @@ if st.session_state["cover_letter"]:
         st.error(f"Error generating cover letter files: {e!r}")
 
 
-
-
-
 # -------------------------
 # 6. References (optional)
 # -------------------------
@@ -3066,7 +2608,6 @@ TEMPLATE_MAP = {
     "Classic Grey": "classic_grey.html",
 }
 
-
 # -------------------------
 # 7. Generate CV
 # -------------------------
@@ -3092,22 +2633,20 @@ generate_clicked = locked_action_button(
 
 if generate_clicked:
     # Must be logged in at this point (locked_action_button enforces it)
-    current_user = st.session_state.get("user") or {}
-    user_email = current_user.get("email")
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
 
     if not full_name or not email:
         st.error("Please fill in at least your full name and email.")
         st.stop()
 
-    # Optional: extra safety if user_email somehow missing
-    if not user_email:
+    # Optional: extra safety if email somehow missing
+    if not email_for_usage:
         st.error("Please sign in again.")
         open_auth_modal("Sign in")
         st.stop()
 
     # Quota check stays exactly as you already had it
     if not has_free_quota("cv_generations", 1, "CV generation"):
-        # paywall already shown inside has_free_quota
         st.stop()
 
     try:
@@ -3160,11 +2699,11 @@ if generate_clicked:
             )
 
         st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
-        increment_usage(user_email, "cv_generations")
+        if email_for_usage:
+            increment_usage(email_for_usage, "cv_generations")
 
     except Exception as e:
         st.error(f"Something went wrong while generating the CV: {e}")
-
 
 
 # -------------------------
@@ -3219,7 +2758,6 @@ st.markdown(
     "**Enquire:** support@affiliateworldcommissions.com\n"
 )
 
-
 st.caption(
     "All plans are metered to keep the service reliable and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
@@ -3244,5 +2782,3 @@ with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         st.session_state["policy_view"] = "terms"
         st.rerun()
-
-
