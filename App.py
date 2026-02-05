@@ -110,6 +110,26 @@ def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
     st.session_state[f"_cooldown_{action_key}"] = now
     return True, 0
 
+PRESERVE_KEYS = [
+    # personal details
+    "full_name", "title", "email", "phone", "location", "summary",
+    # job summariser (rename/add your actual keys)
+    "job_desc", "job_summary", "job_summary_uses",
+    # CV parsed bits
+    "_cv_parsed", "_cv_autofill_enabled", "_last_cv_fingerprint",
+    # any other section keys you use
+]
+
+def snapshot_form_state():
+    st.session_state["_form_snapshot"] = {k: st.session_state.get(k) for k in PRESERVE_KEYS}
+
+def restore_form_state():
+    snap = st.session_state.get("_form_snapshot") or {}
+    for k, v in snap.items():
+        if v is not None:
+            st.session_state[k] = v
+
+
 
 def freeze_defaults():
     # Never overwrite user-entered or AI-generated data
@@ -1171,9 +1191,19 @@ def show_policy_page() -> bool:
 
     if st.button("← Back", key="btn_policy_back"):
         st.session_state["policy_view"] = None
+        st.session_state["_just_returned_from_policy"] = True
+
+        # restore only if you have a snapshot saved
+        try:
+            restore_form_state()
+        except Exception:
+            pass
+
         st.rerun()
 
     return True
+
+
 
 # =========================
 # CONSENT GATE (POST-LOGIN ONLY)
@@ -1219,18 +1249,24 @@ def show_consent_gate() -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Cookie Policy", key="btn_policy_cookies"):
+            snapshot_form_state()  # ✅ ADD THIS
             st.session_state["policy_view"] = "cookies"
             st.rerun()
     with c2:
         if st.button("Privacy Policy", key="btn_policy_privacy"):
+            snapshot_form_state()  # ✅ ADD THIS
             st.session_state["policy_view"] = "privacy"
             st.rerun()
     with c3:
         if st.button("Terms of Use", key="btn_policy_terms"):
+            snapshot_form_state()  # ✅ ADD THIS
             st.session_state["policy_view"] = "terms"
             st.rerun()
 
-    agree = st.checkbox("I agree to the Cookie Policy, Privacy Policy and Terms of Use", key="chk_policy_agree")
+    agree = st.checkbox(
+        "I agree to the Cookie Policy, Privacy Policy and Terms of Use",
+        key="chk_policy_agree",
+    )
 
     if st.button("Accept and continue", key="btn_policy_accept") and agree:
         try:
@@ -1242,6 +1278,7 @@ def show_consent_gate() -> None:
 
     st.info("Please accept to continue using the site.")
     st.stop()
+
 
 # =========================
 # AUTH MODAL (friendly box) - define ONCE
@@ -1436,6 +1473,10 @@ def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
 # =========================
 if show_policy_page():
     st.stop()
+
+# ---- Policy return guard (MUST be here) ----
+just_returned = st.session_state.pop("_just_returned_from_policy", False)
+
 
 # render modal early (non-blocking)
 render_auth_modal_if_open()
