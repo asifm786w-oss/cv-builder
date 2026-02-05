@@ -413,19 +413,7 @@ def restore_education_state(max_rows: int = 5):
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
 
 
-def _safe_set(key: str, value):
-    if isinstance(value, str):
-        value = value.strip()
-    if value:  # only set if meaningful
-        st.session_state[key] = value
 
-# after `parsed = extract_cv_data(raw_text)` and before st.rerun():
-_safe_set("full_name", parsed.get("full_name") or parsed.get("name"))
-_safe_set("email", parsed.get("email"))
-_safe_set("phone", parsed.get("phone"))
-_safe_set("location", parsed.get("location"))
-_safe_set("professional_title", parsed.get("title") or parsed.get("professional_title"))
-_safe_set("summary", parsed.get("summary") or parsed.get("professional_summary"))
 
 
 # -------------------------
@@ -1906,6 +1894,46 @@ Please ensure your details are reviewed before downloading.
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+def _safe_set(key: str, value):
+    if isinstance(value, str):
+        value = value.strip()
+    if value:
+        st.session_state[key] = value
+
+
+if uploaded_cv is not None and fill_clicked:
+    raw_text = _read_uploaded_cv_to_text(uploaded_cv)
+    if not raw_text.strip():
+        st.warning("No readable text found in that file.")
+        st.stop()
+
+    with st.spinner("Reading and analysing your CV..."):
+        parsed = extract_cv_data(raw_text)
+
+    if not isinstance(parsed, dict):
+        st.error("AI parser returned an unexpected format.")
+        st.stop()
+
+    # ✅ FORCE PERSONAL DETAILS (FIELD 1 FIX)
+    _safe_set("full_name", parsed.get("full_name") or parsed.get("name"))
+    _safe_set("email", parsed.get("email"))
+    _safe_set("phone", parsed.get("phone"))
+    _safe_set("location", parsed.get("location"))
+    _safe_set("professional_title", parsed.get("title") or parsed.get("professional_title"))
+    _safe_set("summary", parsed.get("summary") or parsed.get("professional_summary"))
+
+    _apply_parsed_cv_to_session(parsed)
+
+    st.session_state["_cv_parsed"] = parsed
+    st.session_state["_cv_autofill_enabled"] = True
+
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    if email_for_usage:
+        st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
+        increment_usage(email_for_usage, "upload_parses")
+
+    st.success("Form fields updated from your CV. Scroll down to review and edit.")
+    st.rerun()
 
 
 st.subheader("Upload an existing CV (optional)")
