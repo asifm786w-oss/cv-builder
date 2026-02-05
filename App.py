@@ -188,6 +188,109 @@ def tripwire_none_experience_keys():
 if st.session_state.get("debug_mode", False):
     tripwire_none_experience_keys()
 
+def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
+    # ... your existing personal details / skills / experience mapping ...
+
+    # -------------------------
+    # EDUCATION mapping
+    # -------------------------
+    edu_list = (
+        parsed.get("education")
+        or parsed.get("educations")
+        or parsed.get("education_history")
+        or []
+    )
+
+    if not isinstance(edu_list, list):
+        edu_list = []
+
+    # normalise + trim
+    cleaned = []
+    for e in edu_list:
+        if not isinstance(e, dict):
+            continue
+
+        degree = (e.get("degree") or e.get("qualification") or e.get("title") or "").strip()
+        institution = (e.get("institution") or e.get("school") or e.get("university") or "").strip()
+        location = (e.get("location") or e.get("city") or "").strip()
+
+        start = (e.get("start_date") or e.get("start") or "").strip()
+        end = (e.get("end_date") or e.get("end") or "").strip()
+
+        # keep if meaningful
+        if degree or institution:
+            cleaned.append(
+                {
+                    "degree": degree,
+                    "institution": institution,
+                    "location": location,
+                    "start": start,
+                    "end": end,
+                }
+            )
+
+    cleaned = cleaned[:max_edu]
+
+    # set row count (at least 1 so UI renders)
+    st.session_state["num_education"] = max(1, len(cleaned))
+
+    # write to the exact keys your UI uses
+    for i in range(st.session_state["num_education"]):
+        row = cleaned[i] if i < len(cleaned) else {}
+
+        st.session_state[f"degree_{i}"] = row.get("degree", "")
+        st.session_state[f"institution_{i}"] = row.get("institution", "")
+        st.session_state[f"edu_location_{i}"] = row.get("location", "")
+        st.session_state[f"edu_start_{i}"] = row.get("start", "")
+        st.session_state[f"edu_end_{i}"] = row.get("end", "")
+
+    # optional: keep a copy of parsed edu for debugging/exports
+    st.session_state["education_items"] = cleaned
+
+def _queue_cv_parse():
+    """
+    Schedule CV parsing to run on the next Streamlit rerun.
+    This avoids relying on transient button return values.
+    """
+    st.session_state["_do_cv_parse"] = True
+
+
+
+def _clear_education_persistence_for_new_cv():
+    for k in list(st.session_state.keys()):
+        if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
+            st.session_state.pop(k, None)
+
+    st.session_state.pop("num_education", None)
+    st.session_state.pop("education_items", None)
+
+    # ✅ IMPORTANT: this must match backup_education_state()
+    st.session_state.pop("_edu_backup", None)
+
+
+
+    st.subheader("Upload an existing CV (optional)")
+    st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
+
+    uploaded_cv = st.file_uploader(
+        "Upload your current CV (PDF, DOCX or TXT)",
+        type=["pdf", "docx", "txt"],
+        key="cv_uploader_main",  # unique key to avoid collisions
+    )
+
+    # No cooldown while testing (login + quota already protect this)
+    fill_clicked = locked_action_button(
+        "Fill the form from this CV (AI)",
+        key="btn_fill_from_cv",
+        feature_label="CV upload & parsing",
+        counter_key="upload_parses",
+        require_login=True,
+        default_tab="Sign in",
+        cooldown_name=None,
+        cooldown_seconds=0,
+    )
+
+
 
 def restore_experience_from_parsed():
     """Restore experience fields from last parsed CV if they went blank after reruns."""
@@ -2292,99 +2395,7 @@ def show_paywall(feature_label: str):
     )
 
 
-def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
-    # ... your existing personal details / skills / experience mapping ...
 
-    # -------------------------
-    # EDUCATION mapping
-    # -------------------------
-    edu_list = (
-        parsed.get("education")
-        or parsed.get("educations")
-        or parsed.get("education_history")
-        or []
-    )
-
-    if not isinstance(edu_list, list):
-        edu_list = []
-
-    # normalise + trim
-    cleaned = []
-    for e in edu_list:
-        if not isinstance(e, dict):
-            continue
-
-        degree = (e.get("degree") or e.get("qualification") or e.get("title") or "").strip()
-        institution = (e.get("institution") or e.get("school") or e.get("university") or "").strip()
-        location = (e.get("location") or e.get("city") or "").strip()
-
-        start = (e.get("start_date") or e.get("start") or "").strip()
-        end = (e.get("end_date") or e.get("end") or "").strip()
-
-        # keep if meaningful
-        if degree or institution:
-            cleaned.append(
-                {
-                    "degree": degree,
-                    "institution": institution,
-                    "location": location,
-                    "start": start,
-                    "end": end,
-                }
-            )
-
-    cleaned = cleaned[:max_edu]
-
-    # set row count (at least 1 so UI renders)
-    st.session_state["num_education"] = max(1, len(cleaned))
-
-    # write to the exact keys your UI uses
-    for i in range(st.session_state["num_education"]):
-        row = cleaned[i] if i < len(cleaned) else {}
-
-        st.session_state[f"degree_{i}"] = row.get("degree", "")
-        st.session_state[f"institution_{i}"] = row.get("institution", "")
-        st.session_state[f"edu_location_{i}"] = row.get("location", "")
-        st.session_state[f"edu_start_{i}"] = row.get("start", "")
-        st.session_state[f"edu_end_{i}"] = row.get("end", "")
-
-    # optional: keep a copy of parsed edu for debugging/exports
-    st.session_state["education_items"] = cleaned
-
-
-def _clear_education_persistence_for_new_cv():
-    for k in list(st.session_state.keys()):
-        if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
-            st.session_state.pop(k, None)
-
-    st.session_state.pop("num_education", None)
-    st.session_state.pop("education_items", None)
-
-    # ✅ IMPORTANT: this must match backup_education_state()
-    st.session_state.pop("_edu_backup", None)
-
-
-
-    st.subheader("Upload an existing CV (optional)")
-    st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
-
-    uploaded_cv = st.file_uploader(
-        "Upload your current CV (PDF, DOCX or TXT)",
-        type=["pdf", "docx", "txt"],
-        key="cv_uploader_main",  # unique key to avoid collisions
-    )
-
-    # No cooldown while testing (login + quota already protect this)
-    fill_clicked = locked_action_button(
-        "Fill the form from this CV (AI)",
-        key="btn_fill_from_cv",
-        feature_label="CV upload & parsing",
-        counter_key="upload_parses",
-        require_login=True,
-        default_tab="Sign in",
-        cooldown_name=None,
-        cooldown_seconds=0,
-    )
 
     if uploaded_cv is not None and fill_clicked:
         raw_text = _read_uploaded_cv_to_text(uploaded_cv)
