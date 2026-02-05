@@ -250,12 +250,6 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
     st.session_state["education_items"] = cleaned
 
 
-def _queue_cv_parse():
-    """
-    Schedule CV parsing to run on the next Streamlit rerun.
-    """
-    st.session_state["_do_cv_parse"] = True
-
 
 def _clear_education_persistence_for_new_cv():
     """
@@ -581,64 +575,7 @@ def locked_action_button(
     return True
 
 
-# -------------------------
-# CV upload (top-level, rerun-safe)
-# -------------------------
-uploaded_cv = st.file_uploader(
-    "Upload CV",
-    type=["pdf", "docx", "txt"],
-    key="cv_uploader",
-)
 
-st.button(
-    "AI Autofill from CV",
-    key="cv_autofill_btn",
-    on_click=_queue_cv_parse,
-    disabled=uploaded_cv is None,
-)
-
-if st.session_state.get("_do_cv_parse", False):
-    st.session_state["_do_cv_parse"] = False
-
-    if uploaded_cv is None:
-        st.warning("Please upload a CV first.")
-        st.stop()
-
-    raw_text = _read_uploaded_cv_to_text(uploaded_cv)
-    if not raw_text.strip():
-        st.warning("No readable text found in that file.")
-        st.stop()
-
-    cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
-    last_fp = st.session_state.get("_last_cv_fingerprint")
-
-    with st.spinner("Reading and analysing your CV..."):
-        parsed = extract_cv_data(raw_text)
-
-    if not isinstance(parsed, dict):
-        st.error("AI parser returned an unexpected format.")
-        st.stop()
-
-    is_new_cv = (cv_fp != last_fp)
-    if is_new_cv:
-        _reset_outputs_on_new_cv()
-        _clear_education_persistence_for_new_cv()
-        st.session_state["_last_cv_fingerprint"] = cv_fp
-
-    st.session_state["_skip_restore_education_once"] = True
-    _apply_parsed_cv_to_session(parsed)
-    backup_education_state()
-
-    st.session_state["_cv_parsed"] = parsed
-    st.session_state["_cv_autofill_enabled"] = True
-
-    st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if email_for_usage:
-        increment_usage(email_for_usage, "upload_parses")
-
-    st.success("Form fields updated from your CV. Scroll down to review and edit.")
-    st.rerun()
 
 
 # -------------------------
