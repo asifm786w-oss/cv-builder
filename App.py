@@ -608,6 +608,20 @@ def _read_uploaded_cv_to_text(uploaded_cv) -> str:
     # Unknown extension
     return ""
 
+def _clear_education_persistence_for_new_cv():
+    # remove education fields
+    for k in list(st.session_state.keys()):
+        if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
+            st.session_state.pop(k, None)
+
+    # remove education meta
+    st.session_state.pop("num_education", None)
+    st.session_state.pop("education_items", None)
+
+    # IMPORTANT: must match your backup function key
+    st.session_state.pop("_edu_backup", None)
+
+
 
 def locked_action_button(
     label: str,
@@ -662,8 +676,11 @@ def locked_action_button(
 def _queue_cv_parse():
     st.session_state["_do_cv_parse"] = True
 
-# --- widgets ---
-uploaded_cv = st.file_uploader("Upload CV", type=["pdf", "docx", "txt"], key="cv_uploader")
+uploaded_cv = st.file_uploader(
+    "Upload CV",
+    type=["pdf", "docx", "txt"],
+    key="cv_uploader",
+)
 
 st.button(
     "AI Autofill from CV",
@@ -672,9 +689,7 @@ st.button(
     disabled=uploaded_cv is None,
 )
 
-# --- action runner (rerun-safe) ---
 if st.session_state.get("_do_cv_parse", False):
-    # consume the flag immediately so it won't repeat on reruns
     st.session_state["_do_cv_parse"] = False
 
     if uploaded_cv is None:
@@ -699,7 +714,7 @@ if st.session_state.get("_do_cv_parse", False):
     is_new_cv = (cv_fp != last_fp)
     if is_new_cv:
         _reset_outputs_on_new_cv()
-        _clear_education_persistence_for_new_cv()
+        _clear_education_persistence_for_new_cv()   # ✅ now exists
         st.session_state["_last_cv_fingerprint"] = cv_fp
 
     st.session_state["_skip_restore_education_once"] = True
@@ -710,10 +725,12 @@ if st.session_state.get("_do_cv_parse", False):
     st.session_state["_cv_autofill_enabled"] = True
 
     st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-    increment_usage(user_email, "upload_parses")
+    if user_email:
+        increment_usage(user_email, "upload_parses")
 
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
+
 
 
 
