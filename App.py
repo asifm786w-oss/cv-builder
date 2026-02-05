@@ -519,42 +519,7 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 open_auth_modal("Create account")
                 st.rerun()
 
-def _apply_parsed_cv_to_session(parsed: dict):
-    """
-    Takes parsed CV data (dict) and writes it into st.session_state
-    so your form fields auto-fill.
 
-    Safe: only sets keys that exist in parsed.
-    """
-    if not isinstance(parsed, dict):
-        return
-
-    # Common patterns: parsed may contain nested dicts
-    # e.g. {"personal": {...}, "summary": "...", "skills": [...], ...}
-    # We'll support both flat and nested.
-
-    # 1) Flat keys directly -> session_state
-    for k, v in parsed.items():
-        if isinstance(v, (str, int, float, bool)) or v is None:
-            st.session_state[k] = v
-
-    # 2) Known nested sections (adjust names to match your extractor)
-    sections = ["personal", "contact", "education", "experience", "projects", "links"]
-    for sec in sections:
-        block = parsed.get(sec)
-        if isinstance(block, dict):
-            for k, v in block.items():
-                st.session_state[f"{sec}_{k}"] = v
-
-    # 3) Lists (skills, bullets, etc.) – store as-is
-    list_sections = ["skills", "certifications", "languages"]
-    for sec in list_sections:
-        if isinstance(parsed.get(sec), list):
-            st.session_state[sec] = parsed[sec]
-
-    # Flags your UI likely expects
-    st.session_state["_cv_parsed"] = parsed
-    st.session_state["_cv_autofill_enabled"] = True
 
 
 def _read_uploaded_cv_to_text(uploaded_cv) -> str:
@@ -608,18 +573,6 @@ def _read_uploaded_cv_to_text(uploaded_cv) -> str:
     # Unknown extension
     return ""
 
-def _clear_education_persistence_for_new_cv():
-    # remove education fields
-    for k in list(st.session_state.keys()):
-        if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
-            st.session_state.pop(k, None)
-
-    # remove education meta
-    st.session_state.pop("num_education", None)
-    st.session_state.pop("education_items", None)
-
-    # IMPORTANT: must match your backup function key
-    st.session_state.pop("_edu_backup", None)
 
 
 
@@ -673,8 +626,7 @@ def locked_action_button(
     return True
 
 
-def _queue_cv_parse():
-    st.session_state["_do_cv_parse"] = True
+
 
 uploaded_cv = st.file_uploader(
     "Upload CV",
