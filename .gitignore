@@ -1,5 +1,36 @@
-users.db
-.streamlit/secrets.toml
+# =====================
+# Python
+# =====================
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
 .env
+.venv/
+venv/
+env/
+
+# =====================
+# Streamlit
+# =====================
+.streamlit/secrets.toml
+
+# =====================
+# OS / Editor junk
+# =====================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# =====================
+# Logs / temp
+# =====================
 *.log
+*.tmp
+
+# =====================
+# Uploads / cache (if any)
+# =====================
+uploads/
+.cache/
