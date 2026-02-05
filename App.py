@@ -2323,26 +2323,6 @@ def show_paywall(feature_label: str):
     )
 
 
-st.subheader("Upload an existing CV (optional)")
-st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
-
-uploaded_cv = st.file_uploader(
-    "Upload your current CV (PDF, DOCX or TXT)",
-    type=["pdf", "docx", "txt"],
-    key="cv_uploader",
-)
-
-fill_clicked = locked_action_button(
-    "Fill the form from this CV (AI)",
-    key="btn_fill_from_cv",
-    feature_label="CV upload & parsing",
-    counter_key="upload_parses",
-    require_login=True,
-    default_tab="Sign in",
-    cooldown_name="upload_parse",
-    cooldown_seconds=5,
-)
-
 def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
     # ... your existing personal details / skills / experience mapping ...
 
