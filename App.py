@@ -1419,9 +1419,7 @@ section[data-testid="stSidebar"] > div {
 </style>
 """, unsafe_allow_html=True)
 
-# ---- SAFE USER EMAIL (GLOBAL) ----
-_current_user = st.session_state.get("user") or {}
-user_email = _current_user.get("email")  # None for guests
+
 
 # =========================
 # AUTH UI
@@ -1876,9 +1874,8 @@ if not is_logged_in:
 # ---- Safe guest placeholders ----
 
 # ✅ DEFINE THESE HERE (so they exist for everyone)
-user_email = current_user.get("email")
-is_admin = current_user.get("role") in {"owner", "admin"}
-
+user_email = (current_user or {}).get("email")  # None for guests
+is_admin = (current_user or {}).get("role") in {"owner", "admin"}
 
 
 
