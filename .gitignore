@@ -1,36 +1,32 @@
-# =====================
 # Python
-# =====================
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.env
-.venv/
-venv/
-env/
+*.egg-info/
+dist/
+build/
 
-# =====================
-# Streamlit
-# =====================
+# Env / secrets
+.env
+.env.*
+*.pem
+*.key
+secrets.toml
 .streamlit/secrets.toml
 
-# =====================
-# OS / Editor junk
-# =====================
+# Local DB / files
+*.db
+*.sqlite
+*.sqlite3
+
+# OS
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/
 
-# =====================
-# Logs / temp
-# =====================
+# Logs
 *.log
-*.tmp
 
-# =====================
-# Uploads / cache (if any)
-# =====================
-uploads/
-.cache/
+# IDE
+.vscode/
+.idea/
