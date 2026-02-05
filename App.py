@@ -1419,6 +1419,9 @@ section[data-testid="stSidebar"] > div {
 </style>
 """, unsafe_allow_html=True)
 
+# ---- SAFE USER EMAIL (GLOBAL) ----
+_current_user = st.session_state.get("user") or {}
+user_email = _current_user.get("email")  # None for guests
 
 # =========================
 # AUTH UI
