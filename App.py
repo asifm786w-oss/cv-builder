@@ -1894,50 +1894,17 @@ Please ensure your details are reviewed before downloading.
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+# =========================
+# CV Upload + AI Autofill (ONE block only)
+# =========================
+st.subheader("Upload an existing CV (optional)")
+st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
+
 def _safe_set(key: str, value):
     if isinstance(value, str):
         value = value.strip()
     if value:
         st.session_state[key] = value
-
-
-if uploaded_cv is not None and fill_clicked:
-    raw_text = _read_uploaded_cv_to_text(uploaded_cv)
-    if not raw_text.strip():
-        st.warning("No readable text found in that file.")
-        st.stop()
-
-    with st.spinner("Reading and analysing your CV..."):
-        parsed = extract_cv_data(raw_text)
-
-    if not isinstance(parsed, dict):
-        st.error("AI parser returned an unexpected format.")
-        st.stop()
-
-    # ✅ FORCE PERSONAL DETAILS (FIELD 1 FIX)
-    _safe_set("full_name", parsed.get("full_name") or parsed.get("name"))
-    _safe_set("email", parsed.get("email"))
-    _safe_set("phone", parsed.get("phone"))
-    _safe_set("location", parsed.get("location"))
-    _safe_set("professional_title", parsed.get("title") or parsed.get("professional_title"))
-    _safe_set("summary", parsed.get("summary") or parsed.get("professional_summary"))
-
-    _apply_parsed_cv_to_session(parsed)
-
-    st.session_state["_cv_parsed"] = parsed
-    st.session_state["_cv_autofill_enabled"] = True
-
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if email_for_usage:
-        st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-        increment_usage(email_for_usage, "upload_parses")
-
-    st.success("Form fields updated from your CV. Scroll down to review and edit.")
-    st.rerun()
-
-
-st.subheader("Upload an existing CV (optional)")
-st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
 uploaded_cv = st.file_uploader(
     "Upload your current CV (PDF, DOCX or TXT)",
@@ -1950,7 +1917,7 @@ fill_clicked = locked_action_button(
     key="btn_fill_from_cv",
     feature_label="CV upload & parsing",
     counter_key="upload_parses",
-    require_login=True,          # 🔒 blocks guests (cost control)
+    require_login=True,          # 🔒 blocks guests
     default_tab="Sign in",
     cooldown_name="upload_parse",
     cooldown_seconds=5,
@@ -1972,32 +1939,31 @@ if uploaded_cv is not None and fill_clicked:
         st.error("AI parser returned an unexpected format.")
         st.stop()
 
+    # reset on new CV
     if cv_fp != last_fp:
         _reset_outputs_on_new_cv()
         _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
 
-    # Apply parsed data
+    # ✅ apply parsed data
     _apply_parsed_cv_to_session(parsed)
 
-    # ✅ Force-fill the most common personal keys (fixes “Field 1 blank”)
-    def _safe_set(key: str, value):
-        if isinstance(value, str):
-            value = value.strip()
-        if value:
-            st.session_state[key] = value
-
+    # ✅ FORCE Personal details keys to match YOUR widgets
     _safe_set("full_name", parsed.get("full_name") or parsed.get("name"))
     _safe_set("email", parsed.get("email"))
     _safe_set("phone", parsed.get("phone"))
     _safe_set("location", parsed.get("location"))
-    _safe_set("professional_title", parsed.get("title") or parsed.get("professional_title"))
+
+    # IMPORTANT: your widget key is "title" (NOT professional_title)
+    _safe_set("title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
+
+    # summary box key is "summary"
     _safe_set("summary", parsed.get("summary") or parsed.get("professional_summary"))
 
     st.session_state["_cv_parsed"] = parsed
     st.session_state["_cv_autofill_enabled"] = True
 
-    # Usage counting (guarded)
+    # ✅ usage counting (only for logged-in users)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
     if email_for_usage:
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
@@ -2005,6 +1971,7 @@ if uploaded_cv is not None and fill_clicked:
 
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
+
 
 
 
