@@ -1956,54 +1956,63 @@ Please ensure your details are reviewed before downloading.
 
 
 
-    if uploaded_cv is not None and fill_clicked:
-        raw_text = _read_uploaded_cv_to_text(uploaded_cv)
-        if not raw_text.strip():
-            st.warning("No readable text found in that file.")
-            st.stop()
+st.subheader("Upload an existing CV (optional)")
+st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
-        cv_fp = hashlib.sha256(
-            raw_text.encode("utf-8", errors="ignore")
-        ).hexdigest()
+uploaded_cv = st.file_uploader(
+    "Upload your current CV (PDF, DOCX or TXT)",
+    type=["pdf", "docx", "txt"],
+    key="cv_uploader_main",
+)
 
-        last_fp = st.session_state.get("_last_cv_fingerprint")
+fill_clicked = locked_action_button(
+    "Fill the form from this CV (AI)",
+    key="btn_fill_from_cv",
+    feature_label="CV upload & parsing",
+    counter_key="upload_parses",
+    require_login=True,   # 🔒 blocks guests (cost control)
+    default_tab="Sign in",
+    cooldown_name=None,
+    cooldown_seconds=0,
+)
 
-        with st.spinner("Reading and analysing your CV..."):
-            parsed = extract_cv_data(raw_text)
-            if not isinstance(parsed, dict):
-                st.error("AI parser returned an unexpected format.")
-                st.stop()
+if uploaded_cv is not None and fill_clicked:
+    raw_text = _read_uploaded_cv_to_text(uploaded_cv)
+    if not raw_text.strip():
+        st.warning("No readable text found in that file.")
+        st.stop()
 
-            is_new_cv = (cv_fp != last_fp)
+    cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
+    last_fp = st.session_state.get("_last_cv_fingerprint")
 
-            if is_new_cv:
-                _reset_outputs_on_new_cv()
-                _clear_education_persistence_for_new_cv()
-                st.session_state["_last_cv_fingerprint"] = cv_fp
+    with st.spinner("Reading and analysing your CV..."):
+        parsed = extract_cv_data(raw_text)
 
-            # prevent restore_education_state() from overwriting parsed education
-            st.session_state["_skip_restore_education_once"] = True
+    if not isinstance(parsed, dict):
+        st.error("AI parser returned an unexpected format.")
+        st.stop()
 
-            # apply parsed data
-            _apply_parsed_cv_to_session(parsed)
+    is_new_cv = (cv_fp != last_fp)
+    if is_new_cv:
+        _reset_outputs_on_new_cv()
+        _clear_education_persistence_for_new_cv()
+        st.session_state["_last_cv_fingerprint"] = cv_fp
 
-            # snapshot education so reruns can't wipe it
-            backup_education_state()
+    st.session_state["_skip_restore_education_once"] = True
+    _apply_parsed_cv_to_session(parsed)
+    backup_education_state()
 
-            st.session_state["_cv_parsed"] = parsed
-            st.session_state["_cv_autofill_enabled"] = True
+    st.session_state["_cv_parsed"] = parsed
+    st.session_state["_cv_autofill_enabled"] = True
 
-            st.success(
-                "Form fields updated from your CV. Scroll down to review and edit."
-            )
-
-            st.session_state["upload_parses"] = (
-                st.session_state.get("upload_parses", 0) + 1
-            )
+    st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
 
     email_for_usage = (st.session_state.get("user") or {}).get("email")
     if email_for_usage:
         increment_usage(email_for_usage, "upload_parses")
+
+    st.success("Form fields updated from your CV. Scroll down to review
+
 
 
 
