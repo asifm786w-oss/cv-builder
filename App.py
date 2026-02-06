@@ -1954,10 +1954,6 @@ st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
 
-if some_condition:
-    st.session_state["_skip_restore_skills_once"] = True
-
-
 # ============================================================
 # POLICY SNAPSHOT / RESTORE (prevents fields vanishing on policy nav)
 # ============================================================
