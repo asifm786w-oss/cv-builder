@@ -2574,7 +2574,6 @@ import hashlib
 def _fingerprint(text: str) -> str:
     return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
 
-# Use the actual current text-area value (job_description)
 jd_fp = _fingerprint(job_description)
 last_jd_fp = st.session_state.get("_last_jd_fp")
 
@@ -2586,10 +2585,11 @@ if last_jd_fp and jd_fp != last_jd_fp:
 st.session_state["_last_jd_fp"] = jd_fp
 
 
-# --- AI cover letter ---
+# --- AI cover letter generation ---
 if ai_cover_letter_clicked:
     if not gate_premium("generate a cover letter"):
         st.stop()
+
     # ✅ Guard: must complete Section 1 first
     if not (full_name.strip() and email.strip()):
         st.warning(
@@ -2604,9 +2604,10 @@ if ai_cover_letter_clicked:
 
     # ✅ Quota check
     if not has_free_quota("cover_uses", 1, "AI cover letter"):
-        pass
-    else:
-        with st.spinner("Generating cover letter..."):
+        st.stop()
+
+    with st.spinner("Generating cover letter..."):
+        try:
             cover_input = {
                 "full_name": full_name,
                 "current_title": title,
@@ -2616,56 +2617,60 @@ if ai_cover_letter_clicked:
                 "location": location,
             }
 
-            # ✅ Always enforce JD limit for AI input (and keep it consistent)
             jd_limited = enforce_word_limit(
                 job_description,
                 MAX_DOC_WORDS,
                 label="Job description (AI input)",
             )
 
-            try:
-                job_summary = st.session_state.get("job_summary_ai", "") or ""
+            job_summary = st.session_state.get("job_summary_ai", "") or ""
 
-                cover_text = generate_cover_letter_ai(
-                    cover_input,
-                    jd_limited,
-                    job_summary,
-                )
+            cover_text = generate_cover_letter_ai(
+                cover_input,
+                jd_limited,
+                job_summary,
+            )
 
-                cleaned = clean_cover_letter_body(cover_text)
+            cleaned = clean_cover_letter_body(cover_text)
 
-                final_letter = enforce_word_limit(
-                    cleaned,
-                    MAX_LETTER_WORDS,
-                    label="cover letter",
-                )
+            final_letter = enforce_word_limit(
+                cleaned,
+                MAX_LETTER_WORDS,
+                label="cover letter",
+            )
 
-                st.session_state["cover_letter"] = final_letter
-                st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
-                email_for_usage = (st.session_state.get("user") or {}).get("email")
-                if email_for_usage:
-                    increment_usage(email_for_usage, "cover_uses")
+            # ✅ Set BOTH keys BEFORE rendering the widget (no `value=` on widget)
+            st.session_state["cover_letter"] = final_letter
+            st.session_state["cover_letter_box"] = final_letter
 
-                st.success(
-                    "AI cover letter generated below. "
-                    "You can edit it before downloading."
-                )
+            st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
+            email_for_usage = (st.session_state.get("user") or {}).get("email")
+            if email_for_usage:
+                increment_usage(email_for_usage, "cover_uses")
 
-            except Exception as e:
-                st.error(f"AI error (cover letter): {e}")
+            st.success(
+                "AI cover letter generated below. You can edit it before downloading."
+            )
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"AI error (cover letter): {e}")
 
 
-if "cover_letter" not in st.session_state:
-    st.session_state["cover_letter"] = ""
+# --- Cover letter editor + downloads ---
+st.session_state.setdefault("cover_letter", "")
 
 if st.session_state["cover_letter"]:
     st.subheader("✏️ Cover letter")
+
+    # ✅ Widget reads from session_state via key; DO NOT pass `value=`
     edited = st.text_area(
         "You can edit this before using it:",
-        value=st.session_state["cover_letter"],
-        height=260,
         key="cover_letter_box",
+        height=260,
     )
+
+    # keep canonical value in sync
     st.session_state["cover_letter"] = edited
 
     try:
@@ -2698,14 +2703,12 @@ if st.session_state["cover_letter"]:
                 label="📝 Download cover letter as Word (.docx)",
                 data=letter_docx,
                 file_name="cover_letter.docx",
-                mime=(
-                    "application/vnd.openxmlformats-"
-                    "officedocument.wordprocessingml.document"
-                ),
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
     except Exception as e:
         st.error(f"Error generating cover letter files: {e!r}")
+
 
 
 # -------------------------
