@@ -2861,7 +2861,7 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
-===========================================================
+# ==============================================
 # FOOTER POLICY BUTTONS (snapshot before navigate)
 # ============================================================
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
