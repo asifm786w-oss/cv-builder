@@ -1953,6 +1953,11 @@ Please ensure your details are reviewed before downloading.
 st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
+
+if some_condition:
+    st.session_state["_skip_restore_skills_once"] = True
+
+
 # ============================================================
 # POLICY SNAPSHOT / RESTORE (prevents fields vanishing on policy nav)
 # ============================================================
@@ -2060,11 +2065,7 @@ if uploaded_cv is not None and fill_clicked:
     if email_for_usage:
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
         increment_usage(email_for_usage, "upload_parses")
-    
-	st.session_state["_skip_restore_skills_once"] = True
-    st.session_state["_skip_restore_personal_once"] = True  # keep this too if you already added it
-
-	
+   
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
 
