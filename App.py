@@ -1846,42 +1846,35 @@ with st.sidebar:
 
     if not sidebar_logged_in:
         st.markdown(
-            '<div class="sb-muted">Sign in to get your referral code + link.</div>',
+            '<div class="sb-muted">Sign in to get your referral code.</div>',
             unsafe_allow_html=True,
         )
     else:
         email = (session_user or {}).get("email")
 
-        # ✅ ensure referral code exists (creates + saves if missing)
+        # Ensure referral code exists
         ref_code = (session_user or {}).get("referral_code")
         if not ref_code and email:
             ref_code = ensure_referral_code(email)
             st.session_state["user"]["referral_code"] = ref_code
-            session_user = st.session_state["user"]  # refresh local copy
+            session_user = st.session_state["user"]
 
         ref_count = int((session_user or {}).get("referrals_count", 0) or 0)
         ref_count = min(ref_count, REFERRAL_CAP)
 
         st.markdown(f"**Referrals:** {ref_count} / {REFERRAL_CAP}")
-        st.caption(f"+{BONUS_PER_REFERRAL_CV} CV & +{BONUS_PER_REFERRAL_AI} AI per referral (cap {REFERRAL_CAP})")
+        st.caption(
+            f"+{BONUS_PER_REFERRAL_CV} CV & +{BONUS_PER_REFERRAL_AI} AI per referral"
+        )
 
-        # ✅ show the code (this is what you wanted)
         if ref_code:
             st.markdown("**Your referral code:**")
             st.code(ref_code, language="text")
         else:
             st.warning("Referral code not available yet. Refresh or re-login.")
 
-        # ✅ show the link only if we have BOTH app_url and code
-        app_url = (os.getenv("APP_URL") or "").rstrip("/")
-        if app_url and ref_code:
-            share_url = f"{app_url}/?ref={ref_code}"
-            st.markdown("**Your referral link:**")
-            st.code(share_url, language="text")
-        elif not app_url:
-            st.caption("Set APP_URL in Railway/ENV to show a full referral link.")
-
     st.markdown("</div>", unsafe_allow_html=True)
+
 
 
     # ---------- Help ----------
