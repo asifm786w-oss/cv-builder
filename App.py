@@ -58,7 +58,7 @@ st.set_page_config(
 )
 
 
-st.set_page_config(layout="wide")
+st.set_page_config(layout="centered")
 
 st.markdown(
     """
@@ -71,7 +71,7 @@ st.markdown(
             display: none !important;
         }
 
-        /* Reduce Streamlit padding */
+        /* Reduce Streamlit padding on mobile */
         section[data-testid="stMain"] > div {
             padding-left: 0.75rem !important;
             padding-right: 0.75rem !important;
@@ -84,7 +84,7 @@ st.markdown(
             padding-right: 0.75rem !important;
         }
 
-        /* Full-width inputs & buttons */
+        /* Full-width inputs & buttons on mobile */
         input, textarea, button {
             width: 100% !important;
         }
@@ -97,6 +97,7 @@ st.markdown(
     """,
     unsafe_allow_html=True
 )
+
 
 
 
