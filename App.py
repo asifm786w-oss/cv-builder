@@ -58,6 +58,48 @@ st.set_page_config(
 )
 
 
+st.set_page_config(layout="wide")
+
+st.markdown(
+    """
+    <style>
+    /* ===== Mobile layout fixes ===== */
+    @media (max-width: 768px) {
+
+        /* Hide the marketing rail on phones */
+        #mulyba-rail {
+            display: none !important;
+        }
+
+        /* Reduce Streamlit padding */
+        section[data-testid="stMain"] > div {
+            padding-left: 0.75rem !important;
+            padding-right: 0.75rem !important;
+            padding-top: 0.75rem !important;
+        }
+
+        .block-container {
+            max-width: 100% !important;
+            padding-left: 0.75rem !important;
+            padding-right: 0.75rem !important;
+        }
+
+        /* Full-width inputs & buttons */
+        input, textarea, button {
+            width: 100% !important;
+        }
+
+        h1 { font-size: 1.8rem !important; }
+        h2 { font-size: 1.4rem !important; }
+        h3 { font-size: 1.15rem !important; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
+
+
 # -------------------------
 # INIT (run once)
 # -------------------------
