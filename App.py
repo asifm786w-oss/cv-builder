@@ -158,31 +158,43 @@ def render_auth_modal_if_open():
 
 def restore_skills_state():
     """
-    If skills_text became None/blank after a rerun, restore from:
-    1) last backup (most recent user/AI version)
-    2) parsed CV (if available)
+    Restore skills_text only when it is missing/blank.
+    Skips restoring during CV autofill/policy-return transitions to avoid stomping state.
     """
+
+    # If we just autofilled or just returned from policy, don't touch skills this run.
+    if st.session_state.get("_skip_restore_skills_once"):
+        st.session_state["_skip_restore_skills_once"] = False
+        return
+
     val = st.session_state.get("skills_text")
 
-    if val is None or (isinstance(val, str) and not val.strip()):
-        backup = st.session_state.get("_skills_backup")
-        if isinstance(backup, str) and backup.strip():
-            st.session_state["skills_text"] = backup
+    # Only restore if empty/None
+    if not (val is None or (isinstance(val, str) and not val.strip())):
+        return
+
+    # 1) last backup (most recent user/AI version)
+    backup = st.session_state.get("_skills_backup")
+    if isinstance(backup, str) and backup.strip():
+        st.session_state["skills_text"] = backup
+        return
+
+    # 2) parsed CV (if available)
+    parsed = st.session_state.get("_cv_parsed")
+    if isinstance(parsed, dict):
+        skills_data = parsed.get("skills")
+        if isinstance(skills_data, list) and skills_data:
+            merged = ", ".join(str(s).strip() for s in skills_data if str(s).strip())
+            if merged.strip():
+                st.session_state["skills_text"] = merged
+                return
+        elif isinstance(skills_data, str) and skills_data.strip():
+            st.session_state["skills_text"] = skills_data.strip()
             return
 
-        parsed = st.session_state.get("_cv_parsed")
-        if isinstance(parsed, dict):
-            skills_data = parsed.get("skills")
-            if isinstance(skills_data, list) and skills_data:
-                st.session_state["skills_text"] = ", ".join(
-                    [str(s).strip() for s in skills_data if str(s).strip()]
-                )
-                return
-            if isinstance(skills_data, str) and skills_data.strip():
-                st.session_state["skills_text"] = skills_data.strip()
-                return
+    # If nothing to restore, leave it empty (don't invent defaults)
+    st.session_state["skills_text"] = ""
 
-        st.session_state["skills_text"] = ""
 
 
 def normalize_skills_state():
@@ -1941,10 +1953,50 @@ Please ensure your details are reviewed before downloading.
 st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
+# ============================================================
+# POLICY SNAPSHOT / RESTORE (prevents fields vanishing on policy nav)
+# ============================================================
+
+FORM_KEYS_TO_SNAPSHOT = [
+    # Section 1
+    "full_name", "title", "email", "phone", "location", "summary",
+
+    # Skills / Experience / Education
+    "skills_text", "num_experiences", "parsed_num_experiences", "num_education",
+
+    # Target Job / Outputs
+    "job_description", "job_summary_ai", "cover_letter", "cover_letter_box",
+
+    # Any other things you KNOW you want preserved:
+    "template_label", "references",
+]
+
+def snapshot_form_state() -> None:
+    snap = {}
+    for k in FORM_KEYS_TO_SNAPSHOT:
+        if k in st.session_state:
+            snap[k] = st.session_state.get(k)
+    st.session_state["_form_snapshot"] = snap
+
+def restore_form_state() -> None:
+    snap = st.session_state.get("_form_snapshot") or {}
+    for k, v in snap.items():
+        # Only restore if key is missing OR currently empty/None
+        cur = st.session_state.get(k, None)
+        if cur is None or (isinstance(cur, str) and not cur.strip()):
+            st.session_state[k] = v
+
+
+# ============================================================
+# CV Upload + AI Autofill (ONE block only)
+# ============================================================
+st.subheader("Upload an existing CV (optional)")
+st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
+
 def _safe_set(key: str, value):
     if isinstance(value, str):
         value = value.strip()
-    if value:
+    if value is not None and (not isinstance(value, str) or value.strip()):
         st.session_state[key] = value
 
 uploaded_cv = st.file_uploader(
@@ -1986,7 +2038,7 @@ if uploaded_cv is not None and fill_clicked:
         _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
 
-    # ✅ apply parsed data
+    # ✅ Apply parsed data (your existing function)
     _apply_parsed_cv_to_session(parsed)
 
     # ✅ FORCE Personal details keys to match YOUR widgets
@@ -1994,41 +2046,58 @@ if uploaded_cv is not None and fill_clicked:
     _safe_set("email", parsed.get("email"))
     _safe_set("phone", parsed.get("phone"))
     _safe_set("location", parsed.get("location"))
-
-    # IMPORTANT: your widget key is "title" (NOT professional_title)
     _safe_set("title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
-
-    # summary box key is "summary"
     _safe_set("summary", parsed.get("summary") or parsed.get("professional_summary"))
 
+    # ✅ Flags so restore/default logic can’t wipe after rerun
     st.session_state["_cv_parsed"] = parsed
     st.session_state["_cv_autofill_enabled"] = True
+    st.session_state["_just_autofilled_from_cv"] = True
+    st.session_state["_skip_restore_personal_once"] = True  # << important
 
     # ✅ usage counting (only for logged-in users)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
     if email_for_usage:
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
         increment_usage(email_for_usage, "upload_parses")
+    
+	st.session_state["_skip_restore_skills_once"] = True
+    st.session_state["_skip_restore_personal_once"] = True  # keep this too if you already added it
 
+	
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
 
 
+# ============================================================
+# RESTORE GUARDS (stop restore funcs from wiping new data)
+# ============================================================
 
+# If we just came back from policy, restore snapshot FIRST (then continue)
+if st.session_state.pop("_just_returned_from_policy", False):
+    restore_form_state()
 
+# If we just autofilled from CV, DO NOT run restore_* that might overwrite fields
+just_autofilled = st.session_state.pop("_just_autofilled_from_cv", False)
 
-restore_skills_state()
+# Your existing restore skills calls should NOT run when just_autofilled
+if not just_autofilled:
+    restore_skills_state()
+
 backup_skills_state()
+
+
 # -------------------------
 # 1. Personal details
 # -------------------------
 st.header("1. Personal details")
 
+# (Optional) If you have any “defaults” for personal fields elsewhere, do NOT set them here.
+
 full_name = st.text_input("Full name *", key="full_name")
 title = st.text_input("Professional title (e.g. Software Engineer)", key="title")
 email = st.text_input("Email *", key="email")
 phone = st.text_input("Phone", key="phone")
-
 location = st.text_input("Location (City, Country)", key="location")
 
 # --- Apply staged summary BEFORE widget renders ---
@@ -2038,10 +2107,8 @@ if "summary_pending" in st.session_state:
 summary_text = st.text_area("Professional summary", height=120, key="summary")
 st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
 
-btn_summary = st.button(
-    "Improve professional summary (AI)",
-    key="btn_improve_summary",
-)
+btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
+# ... keep your existing AI summary handler below ...
 
 if btn_summary:
     if not gate_premium("improve your professional summary"):
@@ -2793,22 +2860,29 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
+===========================================================
+# FOOTER POLICY BUTTONS (snapshot before navigate)
+# ============================================================
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
+        snapshot_form_state()
         st.session_state["policy_view"] = "accessibility"
         st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
+        snapshot_form_state()
         st.session_state["policy_view"] = "cookies"
         st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
+        snapshot_form_state()
         st.session_state["policy_view"] = "privacy"
         st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
+        snapshot_form_state()
         st.session_state["policy_view"] = "terms"
         st.rerun()
