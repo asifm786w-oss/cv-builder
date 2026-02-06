@@ -1840,6 +1840,46 @@ with st.sidebar:
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # ---------- Referrals ----------
+    st.markdown('<div class="sb-card">', unsafe_allow_html=True)
+    st.markdown("### 🎁 Referrals")
+
+    if not sidebar_logged_in:
+        st.markdown("Sign in to get your referral link.")
+    else:
+        ref_code = (session_user or {}).get("referral_code")
+
+        if not ref_code:
+            ref_code = ensure_referral_code(session_user["email"])
+            st.session_state["user"]["referral_code"] = ref_code
+            session_user["referral_code"] = ref_code
+
+        base_url = os.getenv("APP_URL", "").rstrip("/")
+
+        if base_url:
+            ref_link = f"{base_url}/?ref={ref_code}"
+            st.text_input(
+                "Your referral link",
+                value=ref_link,
+                disabled=True,
+            )
+        else:
+            st.text_input(
+                "Your referral code",
+                value=ref_code,
+                disabled=True,
+            )
+
+        ref_count = int((session_user or {}).get("referrals_count", 0) or 0)
+        ref_count = min(ref_count, REFERRAL_CAP)
+
+        st.caption(
+            f"Referrals: {ref_count}/{REFERRAL_CAP}  •  "
+            f"+{BONUS_PER_REFERRAL_CV} CV & +{BONUS_PER_REFERRAL_AI} AI per referral"
+        )
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
     # ---------- Help ----------
     st.markdown('<div class="sb-card">', unsafe_allow_html=True)
     st.markdown("### 📘 Help")
@@ -1991,8 +2031,6 @@ def restore_form_state() -> None:
 # ============================================================
 # CV Upload + AI Autofill (ONE block only)
 # ============================================================
-st.subheader("Upload an existing CV (optional)")
-st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
 def _safe_set(key: str, value):
     if isinstance(value, str):
