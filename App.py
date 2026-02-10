@@ -1578,6 +1578,35 @@ def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
 
     return True
 
+def decrement_user_credits(email: str, cv_delta: int = 0, ai_delta: int = 0) -> dict:
+    cv_delta = int(cv_delta or 0)
+    ai_delta = int(ai_delta or 0)
+
+    if cv_delta < 0 or ai_delta < 0:
+        raise ValueError("Deltas must be >= 0")
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE users
+            SET
+                cv_credits = cv_credits - %s,
+                ai_credits = ai_credits - %s
+            WHERE email = %s
+              AND cv_credits >= %s
+              AND ai_credits >= %s
+            RETURNING cv_credits, ai_credits
+            """,
+            (cv_delta, ai_delta, email, cv_delta, ai_delta),
+        )
+        row = cur.fetchone()
+        conn.commit()
+
+    if not row:
+        return {"cv": 0, "ai": 0}
+
+    return {"cv": int(row[0]), "ai": int(row[1])}
 
 # =========================
 # ROUTING (preview-first)
@@ -2251,7 +2280,7 @@ if btn_summary:
         if not summary_text.strip():
             st.error("Please write a professional summary first.")
         elif not has_free_quota("summary_uses", 1, "AI professional summary"):
-            pass
+            st.stop()
         else:
             with st.spinner("Improving your professional summary..."):
                 try:
@@ -2324,7 +2353,7 @@ if btn_skills:
     if not skills_text.strip():
         st.warning("Please add some skills first.")
     elif not has_free_quota("bullets_uses", 1, "AI skills improvement"):
-        pass
+        st.stop()
     else:
         with st.spinner("Improving your skills..."):
             try:
@@ -2633,7 +2662,7 @@ if job_summary_clicked:
 
     # ✅ Quota check
     if not has_free_quota("job_summary_uses", 1, "AI job summary"):
-        pass
+        st.stop()
     else:
         with st.spinner("Generating AI job summary..."):
             try:
@@ -2660,153 +2689,6 @@ if job_summary_clicked:
             except Exception as e:
                 st.error(f"AI error (job summary): {e}")
 
-job_summary_text = st.session_state.get("job_summary_ai", "")
-if job_summary_text:
-    st.markdown("**AI job summary for this role (read-only):**")
-    st.write(job_summary_text)
-
-
-# --- AI cover letter ---
-# ✅ JD fingerprint clearing: if JD changes, clear derived outputs
-import hashlib
-
-def _fingerprint(text: str) -> str:
-    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
-
-jd_fp = _fingerprint(job_description)
-last_jd_fp = st.session_state.get("_last_jd_fp")
-
-if last_jd_fp and jd_fp != last_jd_fp:
-    st.session_state.pop("job_summary_ai", None)
-    st.session_state.pop("cover_letter", None)
-    st.session_state.pop("cover_letter_box", None)
-
-st.session_state["_last_jd_fp"] = jd_fp
-
-
-# --- AI cover letter generation ---
-if ai_cover_letter_clicked:
-    if not gate_premium("generate a cover letter"):
-        st.stop()
-
-    # ✅ Guard: must complete Section 1 first
-    if not (full_name.strip() and email.strip()):
-        st.warning(
-            "Complete Section 1 (Full name + Email) first — these are automatically added to your cover letter."
-        )
-        st.stop()
-
-    # ✅ Guard: need a job description
-    if not job_description.strip():
-        st.error("Please paste a job description first.")
-        st.stop()
-
-    # ✅ Quota check
-    if not has_free_quota("cover_uses", 1, "AI cover letter"):
-        st.stop()
-
-    with st.spinner("Generating cover letter..."):
-        try:
-            cover_input = {
-                "full_name": full_name,
-                "current_title": title,
-                "skills": skills,
-                "experiences": [exp.dict() for exp in experiences],
-                "education": st.session_state.get("education_items", []),
-                "location": location,
-            }
-
-            jd_limited = enforce_word_limit(
-                job_description,
-                MAX_DOC_WORDS,
-                label="Job description (AI input)",
-            )
-
-            job_summary = st.session_state.get("job_summary_ai", "") or ""
-
-            cover_text = generate_cover_letter_ai(
-                cover_input,
-                jd_limited,
-                job_summary,
-            )
-
-            cleaned = clean_cover_letter_body(cover_text)
-
-            final_letter = enforce_word_limit(
-                cleaned,
-                MAX_LETTER_WORDS,
-                label="cover letter",
-            )
-
-            # ✅ Set BOTH keys BEFORE rendering the widget (no `value=` on widget)
-            st.session_state["cover_letter"] = final_letter
-            st.session_state["cover_letter_box"] = final_letter
-
-            st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
-            email_for_usage = (st.session_state.get("user") or {}).get("email")
-            if email_for_usage:
-                increment_usage(email_for_usage, "cover_uses")
-
-            st.success(
-                "AI cover letter generated below. You can edit it before downloading."
-            )
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"AI error (cover letter): {e}")
-
-
-# --- Cover letter editor + downloads ---
-st.session_state.setdefault("cover_letter", "")
-
-if st.session_state["cover_letter"]:
-    st.subheader("✏️ Cover letter")
-
-    # ✅ Widget reads from session_state via key; DO NOT pass `value=`
-    edited = st.text_area(
-        "You can edit this before using it:",
-        key="cover_letter_box",
-        height=260,
-    )
-
-    # keep canonical value in sync
-    st.session_state["cover_letter"] = edited
-
-    try:
-        letter_pdf = render_cover_letter_pdf_bytes(
-            full_name=full_name or "Candidate",
-            letter_body=st.session_state["cover_letter"],
-            location=location or "",
-            email=email or "",
-            phone=phone or "",
-        )
-
-        letter_docx = render_cover_letter_docx_bytes(
-            full_name=full_name or "Candidate",
-            letter_body=st.session_state["cover_letter"],
-            location=location or "",
-            email=email or "",
-            phone=phone or "",
-        )
-
-        col_d11, col_d12 = st.columns(2)
-        with col_d11:
-            st.download_button(
-                label="📄 Download cover letter as PDF",
-                data=letter_pdf,
-                file_name="cover_letter.pdf",
-                mime="application/pdf",
-            )
-        with col_d12:
-            st.download_button(
-                label="📝 Download cover letter as Word (.docx)",
-                data=letter_docx,
-                file_name="cover_letter.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-
-    except Exception as e:
-        st.error(f"Error generating cover letter files: {e!r}")
 
 
 
