@@ -340,7 +340,10 @@ def get_user_credits(email: str) -> dict:
 
         cur.execute(
             """
-            SELECT cv_credits, ai_credits
+            SELECT
+                cv_credits,
+                ai_credits,
+                COALESCE(starter_credits_granted, FALSE)
             FROM users
             WHERE email = %s
             """,
@@ -348,19 +351,40 @@ def get_user_credits(email: str) -> dict:
         )
         row = cur.fetchone()
 
+        # If user does not exist yet, create them with starter credits
         if row is None:
             cur.execute(
                 """
-                INSERT INTO users (email, plan, cv_credits, ai_credits)
-                VALUES (%s, 'free', 5, 5)
+                INSERT INTO users (email, plan, cv_credits, ai_credits, starter_credits_granted)
+                VALUES (%s, 'free', 5, 5, TRUE)
                 """,
                 (email,),
             )
             conn.commit()
             return {"cv": 5, "ai": 5}
 
-        cv, ai = row
-        return {"cv": int(cv or 0), "ai": int(ai or 0)}
+        cv, ai, starter_granted = row
+        cv = int(cv or 0)
+        ai = int(ai or 0)
+
+        # If row exists but starter credits never granted, grant once
+        if not starter_granted:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    cv_credits = GREATEST(COALESCE(cv_credits, 0), 5),
+                    ai_credits = GREATEST(COALESCE(ai_credits, 0), 5),
+                    starter_credits_granted = TRUE
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            conn.commit()
+            return {"cv": max(cv, 5), "ai": max(ai, 5)}
+
+        return {"cv": cv, "ai": ai}
+
 
 
 
