@@ -324,6 +324,16 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
 
     st.session_state["education_items"] = cleaned
 
+def get_user_credits(email: str) -> dict:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COALESCE(cv_credits,0), COALESCE(ai_credits,0) FROM users WHERE email=%s",
+            (email,),
+        )
+        row = cur.fetchone() or (0, 0)
+        return {"cv": int(row[0]), "ai": int(row[1])}
+
 
 
 def _clear_education_persistence_for_new_cv():
@@ -653,6 +663,31 @@ def locked_action_button(
     return True
 
 
+def increment_usage(email: str, counter_key: str, cost: int = 1) -> None:
+    cost = int(cost)
+
+    # Decide which credit bucket to burn
+    if counter_key in CV_USAGE_KEYS:
+        bucket_col = "cv_credits"
+    else:
+        bucket_col = "ai_credits"
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # Increment usage counter AND decrement credits atomically
+        cur.execute(
+            f"""
+            UPDATE users
+            SET
+                {counter_key} = COALESCE({counter_key}, 0) + %s,
+                {bucket_col} = GREATEST(COALESCE({bucket_col}, 0) - %s, 0)
+            WHERE email = %s
+            """,
+            (cost, cost, email),
+        )
+
+        conn.commit()
 
 
 
@@ -1432,35 +1467,6 @@ def render_public_home() -> None:
         unsafe_allow_html=True,
     )
 
-# =========================
-# PLAN + REFERRAL CONFIG (define ONCE)
-# =========================
-REFERRAL_CAP = 10
-BONUS_PER_REFERRAL_CV = 5
-BONUS_PER_REFERRAL_AI = 5
-
-PLAN_LIMITS = {
-    "free": {"cv": 5, "ai": 5},
-    "monthly": {"cv": 20, "ai": 30},
-    "pro": {"cv": 50, "ai": 90},
-    "one_time": {"cv": 40, "ai": 60},
-    "yearly": {"cv": 300, "ai": 600},
-    "premium": {"cv": 5000, "ai": 10000},
-    "enterprise": {"cv": 5000, "ai": 10000},
-}
-
-# IMPORTANT: upload_parses counts as AI usage (NOT free)
-AI_USAGE_KEYS = {"summary_uses", "cover_uses", "bullets_uses", "job_summary_uses", "upload_parses"}
-CV_USAGE_KEYS = {"cv_generations"}
-
-USAGE_KEYS_DEFAULTS = {
-    "upload_parses": 0,
-    "summary_uses": 0,
-    "cover_uses": 0,
-    "bullets_uses": 0,
-    "cv_generations": 0,
-    "job_summary_uses": 0,
-}
 
 # =========================
 # PAYWALL + QUOTA HELPERS
@@ -1489,39 +1495,35 @@ def show_paywall(feature_label: str) -> None:
 def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
     u = st.session_state.get("user") or {}
 
-    # No free roamers (you said uploads cost money)
+    # 🔒 Block guests (cost-control requirement)
     if not (isinstance(u, dict) and u.get("email")):
         st.warning(f"Sign in to use {feature_label}.")
         return False
 
+    # 👑 Owner / admin unlimited
     if u.get("role") in {"owner", "admin"}:
         return True
 
-    plan = (u.get("plan") or "free").strip()
-    plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+    email = u.get("email")
 
-    referrals = min(int(u.get("referrals_count", 0) or 0), REFERRAL_CAP)
+    # 🔎 Fetch remaining credits
+    credits = get_user_credits(email)
 
+    # Decide which bucket this feature uses
     if counter_key in CV_USAGE_KEYS:
-        base_limit = plan_limits["cv"]
-        bucket_keys = CV_USAGE_KEYS
-        bonus = referrals * BONUS_PER_REFERRAL_CV
+        bucket = "cv"
     else:
-        base_limit = plan_limits["ai"]
-        bucket_keys = AI_USAGE_KEYS
-        bonus = referrals * BONUS_PER_REFERRAL_AI
+        bucket = "ai"
 
-    if base_limit is None:
-        return True
+    required = int(cost)
+    remaining = int(credits.get(bucket, 0))
 
-    effective_limit = int(base_limit + bonus)
-    used = int(sum(st.session_state.get(k, 0) or 0 for k in bucket_keys))
-
-    if used + int(cost) > effective_limit:
+    if remaining < required:
         show_paywall(feature_label)
         return False
 
     return True
+
 
 # =========================
 # ROUTING (preview-first)
@@ -1573,7 +1575,6 @@ else:
 
 # Consent gate for logged-in users only
 show_consent_gate()
-
 # =========================
 # Referral code (ONLY when logged in)
 # =========================
@@ -1841,47 +1842,48 @@ with st.sidebar:
     st.markdown("### 📊 Usage")
 
     if not sidebar_logged_in:
-        cv_left, cv_total = 5, 5
-        ai_left, ai_total = 5, 5
+        # Guest preview only (doesn't cost you anything)
+        st.markdown("**CV Remaining:** 0")
+        st.progress(0)
+        st.markdown("**AI Remaining:** 0")
+        st.progress(0)
+        st.caption("Sign in to buy credits and unlock downloads + AI tools.")
     else:
-        referrals = min(int(session_user.get("referrals_count", 0) or 0), REFERRAL_CAP)
-        plan = session_user.get("plan", "free")
-        plan_limits = PLAN_LIMITS.get(plan, PLAN_LIMITS["free"])
+        # Owner/admin = unlimited
+        if sidebar_role in {"owner", "admin"}:
+            st.markdown("**CV Generations:** ♾️ Unlimited")
+            st.markdown("**AI Tools:** ♾️ Unlimited")
+        else:
+            email = (session_user or {}).get("email") or ""
+            credits = get_user_credits(email)
 
-        base_cv = None if sidebar_role in {"owner", "admin"} else plan_limits["cv"]
-        base_ai = None if sidebar_role in {"owner", "admin"} else plan_limits["ai"]
+            cv_left = int(credits.get("cv", 0))
+            ai_left = int(credits.get("ai", 0))
 
-        used_cv = int(st.session_state.get("cv_generations", 0) or 0)
-        used_ai = int(
-            (st.session_state.get("summary_uses", 0) or 0)
-            + (st.session_state.get("cover_uses", 0) or 0)
-            + (st.session_state.get("bullets_uses", 0) or 0)
-            + (st.session_state.get("job_summary_uses", 0) or 0)
-            + (st.session_state.get("upload_parses", 0) or 0)
-        )
+            # Optional: show a “session progress” bar (not lifetime).
+            used_cv_session = int(st.session_state.get("cv_generations", 0) or 0)
+            used_ai_session = int(
+                (st.session_state.get("summary_uses", 0) or 0)
+                + (st.session_state.get("cover_uses", 0) or 0)
+                + (st.session_state.get("bullets_uses", 0) or 0)
+                + (st.session_state.get("job_summary_uses", 0) or 0)
+                + (st.session_state.get("upload_parses", 0) or 0)
+            )
 
-        bonus_cv = referrals * BONUS_PER_REFERRAL_CV
-        bonus_ai = referrals * BONUS_PER_REFERRAL_AI
+            # For progress bars we need a “total”. Use credits at login/session as baseline.
+            cv_total_session = max(cv_left + used_cv_session, 1)
+            ai_total_session = max(ai_left + used_ai_session, 1)
 
-        cv_total = float("inf") if base_cv is None else base_cv + bonus_cv
-        ai_total = float("inf") if base_ai is None else base_ai + bonus_ai
+            st.markdown(f"**CV Remaining:** {cv_left}")
+            st.progress(cv_left / cv_total_session)
 
-        cv_left = cv_total if base_cv is None else max(cv_total - used_cv, 0)
-        ai_left = ai_total if base_ai is None else max(ai_total - used_ai, 0)
+            st.markdown(f"**AI Remaining:** {ai_left}")
+            st.progress(ai_left / ai_total_session)
 
-    if cv_total == float("inf"):
-        st.markdown("**CV Generations:** ♾️ Unlimited")
-    else:
-        st.markdown(f"**CV Remaining:** {cv_left}")
-        st.progress(cv_left / cv_total if cv_total else 0)
-
-    if ai_total == float("inf"):
-        st.markdown("**AI Tools:** ♾️ Unlimited")
-    else:
-        st.markdown(f"**AI Remaining:** {ai_left}")
-        st.progress(ai_left / ai_total if ai_total else 0)
+            st.caption("Credits stack when you repurchase. No monthly reset.")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
 
     # ---------- Referrals ----------
     st.markdown('<div class="sb-card">', unsafe_allow_html=True)
@@ -2882,7 +2884,7 @@ if generate_clicked:
 
 
 # -------------------------
-# Pricing
+# Pricing (CREDITS PACKS)
 # -------------------------
 st.header("Pricing")
 
@@ -2892,31 +2894,29 @@ with col_free:
     st.subheader("Free")
     st.markdown(
         "**£0**\n\n"
-        "- **5 CV generations**\n"
-        "- **5 AI actions** (summary / cover / bullets / upload parsing)\n"
-        "- Includes free templates\n"
-        "- Referral program: every successful referral gives you **+5 CVs** and "
-        "**+5 AI actions** (up to 10 friends)\n"
+        "- Sign in required for downloads + AI tools\n"
+        "- Starter credits: **5 CV + 5 AI** (optional)\n"
+        "- Templates available\n"
     )
 
 with col_job:
-    st.subheader("Jobseeker Monthly")
+    st.subheader("Monthly Pack")
     st.markdown(
-        "**£2.99 / month**\n\n"
-        "- **20 CV generations / month**\n"
-        "- **30 AI actions / month**\n"
-        "- Access to all CV templates\n"
+        "**£2.99**\n\n"
+        "- **+20 CV credits**\n"
+        "- **+30 AI credits**\n"
+        "- Credits stack when you repurchase\n"
         "- PDF + Word downloads\n"
         "- Email support\n"
     )
 
 with col_pro:
-    st.subheader("Pro Monthly")
+    st.subheader("Pro Pack")
     st.markdown(
-        "**£5.99 / month**\n\n"
-        "- **50 CV generations / month**\n"
-        "- **90 AI actions / month**\n"
-        "- Access to all CV templates\n"
+        "**£5.99**\n\n"
+        "- **+50 CV credits**\n"
+        "- **+90 AI credits**\n"
+        "- Credits stack when you repurchase\n"
         "- PDF + Word downloads\n"
         "- Priority support\n"
     )
@@ -2934,9 +2934,12 @@ st.markdown(
 )
 
 st.caption(
-    "All plans are metered to keep the service reliable and prevent abuse. "
+    "Credits keep the service reliable and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
+
+
+
 
 
 # ==============================================
