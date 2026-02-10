@@ -6,6 +6,7 @@ import hashlib
 import time
 import traceback
 import requests
+import psycopg2
 
 from openai import OpenAI
 
@@ -172,6 +173,15 @@ def restore_form_state():
         if v is not None:
             st.session_state[k] = v
 
+def get_conn():
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL is not set")
+
+    return psycopg2.connect(
+        dsn,
+        sslmode="require",
+    )
 
 
 def freeze_defaults():
