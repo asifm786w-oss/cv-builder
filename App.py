@@ -337,12 +337,32 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
 def get_user_credits(email: str) -> dict:
     with get_conn() as conn:
         cur = conn.cursor()
+
         cur.execute(
-            "SELECT COALESCE(cv_credits,0), COALESCE(ai_credits,0) FROM users WHERE email=%s",
+            """
+            SELECT cv_credits, ai_credits
+            FROM users
+            WHERE email = %s
+            """,
             (email,),
         )
-        row = cur.fetchone() or (0, 0)
-        return {"cv": int(row[0]), "ai": int(row[1])}
+        row = cur.fetchone()
+
+        if row is None:
+            cur.execute(
+                """
+                INSERT INTO users (email, plan, cv_credits, ai_credits)
+                VALUES (%s, 'free', 5, 5)
+                """,
+                (email,),
+            )
+            conn.commit()
+            return {"cv": 5, "ai": 5}
+
+        cv, ai = row
+        return {"cv": int(cv or 0), "ai": int(ai or 0)}
+
+
 
 
 
