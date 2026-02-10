@@ -2892,8 +2892,8 @@ with col_free:
     st.subheader("Free")
     st.markdown(
         "**£0**\n\n"
-        "- **4 CV generations**\n"
-        "- **6 AI actions** (summary / cover / bullets / upload parsing)\n"
+        "- **5 CV generations**\n"
+        "- **5 AI actions** (summary / cover / bullets / upload parsing)\n"
         "- Includes free templates\n"
         "- Referral program: every successful referral gives you **+5 CVs** and "
         "**+5 AI actions** (up to 10 friends)\n"
@@ -2937,6 +2937,7 @@ st.caption(
     "All plans are metered to keep the service reliable and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
+
 
 # ==============================================
 # FOOTER POLICY BUTTONS (snapshot before navigate)
