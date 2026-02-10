@@ -2638,56 +2638,70 @@ st.caption(
 
 col_jd1, col_jd2 = st.columns(2)
 with col_jd1:
-    job_summary_clicked = st.button("Suggest tailored summary (AI)", key="btn_job_summary")
+    job_summary_clicked = st.button(
+        "Suggest tailored summary (AI)",
+        key="btn_job_summary",
+    )
 with col_jd2:
-    ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key="btn_cover")
-
+    ai_cover_letter_clicked = st.button(
+        "Generate cover letter (AI)",
+        key="btn_cover",
+    )
 
 # --- AI job-description summary (separate from professional summary) ---
 if job_summary_clicked:
     if not gate_premium("generate a job summary"):
         st.stop()
 
-    # ✅ Guard: must complete Section 1 first
+    # Guard: must complete Section 1 first
     if not (full_name.strip() and email.strip()):
         st.warning(
             "Complete Section 1 (Full name + Email) first — these are automatically used in your outputs."
         )
         st.stop()
 
-    # ✅ Guard: need a job description
+    # Guard: need a job description
     if not job_description.strip():
         st.error("Please paste a job description first.")
         st.stop()
 
-    # ✅ Quota check
+    # Quota check
     if not has_free_quota("job_summary_uses", 1, "AI job summary"):
         st.stop()
-    else:
-        with st.spinner("Generating AI job summary..."):
-            try:
-                jd_limited = enforce_word_limit(
-                    job_description,
-                    MAX_DOC_WORDS,
-                    label="Job description",
-                )
 
-                job_summary_text = generate_job_summary(jd_limited)
+    with st.spinner("Generating AI job summary..."):
+        try:
+            jd_limited = enforce_word_limit(
+                job_description,
+                MAX_DOC_WORDS,
+                label="Job description",
+            )
 
-                st.session_state["job_summary_ai"] = job_summary_text
-                st.session_state["job_summary_uses"] = (
-                    st.session_state.get("job_summary_uses", 0) + 1
-                )
-                email_for_usage = (st.session_state.get("user") or {}).get("email")
-                if email_for_usage:
-                    increment_usage(email_for_usage, "job_summary_uses")
+            job_summary_text = generate_job_summary(jd_limited)
 
-                st.success(
-                    "AI job summary generated below. "
-                    "You can copy it into applications or your notes."
-                )
-            except Exception as e:
-                st.error(f"AI error (job summary): {e}")
+            st.session_state["job_summary_ai"] = job_summary_text
+            st.session_state["job_summary_uses"] = (
+                st.session_state.get("job_summary_uses", 0) + 1
+            )
+
+            email_for_usage = (st.session_state.get("user") or {}).get("email")
+            if email_for_usage:
+                increment_usage(email_for_usage, "job_summary_uses")
+
+            st.success(
+                "AI job summary generated below. "
+                "You can copy it into applications or your notes."
+            )
+
+        except Exception as e:
+            st.error(f"AI error (job summary): {e}")
+
+# --- DISPLAY JOB SUMMARY (THIS WAS MISSING) ---
+job_summary_text = st.session_state.get("job_summary_ai", "")
+if job_summary_text:
+    st.markdown("**AI job summary for this role (read-only):**")
+    st.write(job_summary_text)
+
 
 
 
