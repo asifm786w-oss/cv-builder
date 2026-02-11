@@ -154,22 +154,20 @@ if not APP_URL:
     APP_URL = "http://localhost:8501"
 
 
-def create_checkout_session(price_id: str, pack: str, justomer_email: str | None = None) -> str:
+def create_checkout_session(price_id: str, pack: str, customer_email: str | None = None) -> str:
     customer_email_clean = (customer_email or "").strip().lower()
 
-    sesion=strip.checkout.Session.create(
-        mode="Payment",
-        lin_items=[{"price": price_id, "quantity": 1}],
-        suces_url=f"{APP_URL}/?stripe=success",
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=f"{APP_URL}/?stripe=success",
         cancel_url=f"{APP_URL}/?stripe=cancel",
         customer_email=customer_email_clean or None,
         allow_promotion_codes=True,
-        metadata={
-            "pack": pack,
-            "user_email": justomer_email_clean,
-        },
+        metadata={"pack": pack, "user_email": customer_email_clean},
     )
-    return sesion.url
+    return session.url
+
 
 
 def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
