@@ -1,15 +1,37 @@
 import os
 import stripe
+import psycopg2
 from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
 stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
 STRIPE_WEBHOOK_SECRET = os.environ["STRIPE_WEBHOOK_SECRET"]
+DATABASE_URL = os.environ["DATABASE_URL"]
+
+
+def get_conn():
+    # Railway provides DATABASE_URL for Postgres
+    return psycopg2.connect(DATABASE_URL)
+
+
+def ensure_tables():
+    # Creates stripe_events table if missing (dedupe protection)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stripe_events (
+                event_id TEXT PRIMARY KEY,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        conn.commit()
 
 
 def grant_pack_credits(email: str, pack: str) -> None:
-    pack = (pack or "").strip()
+    pack = (pack or "").strip().lower()
 
     PACKS = {
         "monthly": {"cv": 20, "ai": 30},
@@ -22,18 +44,20 @@ def grant_pack_credits(email: str, pack: str) -> None:
 
     with get_conn() as conn:
         cur = conn.cursor()
+
+        # Only update columns that we KNOW exist (cv_credits, ai_credits).
+        # If you later add paid_plan / last_purchase_at, we can re-enable those.
         cur.execute(
             """
             UPDATE users
             SET
                 cv_credits = COALESCE(cv_credits, 0) + %s,
-                ai_credits = COALESCE(ai_credits, 0) + %s,
-                paid_plan = %s,
-                last_purchase_at = NOW()
+                ai_credits = COALESCE(ai_credits, 0) + %s
             WHERE email = %s
             """,
-            (add["cv"], add["ai"], pack, email),
+            (add["cv"], add["ai"], email),
         )
+
         conn.commit()
 
 
@@ -42,13 +66,11 @@ def mark_event_processed(event_id: str) -> bool:
     Returns True if inserted (new event).
     Returns False if already processed (duplicate retry).
     """
+    ensure_tables()
     with get_conn() as conn:
         cur = conn.cursor()
         try:
-            cur.execute(
-                "INSERT INTO stripe_events (event_id) VALUES (%s)",
-                (event_id,),
-            )
+            cur.execute("INSERT INTO stripe_events (event_id) VALUES (%s)", (event_id,))
             conn.commit()
             return True
         except Exception:
@@ -74,18 +96,24 @@ def stripe_webhook():
     if event_id and not mark_event_processed(event_id):
         return jsonify({"status": "duplicate_ignored"}), 200
 
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
+    if event.get("type") == "checkout.session.completed":
+        session = (event.get("data") or {}).get("object") or {}
 
         email = (
             (session.get("customer_details") or {}).get("email")
             or session.get("customer_email")
             or ""
         )
-        pack = (session.get("metadata") or {}).get("pack") or ""
+
+        pack = ((session.get("metadata") or {}).get("pack")) or ""
+        pack = pack.strip().lower()
 
         if email and pack:
-            grant_pack_credits(email=email, pack=pack)
+            try:
+                grant_pack_credits(email=email, pack=pack)
+            except Exception as e:
+                # Don’t fail Stripe retry logic forever; log in response for now
+                return jsonify({"status": "error", "detail": str(e)}), 200
 
     return jsonify({"status": "ok"}), 200
 

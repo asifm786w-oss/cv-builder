@@ -7,6 +7,7 @@ import time
 import traceback
 import requests
 import psycopg2
+import stripe
 
 from openai import OpenAI
 
@@ -139,6 +140,29 @@ AI_USAGE_KEYS = {"summary_uses", "cover_uses", "bullets_uses", "job_summary_uses
 CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
+
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")  # set in Railway (sk_test_... or sk_live_...)
+
+PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY")  # price_...
+PRICE_PRO     = os.getenv("STRIPE_PRICE_PRO")      # price_...
+
+APP_URL = os.getenv("APP_URL", "")  # set to https://your-app.up.railway.app
+if not APP_URL:
+    # safe fallback so app still runs locally
+    APP_URL = "http://localhost:8501"
+
+
+def create_checkout_session(price_id: str, customer_email: str | None = None) -> str:
+    session = stripe.checkout.Session.create(
+        mode="payment",  # one-time credit packs (stackable)
+        line_items=[{"price": price_id, "quantity": 1}],
+        success_url=f"{APP_URL}/?stripe=success",
+        cancel_url=f"{APP_URL}/?stripe=cancel",
+        customer_email=customer_email if customer_email else None,
+        allow_promotion_codes=True,
+    )
+    return session.url
 
 
 def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
@@ -2978,6 +3002,8 @@ st.header("Pricing")
 
 col_free, col_job, col_pro = st.columns(3)
 
+email_for_checkout = (st.session_state.get("user") or {}).get("email")
+
 with col_free:
     st.subheader("Free")
     st.markdown(
@@ -2998,6 +3024,17 @@ with col_job:
         "- Email support\n"
     )
 
+    if st.button("Buy Monthly Pack", key="buy_monthly_pack"):
+        if not PRICE_MONTHLY:
+            st.error("Missing STRIPE_PRICE_MONTHLY in Railway Variables.")
+            st.stop()
+        if not stripe.api_key:
+            st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
+            st.stop()
+
+        url = create_checkout_session(PRICE_MONTHLY, email_for_checkout)
+        st.link_button("Continue to secure checkout", url)
+
 with col_pro:
     st.subheader("Pro Pack")
     st.markdown(
@@ -3008,6 +3045,17 @@ with col_pro:
         "- PDF + Word downloads\n"
         "- Priority support\n"
     )
+
+    if st.button("Buy Pro Pack", key="buy_pro_pack"):
+        if not PRICE_PRO:
+            st.error("Missing STRIPE_PRICE_PRO in Railway Variables.")
+            st.stop()
+        if not stripe.api_key:
+            st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
+            st.stop()
+
+        url = create_checkout_session(PRICE_PRO, email_for_checkout)
+        st.link_button("Continue to secure checkout", url)
 
 st.markdown("---")
 st.subheader("Enterprise (organisations & programmes)")
@@ -3025,6 +3073,7 @@ st.caption(
     "Credits keep the service reliable and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
+
 
 
 
