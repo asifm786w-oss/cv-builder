@@ -2845,9 +2845,6 @@ if st.session_state["cover_letter"]:
         st.error(f"Error generating cover letter files: {e!r}")
 
 
-
-
-
 # -------------------------
 # 6. References (optional)
 # -------------------------
