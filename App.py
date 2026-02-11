@@ -2885,8 +2885,6 @@ st.session_state.setdefault("template_label", "Blue")
 template_label = st.selectbox(
     "Choose a CV template",
     options=list(TEMPLATE_MAP.keys()),
-    index=list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
-    if st.session_state["template_label"] in TEMPLATE_MAP else 0,
     key="template_label",
 )
 
@@ -2970,6 +2968,7 @@ if generate_clicked:
 
     except Exception as e:
         st.error(f"Something went wrong while generating the CV: {e}")
+
 
 
 # -------------------------
