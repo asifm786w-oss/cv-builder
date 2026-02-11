@@ -99,14 +99,17 @@ def stripe_webhook():
     if event.get("type") == "checkout.session.completed":
         session = (event.get("data") or {}).get("object") or {}
 
-        email = (
-            (session.get("customer_details") or {}).get("email")
-            or session.get("customer_email")
-            or ""
-        )
+        # ✅ Prefer app email from metadata (prevents mismatches),
+        # then fall back to Stripe customer email fields.
+        metadata = session.get("metadata") or {}
 
-        pack = ((session.get("metadata") or {}).get("pack")) or ""
-        pack = pack.strip().lower()
+        pack = (metadata.get("pack") or "").strip().lower()
+
+        email = (
+            (metadata.get("user_email") or "").strip().lower()
+            or ((session.get("customer_details") or {}).get("email") or "").strip().lower()
+            or (session.get("customer_email") or "").strip().lower()
+        )
 
         if email and pack:
             try:
