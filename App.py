@@ -9,6 +9,7 @@ import requests
 import psycopg2
 import stripe
 
+
 from openai import OpenAI
 
 from utils import verify_postgres_connection
@@ -153,14 +154,15 @@ if not APP_URL:
     APP_URL = "http://localhost:8501"
 
 
-def create_checkout_session(price_id: str, customer_email: str | None = None) -> str:
+def create_checkout_session(price_id: str, pack: str, customer_email: str | None = None) -> str:
     session = stripe.checkout.Session.create(
-        mode="payment",  # one-time credit packs (stackable)
+        mode="payment",
         line_items=[{"price": price_id, "quantity": 1}],
         success_url=f"{APP_URL}/?stripe=success",
         cancel_url=f"{APP_URL}/?stripe=cancel",
-        customer_email=customer_email if customer_email else None,
+        customer_email=customer_email or None,
         allow_promotion_codes=True,
+        metadata={"pack": pack},  # <-- REQUIRED
     )
     return session.url
 
@@ -3025,6 +3027,9 @@ with col_job:
     )
 
     if st.button("Buy Monthly Pack", key="buy_monthly_pack"):
+        if not email_for_checkout:
+            st.warning("Please sign in first.")
+            st.stop()
         if not PRICE_MONTHLY:
             st.error("Missing STRIPE_PRICE_MONTHLY in Railway Variables.")
             st.stop()
@@ -3032,7 +3037,7 @@ with col_job:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
             st.stop()
 
-        url = create_checkout_session(PRICE_MONTHLY, email_for_checkout)
+        url = create_checkout_session(PRICE_MONTHLY, pack="monthly", customer_email=email_for_checkout)
         st.link_button("Continue to secure checkout", url)
 
 with col_pro:
@@ -3047,6 +3052,9 @@ with col_pro:
     )
 
     if st.button("Buy Pro Pack", key="buy_pro_pack"):
+        if not email_for_checkout:
+            st.warning("Please sign in first.")
+            st.stop()
         if not PRICE_PRO:
             st.error("Missing STRIPE_PRICE_PRO in Railway Variables.")
             st.stop()
@@ -3054,7 +3062,7 @@ with col_pro:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
             st.stop()
 
-        url = create_checkout_session(PRICE_PRO, email_for_checkout)
+        url = create_checkout_session(PRICE_PRO, pack="pro", customer_email=email_for_checkout)
         st.link_button("Continue to secure checkout", url)
 
 st.markdown("---")
@@ -3073,6 +3081,7 @@ st.caption(
     "Credits keep the service reliable and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
+
 
 
 

@@ -10,3 +10,4 @@ playwright
 requests
 psycopg2-binary
 pypdf
+stripe==10.12.0
