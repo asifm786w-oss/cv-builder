@@ -2693,99 +2693,134 @@ references = st.text_area(
 
 
 
-import os
 import streamlit as st
-from adzuna_client import search_jobs
+from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
 
-st.header("Job Search (Adzuna)")
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_adzuna_search(query: str, location: str, results: int = 10):
+    return search_jobs(query=query, location=location, results=results)
 
+def _format_salary(smin, smax) -> str:
+    if smin is None and smax is None:
+        return ""
+    try:
+        if smin is not None and smax is not None:
+            return f"Salary: £{int(smin):,} - £{int(smax):,}"
+        if smin is not None:
+            return f"Salary: from £{int(smin):,}"
+        return f"Salary: up to £{int(smax):,}"
+    except Exception:
+        return "Salary: available"
+
+st.subheader("Job Search (Adzuna)")
+
+# --- AUTH ---
 user = st.session_state.get("user") or {}
-email_for_checkout = user.get("email")
-
-if not email_for_checkout:
-    st.info("Sign in to search jobs and use AI tailoring.")
+email = user.get("email")
+if not email:
+    st.warning("Please sign in to use Job Search.")
     st.stop()
 
-# Optional: show remaining credits
-ai_remaining = user.get("ai_credits")
-if ai_remaining is not None:
-    st.caption(f"AI credits remaining: {ai_remaining}")
+# ✅ CREDIT SOURCE OF TRUTH = user row
+ai_credits = int(user.get("ai_credits") or 0)
+if ai_credits <= 0:
+    st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
+    st.stop()
 
-adzuna_query = st.text_input("What role?", key="adzuna_query", placeholder="e.g. Marketing Manager")
-adzuna_location = st.text_input("Where?", key="adzuna_location", placeholder="e.g. Walsall or WS2")
+# Inputs
+col1, col2 = st.columns(2)
+with col1:
+    keywords = st.text_input("Keywords", key="adzuna_keywords", placeholder="e.g. marketing manager")
+with col2:
+    location = st.text_input("Location", key="adzuna_location", placeholder="e.g. Walsall or WS2")
 
-col_a1, col_a2 = st.columns([1, 2])
-with col_a1:
-    do_search = st.button("Search jobs", key="btn_adzuna_search")
-with col_a2:
-    st.caption("Search uses 1 AI credit (cached for 5 minutes per query/location).")
+search_clicked = st.button("Search", type="primary", key="adzuna_search_btn")
 
-if do_search:
-    # Credits gate
-    if (user.get("ai_credits") or 0) <= 0:
-        st.error("No AI credits left. Buy a pack to continue.")
+st.session_state.setdefault("adzuna_results", [])
+
+if search_clicked:
+    query_clean = (keywords or "").strip()
+    loc_clean = (location or "").strip()
+
+    if not query_clean:
+        st.info("Enter keywords to search (e.g., “marketing manager”).")
         st.stop()
 
-    # Decrement credit ONLY if we’re actually making the call
-    ok = decrement_ai_credit(email_for_checkout, 1)
-    if not ok:
-        st.error("No AI credits left. Buy a pack to continue.")
-        st.stop()
-
-    # Call Adzuna
     try:
-        results = search_jobs(adzuna_query, adzuna_location, results=10)
-        st.session_state["adzuna_results"] = results
-    except Exception:
-        # If search fails, refund the credit (optional but nice)
-        # You can implement increment_ai_credit() if you want.
-        st.session_state.pop("adzuna_results", None)
-        st.error("Adzuna search failed. Try again in a moment.")
-        st.stop()
+        with st.spinner("Searching jobs..."):
+            jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
-    # Refresh user in session after decrement
-    refreshed = refresh_user(email_for_checkout)
-    if refreshed:
-        st.session_state["user"] = refreshed
+        # ✅ decrement 1 credit AFTER a successful API return
+        ok = decrement_ai_credit(email, amount=1)
+        if not ok:
+            st.warning("You don’t have enough AI credits to perform this search.")
+            st.stop()
 
-results = st.session_state.get("adzuna_results") or []
-if results:
-    st.subheader("Results")
+        # ✅ refresh user so sidebar updates immediately
+        st.session_state["user"] = get_user_by_email(email)  # rename to your actual fetch fn
 
-    for i, job in enumerate(results):
-        title = job.get("title") or "Untitled role"
-        company = job.get("company") or ""
-        loc = job.get("location") or ""
+        st.session_state["adzuna_results"] = jobs
+        if not jobs:
+            st.info("No results found. Try different keywords or a nearby location.")
+        st.rerun()
+
+    except AdzunaConfigError:
+        st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
+    except AdzunaAPIError:
+        st.error("Job search is temporarily unavailable. Please try again shortly.")
+    except Exception as e:
+        st.error(f"Job search failed: {e}")
+
+# Results
+jobs = st.session_state.get("adzuna_results") or []
+if jobs:
+    st.caption("Showing up to 10 results.")
+    for idx, job in enumerate(jobs):
+        title = job.get("title") or "Untitled"
+        company = job.get("company") or "Unknown company"
+        loc = job.get("location") or "Unknown location"
+        created = job.get("created") or ""
         url = job.get("url") or ""
+        smin = job.get("salary_min")
+        smax = job.get("salary_max")
         desc = job.get("description") or ""
 
         with st.container(border=True):
-            st.markdown(f"**{title}**")
-            st.caption(f"{company} — {loc}")
-            if url:
-                st.link_button("Open listing", url)
+            top = st.columns([4, 1])
+            with top[0]:
+                st.markdown(f"**{title}**")
+                st.write(f"{company} — {loc}")
+                if created:
+                    st.caption(f"Posted: {created}")
+                sal = _format_salary(smin, smax)
+                if sal:
+                    st.caption(sal)
+                if url:
+                    st.link_button("Open listing", url)
 
-            if st.button("Use this job", key=f"use_job_{i}"):
-                # Write into your existing section-5 textarea
-                st.session_state["job_description"] = desc[:20000]  # safety cap
+            with top[1]:
+                if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
+                    # ✅ write into your existing Section 5 text area
+                    st.session_state["job_description"] = desc
 
-                # Clear old derived outputs (matches your JD fingerprint approach)
-                st.session_state.pop("job_summary_ai", None)
-                st.session_state.pop("cover_letter", None)
-                st.session_state.pop("cover_letter_box", None)
+                    # ✅ clear derived outputs + force JD fingerprint refresh
+                    st.session_state["_last_jd_fp"] = None
+                    st.session_state.pop("job_summary_ai", None)
+                    st.session_state.pop("cover_letter", None)
+                    st.session_state.pop("cover_letter_box", None)
 
-                # Store selected job
-                st.session_state["selected_job"] = {
-                    "title": title,
-                    "company": company,
-                    "location": loc,
-                    "url": url,
-                }
+                    st.session_state["selected_job"] = {
+                        "title": title,
+                        "company": company,
+                        "url": url,
+                    }
 
-                st.success("Job loaded into Target Job box. Now run summary / cover letter.")
-                st.rerun()
-else:
-    st.caption("No results yet. Run a search.")
+                    st.success("Job loaded into Target Job. Now generate summary / cover letter.")
+                    st.rerun()
+
+            with st.expander("Preview description"):
+                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+
 
 
 
