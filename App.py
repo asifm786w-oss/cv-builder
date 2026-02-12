@@ -2708,17 +2708,14 @@ references = st.text_area(
     ),
 )
 
-with st.expander("Job Search (Adzuna)", expanded=False):
+# =========================
+# Job Search (Adzuna) - Collapsible + Wires into Section 5 (Target Job)
+# =========================
 
-# -----------------------------
-# Job Search (Adzuna) — FULL BLOCK (drop-in)
-# -----------------------------
 import streamlit as st
 from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
 
-# -----------------------------
-# Helpers (cache + formatting)
-# -----------------------------
+# -------- Helpers --------
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_adzuna_search(query: str, location: str, results: int = 10):
     return search_jobs(query=query, location=location, results=results)
@@ -2735,399 +2732,134 @@ def _format_salary(smin, smax) -> str:
     except Exception:
         return "Salary: available"
 
+# NOTE: You said you already added decrement_ai_credit(email, amount=1) in your DB helpers.
+# NOTE: You also need a "get user" fetch to refresh sidebar credits:
+# - If your function name differs, rename get_user_by_email(...) below to yours.
+# Example: get_user_by_email(email) / fetch_user(email) / get_user(email)
+# ---------------------------------------------
 
-# -----------------------------
-# REQUIRED DB HELPERS YOU MUST HAVE
-# (If you already have these elsewhere, REMOVE these stubs/import them.)
-# -----------------------------
-# get_ai_credits(email) -> int
-# get_user_by_email(email) -> dict | None
-# decrement_ai_credit(email, amount=1) -> bool
+# Expand automatically if results exist
+expanded = bool(st.session_state.get("adzuna_results"))
+with st.expander("Job Search (Adzuna)", expanded=expanded):
 
-# Example signatures (do NOT duplicate if already defined):
-# def get_ai_credits(email: str) -> int: ...
-# def get_user_by_email(email: str): ...
-# def decrement_ai_credit(email: str, amount: int = 1) -> bool: ...
-
-
-# -----------------------------
-# UI
-# -----------------------------
-st.subheader("Job Search (Adzuna)")
-
-# --- AUTH ---
-user = st.session_state.get("user") or {}
-email = user.get("email")
-if not email:
-    st.warning("Please sign in to use Job Search.")
-    st.stop()
-
-# ✅ CREDIT SOURCE OF TRUTH = DB (not session)
-ai_credits = int(get_ai_credits(email) or 0)
-# keep session in sync so sidebar updates
-st.session_state["user"]["ai_credits"] = ai_credits
-
-if ai_credits <= 0:
-    st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
-    st.stop()
-
-# Inputs
-col1, col2 = st.columns(2)
-with col1:
-    keywords = st.text_input(
-        "Keywords",
-        key="adzuna_keywords",
-        placeholder="e.g. marketing manager",
-    )
-with col2:
-    location = st.text_input(
-        "Location",
-        key="adzuna_location",
-        placeholder="e.g. Walsall or WS2",
-    )
-
-search_clicked = st.button("Search", type="primary", key="adzuna_search_btn")
-
-st.session_state.setdefault("adzuna_results", [])
-
-if search_clicked:
-    query_clean = (keywords or "").strip()
-    loc_clean = (location or "").strip()
-
-    if not query_clean:
-        st.info("Enter keywords to search (e.g., “marketing manager”).")
+    # --- AUTH ---
+    user = st.session_state.get("user") or {}
+    email = user.get("email")
+    if not email:
+        st.warning("Please sign in to use Job Search.")
         st.stop()
 
-    try:
-        with st.spinner("Searching jobs..."):
-            jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
+    # ✅ CREDIT SOURCE OF TRUTH = user row (keeps sidebar consistent)
+    ai_credits = int(user.get("ai_credits") or 0)
+    if ai_credits <= 0:
+        st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
+        st.stop()
 
-        # ✅ decrement 1 credit AFTER successful API return
-        ok = decrement_ai_credit(email, amount=1)
-        if not ok:
-            st.warning("You don’t have enough AI credits to perform this search.")
+    # Inputs
+    col1, col2 = st.columns(2)
+    with col1:
+        keywords = st.text_input(
+            "Keywords",
+            key="adzuna_keywords",
+            placeholder="e.g. marketing manager",
+        )
+    with col2:
+        location = st.text_input(
+            "Location",
+            key="adzuna_location",
+            placeholder="e.g. Walsall or WS2",
+        )
+
+    search_clicked = st.button("Search", type="primary", key="adzuna_search_btn")
+
+    st.session_state.setdefault("adzuna_results", [])
+
+    if search_clicked:
+        query_clean = (keywords or "").strip()
+        loc_clean = (location or "").strip()
+
+        if not query_clean:
+            st.info("Enter keywords to search (e.g., “marketing manager”).")
             st.stop()
 
-        # ✅ refresh user for sidebar / gating immediately
-        fresh = get_user_by_email(email)
-        if fresh:
-            st.session_state["user"] = fresh
-        else:
-            # fallback: at least update credits in-session
-            st.session_state["user"]["ai_credits"] = int(get_ai_credits(email) or 0)
-
-        st.session_state["adzuna_results"] = jobs
-
-        if not jobs:
-            st.info("No results found. Try different keywords or a nearby location.")
-
-        st.rerun()
-
-    except AdzunaConfigError:
-        st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
-    except AdzunaAPIError:
-        st.error("Job search is temporarily unavailable. Please try again shortly.")
-    except Exception as e:
-        st.error(f"Job search failed: {e}")
-
-
-# -----------------------------
-# Results
-# -----------------------------
-jobs = st.session_state.get("adzuna_results") or []
-if jobs:
-    st.caption("Showing up to 10 results.")
-    for idx, job in enumerate(jobs):
-        title = job.get("title") or "Untitled"
-        company = job.get("company") or "Unknown company"
-        loc = job.get("location") or "Unknown location"
-        created = job.get("created") or ""
-        url = job.get("url") or ""
-        smin = job.get("salary_min")
-        smax = job.get("salary_max")
-        desc = job.get("description") or ""
-
-        with st.container(border=True):
-            top = st.columns([4, 1])
-            with top[0]:
-                st.markdown(f"**{title}**")
-                st.write(f"{company} — {loc}")
-                if created:
-                    st.caption(f"Posted: {created}")
-                sal = _format_salary(smin, smax)
-                if sal:
-                    st.caption(sal)
-                if url:
-                    st.link_button("Open listing", url)
-
-            with top[1]:
-                if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
-                    # ✅ writes into your existing Section 5 text_area(key="job_description")
-                    st.session_state["job_description"] = desc
-
-                    # ✅ force JD fingerprint refresh + clear derived outputs
-                    st.session_state["_last_jd_fp"] = None
-                    st.session_state.pop("job_summary_ai", None)
-                    st.session_state.pop("cover_letter", None)
-                    st.session_state.pop("cover_letter_box", None)
-
-                    st.session_state["selected_job"] = {
-                        "title": title,
-                        "company": company,
-                        "url": url,
-                    }
-
-                    st.success("Job loaded into Target Job. Now generate summary / cover letter.")
-                    st.rerun()
-
-            with st.expander("Preview description"):
-                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
-
-
-
-
-
-
-# -------------------------
-# 6. Target Job (optional, for AI)
-# -------------------------
-st.header("5. Target Job (optional)")
-
-job_description = st.text_area(
-    "Paste the job description here",
-    height=200,
-    help="Paste the full job spec from LinkedIn, Indeed, etc.",
-    key="job_description",
-)
-
-import hashlib
-
-def _fingerprint(text: str) -> str:
-    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
-
-jd_fp = _fingerprint(job_description)
-last_jd_fp = st.session_state.get("_last_jd_fp")
-
-if last_jd_fp and jd_fp != last_jd_fp:
-    # Job changed: clear anything derived from it
-    st.session_state.pop("job_summary_ai", None)
-    st.session_state.pop("cover_letter", None)
-    st.session_state.pop("cover_letter_box", None)
-
-st.session_state["_last_jd_fp"] = jd_fp
-
-st.caption(
-    f"For best results, keep this to {MAX_DOC_WORDS} words or less. "
-    "(Extra words are ignored.)"
-)
-
-col_jd1, col_jd2 = st.columns(2)
-with col_jd1:
-    job_summary_clicked = st.button(
-        "Suggest tailored summary (AI)",
-        key="btn_job_summary",
-    )
-with col_jd2:
-    ai_cover_letter_clicked = st.button(
-        "Generate cover letter (AI)",
-        key="btn_cover",
-    )
-
-# --- AI job-description summary (separate from professional summary) ---
-if job_summary_clicked:
-    if not gate_premium("generate a job summary"):
-        st.stop()
-
-    # Guard: must complete Section 1 first
-    if not (full_name.strip() and email.strip()):
-        st.warning(
-            "Complete Section 1 (Full name + Email) first — these are automatically used in your outputs."
-        )
-        st.stop()
-
-    # Guard: need a job description
-    if not job_description.strip():
-        st.error("Please paste a job description first.")
-        st.stop()
-
-    # Quota check
-    if not has_free_quota("job_summary_uses", 1, "AI job summary"):
-        st.stop()
-
-    with st.spinner("Generating AI job summary..."):
         try:
-            jd_limited = enforce_word_limit(
-                job_description,
-                MAX_DOC_WORDS,
-                label="Job description",
-            )
+            with st.spinner("Searching jobs..."):
+                jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
-            job_summary_text = generate_job_summary(jd_limited)
+            # ✅ decrement 1 credit AFTER a successful API return
+            ok = decrement_ai_credit(email, amount=1)
+            if not ok:
+                st.warning("You don’t have enough AI credits to perform this search.")
+                st.stop()
 
-            st.session_state["job_summary_ai"] = job_summary_text
-            st.session_state["job_summary_uses"] = (
-                st.session_state.get("job_summary_uses", 0) + 1
-            )
+            # ✅ refresh user so sidebar updates immediately
+            st.session_state["user"] = get_user_by_email(email)  # <-- rename if yours differs
 
-            email_for_usage = (st.session_state.get("user") or {}).get("email")
-            if email_for_usage:
-                increment_usage(email_for_usage, "job_summary_uses")
-
-            st.success(
-                "AI job summary generated below. "
-                "You can copy it into applications or your notes."
-            )
-
-        except Exception as e:
-            st.error(f"AI error (job summary): {e}")
-
-# --- DISPLAY JOB SUMMARY (THIS WAS MISSING) ---
-job_summary_text = st.session_state.get("job_summary_ai", "")
-if job_summary_text:
-    st.markdown("**AI job summary for this role (read-only):**")
-    st.write(job_summary_text)
-# --- AI cover letter ---
-
-# ✅ JD fingerprint clearing: if JD changes, clear derived outputs
-import hashlib
-
-def _fingerprint(text: str) -> str:
-    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
-
-jd_fp = _fingerprint(job_description)
-last_jd_fp = st.session_state.get("_last_jd_fp")
-
-if last_jd_fp and jd_fp != last_jd_fp:
-    st.session_state.pop("job_summary_ai", None)
-    st.session_state.pop("cover_letter", None)
-    st.session_state.pop("cover_letter_box", None)
-
-st.session_state["_last_jd_fp"] = jd_fp
-
-
-# --- AI cover letter generation ---
-if ai_cover_letter_clicked:
-    if not gate_premium("generate a cover letter"):
-        st.stop()
-
-    # ✅ Guard: must complete Section 1 first
-    if not (full_name.strip() and email.strip()):
-        st.warning(
-            "Complete Section 1 (Full name + Email) first — these are automatically added to your cover letter."
-        )
-        st.stop()
-
-    # ✅ Guard: need a job description
-    if not job_description.strip():
-        st.error("Please paste a job description first.")
-        st.stop()
-
-    # ✅ Quota check
-    if not has_free_quota("cover_uses", 1, "AI cover letter"):
-        st.stop()
-
-    with st.spinner("Generating cover letter..."):
-        try:
-            cover_input = {
-                "full_name": full_name,
-                "current_title": title,
-                "skills": skills,
-                "experiences": [exp.dict() for exp in experiences],
-                "education": st.session_state.get("education_items", []),
-                "location": location,
-            }
-
-            jd_limited = enforce_word_limit(
-                job_description,
-                MAX_DOC_WORDS,
-                label="Job description (AI input)",
-            )
-
-            job_summary = st.session_state.get("job_summary_ai", "") or ""
-
-            cover_text = generate_cover_letter_ai(
-                cover_input,
-                jd_limited,
-                job_summary,
-            )
-
-            cleaned = clean_cover_letter_body(cover_text)
-
-            final_letter = enforce_word_limit(
-                cleaned,
-                MAX_LETTER_WORDS,
-                label="cover letter",
-            )
-
-            # ✅ Set BOTH keys BEFORE rendering the widget (no `value=` on widget)
-            st.session_state["cover_letter"] = final_letter
-            st.session_state["cover_letter_box"] = final_letter
-
-            st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
-            email_for_usage = (st.session_state.get("user") or {}).get("email")
-            if email_for_usage:
-                increment_usage(email_for_usage, "cover_uses")
-
-            st.success(
-                "AI cover letter generated below. You can edit it before downloading."
-            )
+            st.session_state["adzuna_results"] = jobs
+            if not jobs:
+                st.info("No results found. Try different keywords or a nearby location.")
             st.rerun()
 
+        except AdzunaConfigError:
+            st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
+        except AdzunaAPIError:
+            st.error("Job search is temporarily unavailable. Please try again shortly.")
         except Exception as e:
-            st.error(f"AI error (cover letter): {e}")
+            st.error(f"Job search failed: {e}")
 
+    # Results
+    jobs = st.session_state.get("adzuna_results") or []
+    if jobs:
+        st.caption("Showing up to 10 results.")
 
-# --- Cover letter editor + downloads ---
-st.session_state.setdefault("cover_letter", "")
+        for idx, job in enumerate(jobs):
+            title = job.get("title") or "Untitled"
+            company = job.get("company") or "Unknown company"
+            loc = job.get("location") or "Unknown location"
+            created = job.get("created") or ""
+            url = job.get("url") or ""
+            smin = job.get("salary_min")
+            smax = job.get("salary_max")
+            desc = job.get("description") or ""
 
-if st.session_state["cover_letter"]:
-    st.subheader("✏️ Cover letter")
+            # ✅ collapsible card per job
+            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
 
-    # ✅ Widget reads from session_state via key; DO NOT pass `value=`
-    edited = st.text_area(
-        "You can edit this before using it:",
-        key="cover_letter_box",
-        height=260,
-    )
+                top = st.columns([4, 1])
+                with top[0]:
+                    if created:
+                        st.caption(f"Posted: {created}")
+                    sal = _format_salary(smin, smax)
+                    if sal:
+                        st.caption(sal)
+                    if url:
+                        st.link_button("Open listing", url)
 
-    # keep canonical value in sync
-    st.session_state["cover_letter"] = edited
+                with top[1]:
+                    if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
+                        # ✅ Write into your existing Section 5 text area
+                        st.session_state["job_description"] = desc
 
-    try:
-        letter_pdf = render_cover_letter_pdf_bytes(
-            full_name=full_name or "Candidate",
-            letter_body=st.session_state["cover_letter"],
-            location=location or "",
-            email=email or "",
-            phone=phone or "",
-        )
+                        # ✅ Force JD fingerprint refresh + clear derived outputs
+                        st.session_state["_last_jd_fp"] = None
+                        st.session_state.pop("job_summary_ai", None)
+                        st.session_state.pop("cover_letter", None)
+                        st.session_state.pop("cover_letter_box", None)
 
-        letter_docx = render_cover_letter_docx_bytes(
-            full_name=full_name or "Candidate",
-            letter_body=st.session_state["cover_letter"],
-            location=location or "",
-            email=email or "",
-            phone=phone or "",
-        )
+                        # ✅ Store selected job metadata (nice for UI later)
+                        st.session_state["selected_job"] = {
+                            "title": title,
+                            "company": company,
+                            "url": url,
+                        }
 
-        col_d11, col_d12 = st.columns(2)
-        with col_d11:
-            st.download_button(
-                label="📄 Download cover letter as PDF",
-                data=letter_pdf,
-                file_name="cover_letter.pdf",
-                mime="application/pdf",
-            )
-        with col_d12:
-            st.download_button(
-                label="📝 Download cover letter as Word (.docx)",
-                data=letter_docx,
-                file_name="cover_letter.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
+                        st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
+                        st.rerun()
 
-    except Exception as e:
-        st.error(f"Error generating cover letter files: {e!r}")
+                # Keep description readable
+                st.markdown("**Preview description**")
+                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+
 
 
 
