@@ -11,6 +11,7 @@ import stripe
 
 
 from openai import OpenAI
+from adzuna_client import search_jobs
 
 from utils import verify_postgres_connection
 from models import CV, Experience, Education
@@ -1637,6 +1638,48 @@ def decrement_user_credits(email: str, cv_delta: int = 0, ai_delta: int = 0) -> 
 
     return {"cv": int(row[0]), "ai": int(row[1])}
 
+def decrement_ai_credit(email: str, amount: int = 1) -> bool:
+    """
+    Atomic decrement. Returns True if decremented, False if insufficient credits.
+    """
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE users
+            SET ai_credits = GREATEST(COALESCE(ai_credits, 0) - %s, 0)
+            WHERE email = %s
+              AND COALESCE(ai_credits, 0) >= %s
+            RETURNING ai_credits
+            """,
+            (amount, email, amount),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return bool(row)
+
+def decrement_ai_credit(email: str, amount: int = 1) -> bool:
+    """
+    Atomic decrement. Returns True if decremented, False if insufficient credits.
+    """
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE users
+            SET ai_credits = GREATEST(COALESCE(ai_credits, 0) - %s, 0)
+            WHERE email = %s
+              AND COALESCE(ai_credits, 0) >= %s
+            RETURNING ai_credits
+            """,
+            (amount, email, amount),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return bool(row)
+
+
+
 # =========================
 # ROUTING (preview-first)
 # =========================
@@ -2631,9 +2674,186 @@ for i in range(int(num_education)):
 backup_education_state()
 st.session_state["education_items"] = [edu.dict() for edu in education_items]
 
+# -------------------------
+# 5. References (optional)
+# -------------------------
+st.header("6. References (optional)")
+
+if "references" not in st.session_state:
+    st.session_state["references"] = ""
+
+references = st.text_area(
+    "References (leave blank to omit from CV)",
+    key="references",
+    help=(
+        "Example: 'Available on request' or list names, roles and contact details. "
+        "Line breaks will be preserved in the PDF."
+    ),
+)
+
+
+
+from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
+
+# Assumption: decrement_ai_credit() exists in your app after adding it.
+# from credits import decrement_ai_credit
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_adzuna_search(query: str, location: str, results: int = 10):
+    # Cache by args automatically; 5 minutes TTL
+    return search_jobs(query=query, location=location, results=results)
+
+
+def _format_salary(smin, smax) -> str:
+    if smin is None and smax is None:
+        return ""
+    try:
+        if smin is not None and smax is not None:
+            return f"Salary: £{int(smin):,} - £{int(smax):,}"
+        if smin is not None:
+            return f"Salary: from £{int(smin):,}"
+        return f"Salary: up to £{int(smax):,}"
+    except Exception:
+        return "Salary: available"
+
+
+# -----------------------------
+# Job Search (Adzuna) UI section
+# -----------------------------
+st.subheader("Job Search (Adzuna)")
+
+# 1) Auth gating
+user = st.session_state.get("user")
+if not user or not user.get("email"):
+    st.warning("Please sign in to use Job Search.")
+    st.stop()
+
+email = user["email"]
+
+# 2) Ensure credits are available in session (best-effort)
+if "ai_credits" not in st.session_state or st.session_state["ai_credits"] is None:
+    try:
+        # Optional helper if you add it; otherwise remove this block if your app already sets credits in state.
+        credits = get_ai_credits(email)  # type: ignore[name-defined]
+        st.session_state["ai_credits"] = credits if credits is not None else 0
+    except Exception:
+        st.session_state["ai_credits"] = 0
+
+ai_credits = int(st.session_state.get("ai_credits") or 0)
+
+# 3) Credit gating
+if ai_credits <= 0:
+    st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
+    # IMPORTANT: Stripe is already integrated — call your existing pricing UI here.
+    # Example (replace with your actual function/component):
+    # render_pricing_section()
+    st.stop()
+
+# Inputs
+col1, col2 = st.columns(2)
+with col1:
+    keywords = st.text_input("Keywords", value=st.session_state.get("adzuna_keywords", ""))
+with col2:
+    location = st.text_input("Location", value=st.session_state.get("adzuna_location", ""))
+
+st.session_state["adzuna_keywords"] = keywords
+st.session_state["adzuna_location"] = location
+
+search_clicked = st.button("Search", type="primary", key="adzuna_search_btn")
+
+# Store results in session_state so reruns don’t lose them
+if "adzuna_results" not in st.session_state:
+    st.session_state["adzuna_results"] = []
+
+if search_clicked:
+    query_clean = (keywords or "").strip()
+    loc_clean = (location or "").strip()
+
+    if not query_clean:
+        st.info("Enter keywords to search (e.g., “marketing manager”).")
+    else:
+        # Call Adzuna (cached) and only decrement credit if the call succeeds (even if 0 results)
+        try:
+            with st.spinner("Searching jobs..."):
+                jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
+
+            # Decrement 1 credit only after successful API/cached return
+            ok = decrement_ai_credit(email, amount=1)  # atomic update
+            if not ok:
+                st.session_state["adzuna_results"] = []
+                st.warning("You don’t have enough AI credits to perform this search.")
+                # render_pricing_section()
+                st.stop()
+
+            st.session_state["adzuna_results"] = jobs
+
+            if not jobs:
+                st.info("No results found. Try different keywords or a nearby location.")
+        except AdzunaConfigError:
+            st.error("Job search is not configured. Missing Adzuna API keys in Railway.")
+        except AdzunaAPIError:
+            st.error("Job search is temporarily unavailable. Please try again shortly.")
+        except Exception:
+            st.error("Something went wrong while searching jobs. Please try again.")
+
+# Results
+jobs = st.session_state.get("adzuna_results") or []
+if jobs:
+    st.caption("Showing up to 10 recent results.")
+    for idx, job in enumerate(jobs):
+        title = job.get("title") or "Untitled"
+        company = job.get("company") or "Unknown company"
+        loc = job.get("location") or "Unknown location"
+        created = job.get("created") or ""
+        url = job.get("url") or ""
+        smin = job.get("salary_min")
+        smax = job.get("salary_max")
+        desc = job.get("description") or ""
+
+        with st.container(border=True):
+            top = st.columns([4, 1])
+            with top[0]:
+                st.markdown(f"**{title}**")
+                st.write(f"{company} — {loc}")
+                if created:
+                    st.caption(f"Posted: {created}")
+                sal = _format_salary(smin, smax)
+                if sal:
+                    st.caption(sal)
+                if url:
+                    st.link_button("Open listing", url, use_container_width=False)
+
+            with top[1]:
+                use_key = f"use_job_{idx}_{hash((title, company, url))}"
+                if st.button("Use this job", key=use_key, use_container_width=True):
+                    # Write the job description into existing state
+                    st.session_state["job_description"] = desc
+
+                    # Clear old summary so your existing button regenerates cleanly
+                    st.session_state["job_summary_ai"] = ""
+
+                    # Store selected job metadata
+                    st.session_state["selected_job"] = {
+                        "id": url or f"{title}-{company}-{idx}",
+                        "title": title,
+                        "company": company,
+                        "url": url,
+                    }
+
+                    # Optional: nudge existing UI by setting flags if your app uses them
+                    # st.session_state["enable_job_ai_buttons"] = True
+
+                    st.success("Job selected. You can now generate a tailored summary and cover letter.")
+
+            # Keep description readable without flooding the page
+            with st.expander("Preview description"):
+                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+
+
 
 # -------------------------
-# 5. Target Job (optional, for AI)
+# 6. Target Job (optional, for AI)
 # -------------------------
 st.header("5. Target Job (optional)")
 
@@ -2874,22 +3094,7 @@ if st.session_state["cover_letter"]:
         st.error(f"Error generating cover letter files: {e!r}")
 
 
-# -------------------------
-# 6. References (optional)
-# -------------------------
-st.header("6. References (optional)")
 
-if "references" not in st.session_state:
-    st.session_state["references"] = ""
-
-references = st.text_area(
-    "References (leave blank to omit from CV)",
-    key="references",
-    help=(
-        "Example: 'Available on request' or list names, roles and contact details. "
-        "Line breaks will be preserved in the PDF."
-    ),
-)
 
 # -------------------------
 # CV Template mapping
