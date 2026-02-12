@@ -2710,6 +2710,7 @@ references = st.text_area(
 
 # =========================
 # Job Search (Adzuna) - Collapsible + Wires into Section 5 (Target Job)
+# ✅ FIXED: no st.stop() (so Summariser/Cover Letter still render)
 # =========================
 
 import streamlit as st
@@ -2742,72 +2743,80 @@ def _format_salary(smin, smax) -> str:
 expanded = bool(st.session_state.get("adzuna_results"))
 with st.expander("Job Search (Adzuna)", expanded=expanded):
 
-    # --- AUTH ---
+    # --- AUTH / CREDITS (non-blocking; do NOT stop whole app) ---
     user = st.session_state.get("user") or {}
-    email = user.get("email")
+    email = (user.get("email") or "").strip().lower()
+
+    can_use_job_search = True
+
     if not email:
         st.warning("Please sign in to use Job Search.")
-        st.stop()
+        can_use_job_search = False
 
     # ✅ CREDIT SOURCE OF TRUTH = user row (keeps sidebar consistent)
     ai_credits = int(user.get("ai_credits") or 0)
-    if ai_credits <= 0:
+    if can_use_job_search and ai_credits <= 0:
         st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
-        st.stop()
+        can_use_job_search = False
 
-    # Inputs
+    # Inputs (disabled when not allowed)
     col1, col2 = st.columns(2)
     with col1:
         keywords = st.text_input(
             "Keywords",
             key="adzuna_keywords",
             placeholder="e.g. marketing manager",
+            disabled=not can_use_job_search,
         )
     with col2:
         location = st.text_input(
             "Location",
             key="adzuna_location",
             placeholder="e.g. Walsall or WS2",
+            disabled=not can_use_job_search,
         )
 
-    search_clicked = st.button("Search", type="primary", key="adzuna_search_btn")
+    search_clicked = st.button(
+        "Search",
+        type="primary",
+        key="adzuna_search_btn",
+        disabled=not can_use_job_search,
+    )
 
     st.session_state.setdefault("adzuna_results", [])
 
-    if search_clicked:
+    if search_clicked and can_use_job_search:
         query_clean = (keywords or "").strip()
         loc_clean = (location or "").strip()
 
         if not query_clean:
             st.info("Enter keywords to search (e.g., “marketing manager”).")
-            st.stop()
+        else:
+            try:
+                with st.spinner("Searching jobs..."):
+                    jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
-        try:
-            with st.spinner("Searching jobs..."):
-                jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
+                # ✅ decrement 1 credit AFTER a successful API return
+                ok = decrement_ai_credit(email, amount=1)
+                if not ok:
+                    st.warning("You don’t have enough AI credits to perform this search.")
+                else:
+                    # ✅ refresh user so sidebar updates immediately
+                    st.session_state["user"] = get_user_by_email(email)  # <-- rename if yours differs
 
-            # ✅ decrement 1 credit AFTER a successful API return
-            ok = decrement_ai_credit(email, amount=1)
-            if not ok:
-                st.warning("You don’t have enough AI credits to perform this search.")
-                st.stop()
+                    st.session_state["adzuna_results"] = jobs
+                    if not jobs:
+                        st.info("No results found. Try different keywords or a nearby location.")
+                    st.rerun()
 
-            # ✅ refresh user so sidebar updates immediately
-            st.session_state["user"] = get_user_by_email(email)  # <-- rename if yours differs
+            except AdzunaConfigError:
+                st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
+            except AdzunaAPIError:
+                st.error("Job search is temporarily unavailable. Please try again shortly.")
+            except Exception as e:
+                st.error(f"Job search failed: {e}")
 
-            st.session_state["adzuna_results"] = jobs
-            if not jobs:
-                st.info("No results found. Try different keywords or a nearby location.")
-            st.rerun()
-
-        except AdzunaConfigError:
-            st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
-        except AdzunaAPIError:
-            st.error("Job search is temporarily unavailable. Please try again shortly.")
-        except Exception as e:
-            st.error(f"Job search failed: {e}")
-
-    # Results
+    # Results (still show even if user later loses credits; doesn't kill rest of page)
     jobs = st.session_state.get("adzuna_results") or []
     if jobs:
         st.caption("Showing up to 10 results.")
@@ -2859,9 +2868,6 @@ with st.expander("Job Search (Adzuna)", expanded=expanded):
                 # Keep description readable
                 st.markdown("**Preview description**")
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
-
-
-
 
 
 # -------------------------
