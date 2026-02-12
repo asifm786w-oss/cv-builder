@@ -2709,8 +2709,11 @@ references = st.text_area(
 )
 
 # =========================
-# Job Search (Adzuna) - Collapsible + Wires into Section 5 (Target Job)
-# ✅ FIXED: no st.stop() (so Summariser/Cover Letter still render)
+# Job Search (Adzuna) — Premium Collapsible Block + Syncs with Existing Credits
+# - Expander wrapper (premium look via layout + border containers)
+# - NO st.stop() (won't kill your Summariser/Cover Letter)
+# - Credits read uses SAME value your app already exposes (tries user/usage/session keys)
+# - Decrement updates session immediately + refreshes user from DB helper
 # =========================
 
 import streamlit as st
@@ -2733,59 +2736,118 @@ def _format_salary(smin, smax) -> str:
     except Exception:
         return "Salary: available"
 
-# NOTE: You said you already added decrement_ai_credit(email, amount=1) in your DB helpers.
-# NOTE: You also need a "get user" fetch to refresh sidebar credits:
-# - If your function name differs, rename get_user_by_email(...) below to yours.
-# Example: get_user_by_email(email) / fetch_user(email) / get_user(email)
-# ---------------------------------------------
+def _get_ai_remaining() -> int:
+    # 1) user dict
+    user = st.session_state.get("user") or {}
+    for k in ("ai_remaining", "ai_credits", "credits", "credits_remaining"):
+        v = user.get(k)
+        if v is not None:
+            try:
+                return int(v)
+            except Exception:
+                pass
 
-# Expand automatically if results exist
+    # 2) usage dict
+    usage = st.session_state.get("usage") or st.session_state.get("user_usage")
+    if isinstance(usage, dict):
+        for k in ("ai_remaining", "ai_credits", "credits", "credits_remaining"):
+            v = usage.get(k)
+            if v is not None:
+                try:
+                    return int(v)
+                except Exception:
+                    pass
+
+    # 3) direct session keys
+    for k in ("ai_remaining", "ai_credits", "credits", "credits_remaining"):
+        v = st.session_state.get(k)
+        if v is not None:
+            try:
+                return int(v)
+            except Exception:
+                pass
+
+    return 0
+
+def _sync_ai_remaining_in_session(new_val: int) -> None:
+    # Update common places safely (so sidebar + gating match immediately)
+    st.session_state["ai_remaining"] = int(new_val)
+
+    if isinstance(st.session_state.get("usage"), dict):
+        st.session_state["usage"]["ai_remaining"] = int(new_val)
+
+    if isinstance(st.session_state.get("user"), dict):
+        st.session_state["user"]["ai_remaining"] = int(new_val)
+
+# NOTE: You must already have these somewhere in your app:
+# - decrement_ai_credit(email, amount=1) -> bool
+# - get_user_by_email(email) -> dict | None
+# If your function name differs, rename calls below.
+
+# -----------------------------
+# UI (Expander)
+# -----------------------------
 expanded = bool(st.session_state.get("adzuna_results"))
-with st.expander("Job Search (Adzuna)", expanded=expanded):
+with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
-    # --- AUTH / CREDITS (non-blocking; do NOT stop whole app) ---
+    # Header / status row
     user = st.session_state.get("user") or {}
     email = (user.get("email") or "").strip().lower()
 
-    can_use_job_search = True
+    left, right = st.columns([3, 2])
+    with left:
+        st.markdown("### Find jobs and load into **Target Job**")
+        st.caption("Search Adzuna listings and push a job description straight into Section 5 for your summary + cover letter tools.")
 
+    with right:
+        ai_remaining = _get_ai_remaining()
+        st.markdown("#### Credits")
+        st.metric("AI remaining", ai_remaining)
+
+    st.divider()
+
+    # Non-blocking gating (never st.stop)
+    can_use = True
     if not email:
         st.warning("Please sign in to use Job Search.")
-        can_use_job_search = False
-
-    # ✅ CREDIT SOURCE OF TRUTH = user row (keeps sidebar consistent)
-    ai_credits = int(user.get("ai_credits") or 0)
-    if can_use_job_search and ai_credits <= 0:
+        can_use = False
+    elif ai_remaining <= 0:
         st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
-        can_use_job_search = False
+        can_use = False
 
-    # Inputs (disabled when not allowed)
-    col1, col2 = st.columns(2)
-    with col1:
-        keywords = st.text_input(
-            "Keywords",
-            key="adzuna_keywords",
-            placeholder="e.g. marketing manager",
-            disabled=not can_use_job_search,
-        )
-    with col2:
-        location = st.text_input(
-            "Location",
-            key="adzuna_location",
-            placeholder="e.g. Walsall or WS2",
-            disabled=not can_use_job_search,
-        )
+    # Search inputs (premium-ish layout)
+    with st.container(border=True):
+        c1, c2, c3 = st.columns([3, 3, 1.5])
+        with c1:
+            keywords = st.text_input(
+                "Keywords",
+                key="adzuna_keywords",
+                placeholder="e.g. marketing manager / software engineer",
+                disabled=not can_use,
+            )
+        with c2:
+            location = st.text_input(
+                "Location",
+                key="adzuna_location",
+                placeholder="e.g. Walsall or WS2",
+                disabled=not can_use,
+            )
+        with c3:
+            st.write("")  # spacing
+            st.write("")
+            search_clicked = st.button(
+                "Search",
+                type="primary",
+                key="adzuna_search_btn",
+                use_container_width=True,
+                disabled=not can_use,
+            )
 
-    search_clicked = st.button(
-        "Search",
-        type="primary",
-        key="adzuna_search_btn",
-        disabled=not can_use_job_search,
-    )
+        st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
 
     st.session_state.setdefault("adzuna_results", [])
 
-    if search_clicked and can_use_job_search:
+    if search_clicked and can_use:
         query_clean = (keywords or "").strip()
         loc_clean = (location or "").strip()
 
@@ -2796,15 +2858,24 @@ with st.expander("Job Search (Adzuna)", expanded=expanded):
                 with st.spinner("Searching jobs..."):
                     jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
-                # ✅ decrement 1 credit AFTER a successful API return
+                # Decrement 1 credit AFTER successful API return
                 ok = decrement_ai_credit(email, amount=1)
                 if not ok:
                     st.warning("You don’t have enough AI credits to perform this search.")
                 else:
-                    # ✅ refresh user so sidebar updates immediately
-                    st.session_state["user"] = get_user_by_email(email)  # <-- rename if yours differs
+                    # Update session immediately so UI stays in sync
+                    _sync_ai_remaining_in_session(max(0, ai_remaining - 1))
+
+                    # Refresh user (optional but good for sidebar consistency)
+                    try:
+                        fresh = get_user_by_email(email)
+                        if fresh:
+                            st.session_state["user"] = fresh
+                    except Exception:
+                        pass
 
                     st.session_state["adzuna_results"] = jobs
+
                     if not jobs:
                         st.info("No results found. Try different keywords or a nearby location.")
                     st.rerun()
@@ -2816,9 +2887,12 @@ with st.expander("Job Search (Adzuna)", expanded=expanded):
             except Exception as e:
                 st.error(f"Job search failed: {e}")
 
-    # Results (still show even if user later loses credits; doesn't kill rest of page)
+    # -----------------------------
+    # Results (each job collapsible)
+    # -----------------------------
     jobs = st.session_state.get("adzuna_results") or []
     if jobs:
+        st.divider()
         st.caption("Showing up to 10 results.")
 
         for idx, job in enumerate(jobs):
@@ -2831,41 +2905,41 @@ with st.expander("Job Search (Adzuna)", expanded=expanded):
             smax = job.get("salary_max")
             desc = job.get("description") or ""
 
-            # ✅ collapsible card per job
-            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
+            header = f"{title} — {company} ({loc})"
+            with st.expander(header, expanded=(idx == 0)):
 
-                top = st.columns([4, 1])
-                with top[0]:
-                    if created:
-                        st.caption(f"Posted: {created}")
-                    sal = _format_salary(smin, smax)
-                    if sal:
-                        st.caption(sal)
-                    if url:
-                        st.link_button("Open listing", url)
+                with st.container(border=True):
+                    top = st.columns([4, 1])
+                    with top[0]:
+                        if created:
+                            st.caption(f"Posted: {created}")
+                        sal = _format_salary(smin, smax)
+                        if sal:
+                            st.caption(sal)
+                        if url:
+                            st.link_button("Open listing", url)
 
-                with top[1]:
-                    if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
-                        # ✅ Write into your existing Section 5 text area
-                        st.session_state["job_description"] = desc
+                    with top[1]:
+                        if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
+                            # Write into existing Section 5 text area
+                            st.session_state["job_description"] = desc
 
-                        # ✅ Force JD fingerprint refresh + clear derived outputs
-                        st.session_state["_last_jd_fp"] = None
-                        st.session_state.pop("job_summary_ai", None)
-                        st.session_state.pop("cover_letter", None)
-                        st.session_state.pop("cover_letter_box", None)
+                            # Force JD fingerprint refresh + clear derived outputs
+                            st.session_state["_last_jd_fp"] = None
+                            st.session_state.pop("job_summary_ai", None)
+                            st.session_state.pop("cover_letter", None)
+                            st.session_state.pop("cover_letter_box", None)
 
-                        # ✅ Store selected job metadata (nice for UI later)
-                        st.session_state["selected_job"] = {
-                            "title": title,
-                            "company": company,
-                            "url": url,
-                        }
+                            # Store selected job metadata
+                            st.session_state["selected_job"] = {
+                                "title": title,
+                                "company": company,
+                                "url": url,
+                            }
 
-                        st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
-                        st.rerun()
+                            st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
+                            st.rerun()
 
-                # Keep description readable
                 st.markdown("**Preview description**")
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
 
@@ -3305,11 +3379,6 @@ st.caption(
     "Credits keep the service reliable and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
-
-
-
-
-
 
 
 # ==============================================
