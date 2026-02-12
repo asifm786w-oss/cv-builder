@@ -2412,76 +2412,80 @@ normalize_skills_state()
 st.header("2. Skills")
 
 # -------------------------
-# 2. Skills (bullet points)
+# 2. Skills (bullet points only)
 # -------------------------
 
 def normalize_skills_to_bullets(text: str) -> str:
     """
-    Accepts commas/newlines/bullets/paragraphs and returns clean bullet lines:
+    Takes ANY input (sentences, commas, paragraphs, bullets)
+    and outputs clean skill bullets:
     • Skill
     • Skill
     """
     if not text:
         return ""
 
-    t = text.strip()
-    if not t:
+    raw = text.strip()
+    if not raw:
         return ""
 
-    # Split on newlines first
-    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
-
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
     items: list[str] = []
 
-    if len(lines) <= 1:
-        # Single line: could be comma-separated or a paragraph
-        one = lines[0] if lines else t
+    def is_sentence(s: str) -> bool:
+        return len(s.split()) > 6 or "," in s or "result" in s.lower() or "through" in s.lower()
 
-        # If commas likely represent a list, split on commas
-        if "," in one:
-            parts = [p.strip() for p in one.split(",") if p.strip()]
-            items.extend(parts)
+    # 1) Break input into candidate chunks
+    for ln in lines:
+        ln = ln.lstrip("•*-–— \t").strip()
+
+        if not ln:
+            continue
+
+        # Split comma-heavy lines
+        if "," in ln:
+            parts = [p.strip() for p in ln.split(",") if p.strip()]
         else:
-            # Try splitting on "•" or "-" if user pasted bullets inline
-            # Otherwise keep as one item
-            tmp = one.replace("•", "\n•").replace(" - ", "\n- ")
-            tmp_lines = [x.strip() for x in tmp.splitlines() if x.strip()]
-            if len(tmp_lines) > 1:
-                lines = tmp_lines
+            parts = [ln]
+
+        for p in parts:
+            if is_sentence(p):
+                # reduce sentence to skill-like phrases
+                words = p.split()
+                if len(words) >= 2:
+                    items.append(" ".join(words[:3]))
             else:
-                items.append(one)
-    else:
-        # Multiple lines: treat each line as an item after stripping bullet prefixes
-        for ln in lines:
-            cleaned = ln.lstrip("•*-–— \t").strip()
-            if cleaned:
-                items.append(cleaned)
+                items.append(p)
 
-    # De-dupe while preserving order
+    # 2) Clean + de-dupe
     seen = set()
-    uniq: list[str] = []
+    clean: list[str] = []
     for it in items:
-        key = it.lower()
-        if key not in seen:
-            seen.add(key)
-            uniq.append(it)
+        it = it.strip().title()
+        if it and it.lower() not in seen:
+            seen.add(it.lower())
+            clean.append(it)
 
-    # Format as bullets
-    return "\n".join(f"• {it}" for it in uniq)
+    # 3) Format as bullets
+    return "\n".join(f"• {c}" for c in clean)
 
 
 # ✅ Apply staged AI value BEFORE widget renders
 if "skills_pending" in st.session_state:
     st.session_state["skills_text"] = st.session_state.pop("skills_pending")
 
-# ✅ Default only if missing or None (never overwrite CV)
+# ✅ Default only if missing (never overwrite user CV)
 if "skills_text" not in st.session_state or st.session_state["skills_text"] is None:
-    st.session_state["skills_text"] = "• Python\n• SQL\n• Communication"
+    st.session_state["skills_text"] = (
+        "• Marketing Strategy\n"
+        "• Brand Management\n"
+        "• Customer Engagement"
+    )
 
 skills_text = st.text_area(
     "Skills (one per line)",
     key="skills_text",
-    help="Use one skill per line (bullets). Example:\n• Python\n• SQL\n• Leadership",
+    help="Use short skill phrases only (1–3 words per line)",
 )
 
 btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
@@ -2489,6 +2493,7 @@ btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
 if btn_skills:
     if not gate_premium("improve your skills"):
         st.stop()
+
     ok, left = cooldown_ok("improve_skills", 5)
     if not ok:
         st.warning(f"⏳ Please wait {left}s before trying again.")
@@ -2501,9 +2506,9 @@ if btn_skills:
     else:
         with st.spinner("Improving your skills..."):
             try:
-                improved = improve_bullets(skills_text)
+                # 🔥 IMPORTANT: this MUST be skills-specific
+                improved = improve_skills(skills_text)
 
-                # ✅ convert whatever the model returns into clean bullets
                 improved_bullets = normalize_skills_to_bullets(improved)
 
                 improved_limited = enforce_word_limit(
@@ -2512,7 +2517,7 @@ if btn_skills:
                     label="Skills (AI)",
                 )
 
-                # ✅ Stage for NEXT run (never mutate widget key now)
+                # ✅ Stage for NEXT run
                 st.session_state["skills_pending"] = improved_limited
 
                 st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
@@ -2527,27 +2532,25 @@ if btn_skills:
                 st.error(f"AI error (skills improvement): {e}")
 
 
-# Build skills list ONCE for downstream use (supports bullets OR commas)
+# -------------------------
+# Build skills list for downstream use
+# -------------------------
+skills: list[str] = []
 raw = (st.session_state.get("skills_text") or "").strip()
 
-skills: list[str] = []
 for ln in raw.splitlines():
-    ln = ln.strip()
-    if not ln:
-        continue
-    # Remove bullet prefix if present
     ln = ln.lstrip("•*-–— \t").strip()
     if not ln:
         continue
-    # If someone pasted comma-separated into one line, split it
     if "," in ln:
         skills.extend([p.strip() for p in ln.split(",") if p.strip()])
     else:
         skills.append(ln)
 
-# Optional: de-dupe
-seen = set()
-skills = [s for s in skills if not (s.lower() in seen or seen.add(s.lower()))]
+# De-dupe
+_seen = set()
+skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
+
 
 
 
