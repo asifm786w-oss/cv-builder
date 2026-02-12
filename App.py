@@ -2709,11 +2709,10 @@ references = st.text_area(
 )
 
 # =========================
-# Job Search (Adzuna) — Premium Collapsible Block + Syncs with Existing Credits
-# - Expander wrapper (premium look via layout + border containers)
-# - NO st.stop() (won't kill your Summariser/Cover Letter)
-# - Credits read uses SAME value your app already exposes (tries user/usage/session keys)
-# - Decrement updates session immediately + refreshes user from DB helper
+# Job Search (Adzuna) — Expander + Uses SAME user credits as the rest of your app
+# ✅ No extra AI counter UI
+# ✅ No st.stop() (won't hide other features)
+# ✅ Refresh user from Postgres (get_user_by_email) then read credits from that user object
 # =========================
 
 import streamlit as st
@@ -2736,10 +2735,25 @@ def _format_salary(smin, smax) -> str:
     except Exception:
         return "Salary: available"
 
-def _get_ai_remaining() -> int:
-    # 1) user dict
-    user = st.session_state.get("user") or {}
-    for k in ("ai_remaining", "ai_credits", "credits", "credits_remaining"):
+def _extract_ai_credits_from_user(user: dict) -> int | None:
+    """
+    Pull AI credits from the same user object your app uses.
+    Returns None if it can't confidently find it.
+    """
+    if not isinstance(user, dict):
+        return None
+
+    # 1) Common direct keys
+    common_keys = [
+        "ai_remaining",
+        "ai_credits",
+        "ai_credit",
+        "ai_credits_remaining",
+        "aiRemaining",
+        "credits_ai",
+        "ai",
+    ]
+    for k in common_keys:
         v = user.get(k)
         if v is not None:
             try:
@@ -2747,42 +2761,46 @@ def _get_ai_remaining() -> int:
             except Exception:
                 pass
 
-    # 2) usage dict
-    usage = st.session_state.get("usage") or st.session_state.get("user_usage")
-    if isinstance(usage, dict):
-        for k in ("ai_remaining", "ai_credits", "credits", "credits_remaining"):
-            v = usage.get(k)
-            if v is not None:
-                try:
-                    return int(v)
-                except Exception:
-                    pass
+    # 2) Common nested structures (many apps store usage in a nested dict)
+    for nested_key in ("usage", "user_usage", "limits", "credits"):
+        nested = user.get(nested_key)
+        if isinstance(nested, dict):
+            for k in common_keys + ["remaining", "ai_remaining", "ai_credits"]:
+                v = nested.get(k)
+                if v is not None:
+                    try:
+                        return int(v)
+                    except Exception:
+                        pass
 
-    # 3) direct session keys
-    for k in ("ai_remaining", "ai_credits", "credits", "credits_remaining"):
-        v = st.session_state.get(k)
-        if v is not None:
+    # 3) Heuristic fallback: find an int field with "ai" + ("remain"/"credit") in key name
+    candidates = []
+    for k, v in user.items():
+        if not isinstance(k, str):
+            continue
+        key_l = k.lower()
+        if ("ai" in key_l) and (("remain" in key_l) or ("credit" in key_l)):
             try:
-                return int(v)
+                candidates.append(int(v))
             except Exception:
                 pass
+    if candidates:
+        # if multiple, take the max (usually the remaining balance)
+        return max(candidates)
 
-    return 0
+    return None
 
-def _sync_ai_remaining_in_session(new_val: int) -> None:
-    # Update common places safely (so sidebar + gating match immediately)
-    st.session_state["ai_remaining"] = int(new_val)
+def _safe_refresh_user_from_db(email: str) -> dict | None:
+    """
+    Uses your existing helper get_user_by_email(email) to refresh from Postgres.
+    If your helper name differs, rename this function call below.
+    """
+    try:
+        fresh = get_user_by_email(email)  # <-- rename if yours differs
+        return fresh if isinstance(fresh, dict) else None
+    except Exception:
+        return None
 
-    if isinstance(st.session_state.get("usage"), dict):
-        st.session_state["usage"]["ai_remaining"] = int(new_val)
-
-    if isinstance(st.session_state.get("user"), dict):
-        st.session_state["user"]["ai_remaining"] = int(new_val)
-
-# NOTE: You must already have these somewhere in your app:
-# - decrement_ai_credit(email, amount=1) -> bool
-# - get_user_by_email(email) -> dict | None
-# If your function name differs, rename calls below.
 
 # -----------------------------
 # UI (Expander)
@@ -2790,50 +2808,55 @@ def _sync_ai_remaining_in_session(new_val: int) -> None:
 expanded = bool(st.session_state.get("adzuna_results"))
 with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
-    # Header / status row
-    user = st.session_state.get("user") or {}
-    email = (user.get("email") or "").strip().lower()
+    # --- AUTH ---
+    session_user = st.session_state.get("user") or {}
+    email = (session_user.get("email") or "").strip().lower()
 
-    left, right = st.columns([3, 2])
-    with left:
-        st.markdown("### Find jobs and load into **Target Job**")
-        st.caption("Search Adzuna listings and push a job description straight into Section 5 for your summary + cover letter tools.")
-
-    with right:
-        ai_remaining = _get_ai_remaining()
-        st.markdown("#### Credits")
-        st.metric("AI remaining", ai_remaining)
-
-    st.divider()
-
-    # Non-blocking gating (never st.stop)
     can_use = True
     if not email:
         st.warning("Please sign in to use Job Search.")
         can_use = False
-    elif ai_remaining <= 0:
+
+    # ✅ Refresh user from DB so this block matches the sidebar truth
+    # (If DB is unavailable, fall back to session_user)
+    fresh_user = _safe_refresh_user_from_db(email) if email else None
+    if fresh_user:
+        st.session_state["user"] = fresh_user
+        user = fresh_user
+    else:
+        user = session_user
+
+    # ✅ Credits: read from SAME user object the sidebar should be using
+    ai_credits = _extract_ai_credits_from_user(user)
+
+    # If we can't find credits, don't block the whole app; just disable Job Search.
+    if can_use and ai_credits is None:
+        st.warning("Couldn’t load your AI credits right now. Job Search is disabled, but the rest of the app will still work.")
+        can_use = False
+
+    if can_use and int(ai_credits or 0) <= 0:
         st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
         can_use = False
 
-    # Search inputs (premium-ish layout)
+    # Inputs
     with st.container(border=True):
-        c1, c2, c3 = st.columns([3, 3, 1.5])
-        with c1:
+        col1, col2, col3 = st.columns([3, 3, 1.4])
+        with col1:
             keywords = st.text_input(
                 "Keywords",
                 key="adzuna_keywords",
                 placeholder="e.g. marketing manager / software engineer",
                 disabled=not can_use,
             )
-        with c2:
+        with col2:
             location = st.text_input(
                 "Location",
                 key="adzuna_location",
                 placeholder="e.g. Walsall or WS2",
                 disabled=not can_use,
             )
-        with c3:
-            st.write("")  # spacing
+        with col3:
+            st.write("")
             st.write("")
             search_clicked = st.button(
                 "Search",
@@ -2858,24 +2881,17 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 with st.spinner("Searching jobs..."):
                     jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
-                # Decrement 1 credit AFTER successful API return
+                # ✅ Decrement 1 credit AFTER successful API return
                 ok = decrement_ai_credit(email, amount=1)
                 if not ok:
                     st.warning("You don’t have enough AI credits to perform this search.")
                 else:
-                    # Update session immediately so UI stays in sync
-                    _sync_ai_remaining_in_session(max(0, ai_remaining - 1))
-
-                    # Refresh user (optional but good for sidebar consistency)
-                    try:
-                        fresh = get_user_by_email(email)
-                        if fresh:
-                            st.session_state["user"] = fresh
-                    except Exception:
-                        pass
+                    # ✅ Refresh user again so sidebar + everything stays in sync
+                    refreshed = _safe_refresh_user_from_db(email)
+                    if refreshed:
+                        st.session_state["user"] = refreshed
 
                     st.session_state["adzuna_results"] = jobs
-
                     if not jobs:
                         st.info("No results found. Try different keywords or a nearby location.")
                     st.rerun()
@@ -2905,8 +2921,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
             smax = job.get("salary_max")
             desc = job.get("description") or ""
 
-            header = f"{title} — {company} ({loc})"
-            with st.expander(header, expanded=(idx == 0)):
+            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
 
                 with st.container(border=True):
                     top = st.columns([4, 1])
@@ -2921,16 +2936,16 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
                     with top[1]:
                         if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
-                            # Write into existing Section 5 text area
+                            # ✅ Write into your existing Section 5 text area
                             st.session_state["job_description"] = desc
 
-                            # Force JD fingerprint refresh + clear derived outputs
+                            # ✅ Force JD fingerprint refresh + clear derived outputs
                             st.session_state["_last_jd_fp"] = None
                             st.session_state.pop("job_summary_ai", None)
                             st.session_state.pop("cover_letter", None)
                             st.session_state.pop("cover_letter_box", None)
 
-                            # Store selected job metadata
+                            # ✅ Store selected job metadata
                             st.session_state["selected_job"] = {
                                 "title": title,
                                 "company": company,
@@ -2942,6 +2957,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
                 st.markdown("**Preview description**")
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+
 
 
 # -------------------------
