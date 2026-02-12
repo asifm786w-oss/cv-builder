@@ -1538,25 +1538,31 @@ def mark_policies_accepted(email: str) -> None:
 
 
 # =========================
-# CONSENT GATE (POST-LOGIN ONLY)
+# CONSENT GATE (POST-LOGIN ONLY) - FAIL CLOSED
 # =========================
 def show_consent_gate() -> None:
     user = st.session_state.get("user")
     if not (isinstance(user, dict) and user.get("email")):
         return
 
-    email = user.get("email")
-
-    if st.session_state.get("accepted_policies"):
+    email = (user.get("email") or "").strip().lower()
+    if not email:
         return
 
+    # Always re-check DB as source of truth
     try:
-        if has_accepted_policies(email):
-            st.session_state["accepted_policies"] = True
-            return
-    except Exception:
-        pass
+        accepted_in_db = bool(has_accepted_policies(email))
+    except Exception as e:
+        st.error(f"Policy check failed. Please refresh and try again. ({e})")
+        st.stop()
 
+    # Keep session in sync (prevents weird skips)
+    st.session_state["accepted_policies"] = accepted_in_db
+
+    if accepted_in_db:
+        return
+
+    # ---- UI (unchanged) ----
     st.markdown(
         """
         <div style="
@@ -1581,17 +1587,17 @@ def show_consent_gate() -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Cookie Policy", key="btn_policy_cookies"):
-            snapshot_form_state()  # ✅ ADD THIS
+            snapshot_form_state()
             st.session_state["policy_view"] = "cookies"
             st.rerun()
     with c2:
         if st.button("Privacy Policy", key="btn_policy_privacy"):
-            snapshot_form_state()  # ✅ ADD THIS
+            snapshot_form_state()
             st.session_state["policy_view"] = "privacy"
             st.rerun()
     with c3:
         if st.button("Terms of Use", key="btn_policy_terms"):
-            snapshot_form_state()  # ✅ ADD THIS
+            snapshot_form_state()
             st.session_state["policy_view"] = "terms"
             st.rerun()
 
@@ -1600,16 +1606,30 @@ def show_consent_gate() -> None:
         key="chk_policy_agree",
     )
 
-    if st.button("Accept and continue", key="btn_policy_accept") and agree:
+    if st.button("Accept and continue", key="btn_policy_accept"):
+        if not agree:
+            st.warning("Please tick the checkbox to accept.")
+            st.stop()
+
         try:
             mark_policies_accepted(email)
+        except Exception as e:
+            st.error(f"Could not save your acceptance. Please try again. ({e})")
+            st.stop()
+
+        # Re-check DB after write (authoritative)
+        try:
+            st.session_state["accepted_policies"] = bool(has_accepted_policies(email))
         except Exception:
-            pass
-        st.session_state["accepted_policies"] = True
+            # If DB read fails after write, still block to be safe
+            st.error("Saved acceptance, but could not verify. Please refresh.")
+            st.stop()
+
         st.rerun()
 
     st.info("Please accept to continue using the site.")
     st.stop()
+
 
 
 # =========================
@@ -2081,15 +2101,6 @@ def render_mulyba_brand_header(is_logged_in: bool):
             if st.button("✨ Create", key="brand_create_btn"):
                 open_auth_modal("Create account")
                 st.rerun()
-
-# =========================
-# CONSENT ENFORCEMENT (RUN EVERY TIME)
-# =========================
-
-if show_policy_page():
-    st.stop()
-
-show_consent_gate()
 
 
 # =========================
