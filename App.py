@@ -145,23 +145,23 @@ COOLDOWN_SECONDS = 5
 
 def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
     """
-    Pays ONLY the referrer (+5 CV, +5 AI) for a referral signup,
-    and marks the referred user referral_bonus_applied=TRUE to prevent double-pay.
-    psycopg2 version (uses cursor).
+    Pays ONLY the referrer (+5 CV, +5 AI) when a new user signs up with a referral code.
+    Marks the new user referral_bonus_applied=TRUE to prevent double pay.
+    Uses your actual DB columns: cv_credits / ai_credits / referrals_count.
+    psycopg2 version.
     """
-
     email = (new_user_email or "").strip().lower()
-    code = (referral_code or "").strip()
+    code = (referral_code or "").strip().upper()  # codes usually stored uppercase
 
     if not email or not code:
         return False
 
-    conn = get_conn()  # <-- use your existing connection getter
+    conn = get_conn()  # <-- MUST return a psycopg2 connection
 
     try:
         with conn:
             with conn.cursor() as cur:
-                # 1) Lock new user row
+                # 1) Lock NEW USER row
                 cur.execute(
                     """
                     SELECT id, COALESCE(referral_bonus_applied, FALSE) AS applied
@@ -177,9 +177,9 @@ def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
 
                 new_user_id, already_applied = nu[0], bool(nu[1])
                 if already_applied:
-                    return True  # already processed
+                    return True
 
-                # 2) Lock referrer row by referral code
+                # 2) Lock REFERRER row by referral_code
                 cur.execute(
                     """
                     SELECT id, COALESCE(referrals_count, 0) AS cnt
@@ -195,9 +195,9 @@ def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
 
                 ref_id, ref_cnt = ref[0], int(ref[1] or 0)
 
-                # Cap
+                # 3) Cap enforcement
                 if ref_cnt >= REFERRAL_CAP:
-                    # Mark as applied anyway to stop re-trying forever (optional)
+                    # Still mark as applied so you don't keep reprocessing
                     cur.execute(
                         """
                         UPDATE users
@@ -209,19 +209,19 @@ def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
                     )
                     return False
 
-                # 3) Pay ONLY the referrer
+                # 4) Pay ONLY the referrer (YOUR REAL CREDIT COLUMNS)
                 cur.execute(
                     """
                     UPDATE users
-                    SET cv_remaining = COALESCE(cv_remaining, 0) + %s,
-                        ai_remaining = COALESCE(ai_remaining, 0) + %s,
+                    SET cv_credits = COALESCE(cv_credits, 0) + %s,
+                        ai_credits = COALESCE(ai_credits, 0) + %s,
                         referrals_count = COALESCE(referrals_count, 0) + 1
                     WHERE id = %s
                     """,
                     (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, ref_id),
                 )
 
-                # 4) Mark referral processed on the NEW USER
+                # 5) Mark referral processed on NEW USER
                 cur.execute(
                     """
                     UPDATE users
@@ -235,9 +235,9 @@ def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
         return True
 
     except Exception as e:
-        # optional: print for Railway logs
         print("apply_referral_bonus error:", e)
         return False
+
 
 
 
@@ -1339,7 +1339,8 @@ def auth_ui():
 
                 # Validate referral code if provided
                 if ref_code:
-                    ref_user = get_user_by_referral_code(ref_code)
+                    apply_referral_bonus(new_user_email=reg_email, referral_code=ref_code)
+
                     if not ref_user:
                         st.error("That referral code is not valid.")
                         st.stop()
