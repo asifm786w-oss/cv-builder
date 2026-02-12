@@ -1315,66 +1315,65 @@ def auth_ui():
                 else:
                     st.error("Invalid email or password.")
 
-# ---- REGISTER TAB ----
-with tab_register:
-    reg_name = st.text_input("Full name", key="auth_reg_name")
-    reg_email = st.text_input("Email", key="auth_reg_email")
-    reg_password = st.text_input("Password", type="password", key="auth_reg_password")
-    reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
+    # ---- REGISTER TAB ----
+    with tab_register:
+        reg_name = st.text_input("Full name", key="auth_reg_name")
+        reg_email = st.text_input("Email", key="auth_reg_email")
+        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
+        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
 
-    reg_referral_code = st.text_input(
-        "Referral code (optional)",
-        key="auth_reg_referral_code",
-        help="If a friend invited you, paste their referral code here.",
-    )
-
-    if st.button("Create account", key="auth_btn_register"):
-        if not reg_email or not reg_password or not reg_password2:
-            st.error("Please fill in all required fields.")
-            st.stop()
-
-        if reg_password != reg_password2:
-            st.error("Passwords do not match.")
-            st.stop()
-
-        referral_code = None
-
-        # ✅ Validate referral code ONLY if provided
-        if reg_referral_code.strip():
-            ref_user = get_user_by_referral_code(reg_referral_code.strip())
-            if not ref_user:
-                st.error("That referral code is not valid.")
-                st.stop()
-            referral_code = reg_referral_code.strip().upper()
-
-        # ✅ Create user (starter credits handled inside create_user)
-        ok = create_user(
-            email=reg_email,
-            password=reg_password,
-            full_name=reg_name,
-            referred_by=referral_code,
+        reg_referral_code = st.text_input(
+            "Referral code (optional)",
+            key="auth_reg_referral_code",
+            help="If a friend invited you, paste their referral code here.",
         )
 
-        if not ok:
-            st.error("That email is already registered.")
-            st.stop()
+        if st.button("Create account", key="auth_btn_register"):
+            if not reg_email or not reg_password or not reg_password2:
+                st.error("Please fill in all required fields.")
+                st.stop()
 
-        # ✅ Apply referral bonus (ONLY pays referrer)
-        if referral_code:
-            apply_referral_bonus(
-                new_user_email=reg_email,
-                referral_code=referral_code,
+            if reg_password != reg_password2:
+                st.error("Passwords do not match.")
+                st.stop()
+
+            referral_code = None
+
+            # ✅ Validate referral code ONLY if provided
+            if reg_referral_code.strip():
+                ref_user = get_user_by_referral_code(reg_referral_code.strip())
+                if not ref_user:
+                    st.error("That referral code is not valid.")
+                    st.stop()
+                referral_code = reg_referral_code.strip().upper()
+
+            # ✅ Create user (starter credits handled inside create_user)
+            ok = create_user(
+                email=reg_email,
+                password=reg_password,
+                full_name=reg_name,
+                referred_by=referral_code,
             )
 
-        # Auto-login
-        user = authenticate_user(reg_email, reg_password)
-        if user:
-            st.session_state["user"] = user
-            st.session_state["auth_modal_open"] = False
-            st.rerun()
-        else:
-            st.success("Account created. Please sign in.")
+            if not ok:
+                st.error("That email is already registered.")
+                st.stop()
 
+            # ✅ Apply referral bonus (ONLY pays referrer)
+            if referral_code:
+                apply_referral_bonus(
+                    new_user_email=reg_email,
+                    referral_code=referral_code,
+                )
+
+            # Auto-login
+            user = authenticate_user(reg_email, reg_password)
+            if user:
+                st.session_state["user"] = user
+                st.session_state["auth_modal_open"] = False
+                st.rerun()
+            else:
+                st.success("Account created. Please sign in.")
 
 
     # ---- FORGOT PASSWORD TAB ----
