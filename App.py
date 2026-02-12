@@ -240,11 +240,6 @@ def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
 
 
 
-
-
-
-
-
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")  # set in Railway (sk_test_... or sk_live_...)
 
 PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY")  # price_...
@@ -519,8 +514,6 @@ def get_user_credits(email: str) -> dict:
 
 
 
-
-
 def _clear_education_persistence_for_new_cv():
     """
     Clear education persistence so a new CV upload doesn't get overwritten by old backups.
@@ -681,10 +674,6 @@ def restore_education_state(max_rows: int = 5):
         st.session_state[f"edu_location_{i}"] = row.get("location", "")
         st.session_state[f"edu_start_{i}"] = row.get("start", "")
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
-
-
-
-
 
 # -------------------------
 # Resend helper (kept local)
@@ -891,19 +880,6 @@ def get_ai_credits(email: str) -> int:
         cur.execute("SELECT COALESCE(ai_credits, 0) FROM users WHERE email=%s", (email,))
         row = cur.fetchone()
         return int(row[0]) if row else 0
-
-
-# -------------------------
-# CV Template mapping
-# -------------------------
-TEMPLATE_MAP = {
-    "Blue": "Blue Theme.html",
-    "Green": "Green Theme.html",
-    "Purple": "Purple Theme.html",
-    "Red": "Red Theme.html",
-    "Elegant": "cv_elegant.html",
-    "Classic Grey": "classic_grey.html",
-}
 
 
 # -------------------------
@@ -1282,6 +1258,14 @@ div[role="dialog"] .stButton button{
     unsafe_allow_html=True,
 )
 
+# =========================
+# CONSENT ENFORCEMENT (RUN EVERY TIME)
+# =========================
+
+if show_policy_page():
+    st.stop()
+
+show_consent_gate()
 
 
 # =========================
@@ -1300,7 +1284,9 @@ def auth_ui():
     # ---- LOGIN TAB ----
     with tab_login:
         login_email = st.text_input("Email", key="auth_login_email")
-        login_password = st.text_input("Password", type="password", key="auth_login_password")
+        login_password = st.text_input(
+            "Password", type="password", key="auth_login_password"
+        )
 
         if st.button("Sign in", key="auth_btn_login"):
             if not login_email or not login_password:
@@ -1309,8 +1295,16 @@ def auth_ui():
                 user = authenticate_user(login_email, login_password)
                 if user:
                     st.session_state["user"] = user
+
+                    # ✅ FORCE consent gate for this user
+                    st.session_state["accepted_policies"] = False
+                    st.session_state["chk_policy_agree"] = False
+                    st.session_state["policy_view"] = None
+
                     st.session_state["auth_modal_open"] = False
-                    st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
+                    st.success(
+                        f"Welcome back, {user.get('full_name') or user['email']}!"
+                    )
                     st.rerun()
                 else:
                     st.error("Invalid email or password.")
@@ -1319,8 +1313,12 @@ def auth_ui():
     with tab_register:
         reg_name = st.text_input("Full name", key="auth_reg_name")
         reg_email = st.text_input("Email", key="auth_reg_email")
-        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
-        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
+        reg_password = st.text_input(
+            "Password", type="password", key="auth_reg_password"
+        )
+        reg_password2 = st.text_input(
+            "Confirm password", type="password", key="auth_reg_password2"
+        )
 
         reg_referral_code = st.text_input(
             "Referral code (optional)",
@@ -1339,15 +1337,15 @@ def auth_ui():
 
             referral_code = None
 
-            # ✅ Validate referral code ONLY if provided
             if reg_referral_code.strip():
-                ref_user = get_user_by_referral_code(reg_referral_code.strip())
+                ref_user = get_user_by_referral_code(
+                    reg_referral_code.strip()
+                )
                 if not ref_user:
                     st.error("That referral code is not valid.")
                     st.stop()
                 referral_code = reg_referral_code.strip().upper()
 
-            # ✅ Create user (starter credits handled inside create_user)
             ok = create_user(
                 email=reg_email,
                 password=reg_password,
@@ -1359,21 +1357,26 @@ def auth_ui():
                 st.error("That email is already registered.")
                 st.stop()
 
-            # ✅ Apply referral bonus (ONLY pays referrer)
             if referral_code:
                 apply_referral_bonus(
                     new_user_email=reg_email,
                     referral_code=referral_code,
                 )
 
-            # Auto-login
             user = authenticate_user(reg_email, reg_password)
             if user:
                 st.session_state["user"] = user
+
+                # ✅ FORCE consent gate for this user
+                st.session_state["accepted_policies"] = False
+                st.session_state["chk_policy_agree"] = False
+                st.session_state["policy_view"] = None
+
                 st.session_state["auth_modal_open"] = False
                 st.rerun()
             else:
                 st.success("Account created. Please sign in.")
+
 
 
     # ---- FORGOT PASSWORD TAB ----
@@ -1510,6 +1513,33 @@ def show_policy_page() -> bool:
 
     return True
 
+# =========================
+# POLICIES: DB HELPERS (psycopg2)
+# =========================
+def has_accepted_policies(email: str) -> bool:
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(accepted_policies, 0) FROM users WHERE lower(email) = %s",
+            (email.strip().lower(),),
+        )
+        row = cur.fetchone()
+        return bool(row and int(row[0]) == 1)
+
+
+def mark_policies_accepted(email: str) -> None:
+    conn = get_conn()
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET accepted_policies = 1,
+                    policies_at = NOW()
+                WHERE lower(email) = %s
+                """,
+                (email.strip().lower(),),
+            )
 
 
 # =========================
