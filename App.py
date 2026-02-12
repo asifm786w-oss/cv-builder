@@ -2708,7 +2708,7 @@ references = st.text_area(
     ),
 )
 
-
+with st.expander("Job Search (Adzuna)", expanded=False):
 
 # -----------------------------
 # Job Search (Adzuna) — FULL BLOCK (drop-in)
