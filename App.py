@@ -144,75 +144,101 @@ CV_USAGE_KEYS = {"cv_generations"}
 COOLDOWN_SECONDS = 5
 
 def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
-    if not new_user_email or not referral_code:
+    """
+    Pays ONLY the referrer (+5 CV, +5 AI) for a referral signup,
+    and marks the referred user referral_bonus_applied=TRUE to prevent double-pay.
+    psycopg2 version (uses cursor).
+    """
+
+    email = (new_user_email or "").strip().lower()
+    code = (referral_code or "").strip()
+
+    if not email or not code:
         return False
 
-    email = new_user_email.strip().lower()
-    code = referral_code.strip()
+    conn = get_conn()  # <-- use your existing connection getter
 
-    conn = get_conn()  # <-- use your existing DB connection getter
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                # 1) Lock new user row
+                cur.execute(
+                    """
+                    SELECT id, COALESCE(referral_bonus_applied, FALSE) AS applied
+                    FROM users
+                    WHERE lower(email) = %s
+                    FOR UPDATE
+                    """,
+                    (email,),
+                )
+                nu = cur.fetchone()
+                if not nu:
+                    return False
 
-    def get(row, key, idx):
-        return row.get(key) if isinstance(row, dict) else row[idx]
+                new_user_id, already_applied = nu[0], bool(nu[1])
+                if already_applied:
+                    return True  # already processed
 
-    with conn:
-        # 1) Lock new user
-        nu = conn.execute("""
-            SELECT id, COALESCE(referral_bonus_applied, FALSE) AS applied
-            FROM users
-            WHERE lower(email) = %s
-            FOR UPDATE
-        """, (email,)).fetchone()
+                # 2) Lock referrer row by referral code
+                cur.execute(
+                    """
+                    SELECT id, COALESCE(referrals_count, 0) AS cnt
+                    FROM users
+                    WHERE referral_code = %s
+                    FOR UPDATE
+                    """,
+                    (code,),
+                )
+                ref = cur.fetchone()
+                if not ref:
+                    return False
 
-        if not nu:
-            return False
+                ref_id, ref_cnt = ref[0], int(ref[1] or 0)
 
-        new_user_id = get(nu, "id", 0)
-        already = bool(get(nu, "applied", 1))
-        if already:
-            return True  # already processed
+                # Cap
+                if ref_cnt >= REFERRAL_CAP:
+                    # Mark as applied anyway to stop re-trying forever (optional)
+                    cur.execute(
+                        """
+                        UPDATE users
+                        SET referral_bonus_applied = TRUE,
+                            referred_by = COALESCE(referred_by, %s)
+                        WHERE id = %s
+                        """,
+                        (code, new_user_id),
+                    )
+                    return False
 
-        # 2) Lock referrer by referral_code
-        ref = conn.execute("""
-            SELECT id, COALESCE(referrals_count, 0) AS cnt
-            FROM users
-            WHERE referral_code = %s
-            FOR UPDATE
-        """, (code,)).fetchone()
+                # 3) Pay ONLY the referrer
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET cv_remaining = COALESCE(cv_remaining, 0) + %s,
+                        ai_remaining = COALESCE(ai_remaining, 0) + %s,
+                        referrals_count = COALESCE(referrals_count, 0) + 1
+                    WHERE id = %s
+                    """,
+                    (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, ref_id),
+                )
 
-        if not ref:
-            return False
-
-        ref_id = get(ref, "id", 0)
-        cnt = int(get(ref, "cnt", 1) or 0)
-
-        if cnt >= REFERRAL_CAP:
-            # still mark as applied so it doesn't keep trying (optional)
-            conn.execute("""
-                UPDATE users
-                SET referral_bonus_applied = TRUE
-                WHERE id = %s
-            """, (new_user_id,))
-            return False
-
-        # 3) Pay ONLY referrer
-        conn.execute("""
-            UPDATE users
-            SET cv_remaining = COALESCE(cv_remaining, 0) + %s,
-                ai_remaining = COALESCE(ai_remaining, 0) + %s,
-                referrals_count = COALESCE(referrals_count, 0) + 1
-            WHERE id = %s
-        """, (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, ref_id))
-
-        # 4) Mark the referral as processed on the NEW USER
-        conn.execute("""
-            UPDATE users
-            SET referral_bonus_applied = TRUE,
-                referred_by = COALESCE(referred_by, %s)
-            WHERE id = %s
-        """, (code, new_user_id))
+                # 4) Mark referral processed on the NEW USER
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET referral_bonus_applied = TRUE,
+                        referred_by = COALESCE(referred_by, %s)
+                    WHERE id = %s
+                    """,
+                    (code, new_user_id),
+                )
 
         return True
+
+    except Exception as e:
+        # optional: print for Railway logs
+        print("apply_referral_bonus error:", e)
+        return False
+
 
 
 
