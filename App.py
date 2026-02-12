@@ -250,6 +250,34 @@ if not APP_URL:
     # safe fallback so app still runs locally
     APP_URL = "http://localhost:8501"
 
+# =========================
+# POLICIES: DB HELPERS (psycopg2) - NO policies_at column needed
+# =========================
+def has_accepted_policies(email: str) -> bool:
+    conn = get_conn()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(accepted_policies, 0) FROM users WHERE lower(email) = %s",
+            (email.strip().lower(),),
+        )
+        row = cur.fetchone()
+        return bool(row and int(row[0]) == 1)
+
+
+def mark_policies_accepted(email: str) -> None:
+    conn = get_conn()
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET accepted_policies = 1
+                WHERE lower(email) = %s
+                """,
+                (email.strip().lower(),),
+            )
+
+
 
 def create_checkout_session(price_id: str, pack: str, customer_email: str | None = None) -> str:
     customer_email_clean = (customer_email or "").strip().lower()
@@ -1508,33 +1536,8 @@ def show_policy_page() -> bool:
 
     return True
 
-# =========================
-# POLICIES: DB HELPERS (psycopg2)
-# =========================
-def has_accepted_policies(email: str) -> bool:
-    conn = get_conn()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT COALESCE(accepted_policies, 0) FROM users WHERE lower(email) = %s",
-            (email.strip().lower(),),
-        )
-        row = cur.fetchone()
-        return bool(row and int(row[0]) == 1)
 
 
-def mark_policies_accepted(email: str) -> None:
-    conn = get_conn()
-    with conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE users
-                SET accepted_policies = 1,
-                    policies_at = NOW()
-                WHERE lower(email) = %s
-                """,
-                (email.strip().lower(),),
-            )
 
 
 # =========================
