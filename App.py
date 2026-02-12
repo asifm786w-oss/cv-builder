@@ -2871,6 +2871,248 @@ with st.expander("Job Search (Adzuna)", expanded=expanded):
 
 
 # -------------------------
+# 5. Target Job (optional, for AI)
+# -------------------------
+st.header("5. Target Job (optional)")
+
+job_description = st.text_area(
+    "Paste the job description here",
+    height=200,
+    help="Paste the full job spec from LinkedIn, Indeed, etc.",
+    key="job_description",
+)
+
+import hashlib
+
+def _fingerprint(text: str) -> str:
+    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
+
+jd_fp = _fingerprint(job_description)
+last_jd_fp = st.session_state.get("_last_jd_fp")
+
+if last_jd_fp and jd_fp != last_jd_fp:
+    # Job changed: clear anything derived from it
+    st.session_state.pop("job_summary_ai", None)
+    st.session_state.pop("cover_letter", None)
+    st.session_state.pop("cover_letter_box", None)
+
+st.session_state["_last_jd_fp"] = jd_fp
+
+st.caption(
+    f"For best results, keep this to {MAX_DOC_WORDS} words or less. "
+    "(Extra words are ignored.)"
+)
+
+col_jd1, col_jd2 = st.columns(2)
+with col_jd1:
+    job_summary_clicked = st.button(
+        "Suggest tailored summary (AI)",
+        key="btn_job_summary",
+    )
+with col_jd2:
+    ai_cover_letter_clicked = st.button(
+        "Generate cover letter (AI)",
+        key="btn_cover",
+    )
+
+# --- AI job-description summary (separate from professional summary) ---
+if job_summary_clicked:
+    if not gate_premium("generate a job summary"):
+        st.stop()
+
+    # Guard: must complete Section 1 first
+    if not (full_name.strip() and email.strip()):
+        st.warning(
+            "Complete Section 1 (Full name + Email) first — these are automatically used in your outputs."
+        )
+        st.stop()
+
+    # Guard: need a job description
+    if not job_description.strip():
+        st.error("Please paste a job description first.")
+        st.stop()
+
+    # Quota check
+    if not has_free_quota("job_summary_uses", 1, "AI job summary"):
+        st.stop()
+
+    with st.spinner("Generating AI job summary..."):
+        try:
+            jd_limited = enforce_word_limit(
+                job_description,
+                MAX_DOC_WORDS,
+                label="Job description",
+            )
+
+            job_summary_text = generate_job_summary(jd_limited)
+
+            st.session_state["job_summary_ai"] = job_summary_text
+            st.session_state["job_summary_uses"] = (
+                st.session_state.get("job_summary_uses", 0) + 1
+            )
+
+            email_for_usage = (st.session_state.get("user") or {}).get("email")
+            if email_for_usage:
+                increment_usage(email_for_usage, "job_summary_uses")
+
+            st.success(
+                "AI job summary generated below. "
+                "You can copy it into applications or your notes."
+            )
+
+        except Exception as e:
+            st.error(f"AI error (job summary): {e}")
+
+# --- DISPLAY JOB SUMMARY (THIS WAS MISSING) ---
+job_summary_text = st.session_state.get("job_summary_ai", "")
+if job_summary_text:
+    st.markdown("**AI job summary for this role (read-only):**")
+    st.write(job_summary_text)
+# --- AI cover letter ---
+
+# ✅ JD fingerprint clearing: if JD changes, clear derived outputs
+import hashlib
+
+def _fingerprint(text: str) -> str:
+    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
+
+jd_fp = _fingerprint(job_description)
+last_jd_fp = st.session_state.get("_last_jd_fp")
+
+if last_jd_fp and jd_fp != last_jd_fp:
+    st.session_state.pop("job_summary_ai", None)
+    st.session_state.pop("cover_letter", None)
+    st.session_state.pop("cover_letter_box", None)
+
+st.session_state["_last_jd_fp"] = jd_fp
+
+
+# --- AI cover letter generation ---
+if ai_cover_letter_clicked:
+    if not gate_premium("generate a cover letter"):
+        st.stop()
+
+    # ✅ Guard: must complete Section 1 first
+    if not (full_name.strip() and email.strip()):
+        st.warning(
+            "Complete Section 1 (Full name + Email) first — these are automatically added to your cover letter."
+        )
+        st.stop()
+
+    # ✅ Guard: need a job description
+    if not job_description.strip():
+        st.error("Please paste a job description first.")
+        st.stop()
+
+    # ✅ Quota check
+    if not has_free_quota("cover_uses", 1, "AI cover letter"):
+        st.stop()
+
+    with st.spinner("Generating cover letter..."):
+        try:
+            cover_input = {
+                "full_name": full_name,
+                "current_title": title,
+                "skills": skills,
+                "experiences": [exp.dict() for exp in experiences],
+                "education": st.session_state.get("education_items", []),
+                "location": location,
+            }
+
+            jd_limited = enforce_word_limit(
+                job_description,
+                MAX_DOC_WORDS,
+                label="Job description (AI input)",
+            )
+
+            job_summary = st.session_state.get("job_summary_ai", "") or ""
+
+            cover_text = generate_cover_letter_ai(
+                cover_input,
+                jd_limited,
+                job_summary,
+            )
+
+            cleaned = clean_cover_letter_body(cover_text)
+
+            final_letter = enforce_word_limit(
+                cleaned,
+                MAX_LETTER_WORDS,
+                label="cover letter",
+            )
+
+            # ✅ Set BOTH keys BEFORE rendering the widget (no `value=` on widget)
+            st.session_state["cover_letter"] = final_letter
+            st.session_state["cover_letter_box"] = final_letter
+
+            st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
+            email_for_usage = (st.session_state.get("user") or {}).get("email")
+            if email_for_usage:
+                increment_usage(email_for_usage, "cover_uses")
+
+            st.success(
+                "AI cover letter generated below. You can edit it before downloading."
+            )
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"AI error (cover letter): {e}")
+
+
+# --- Cover letter editor + downloads ---
+st.session_state.setdefault("cover_letter", "")
+
+if st.session_state["cover_letter"]:
+    st.subheader("✏️ Cover letter")
+
+    # ✅ Widget reads from session_state via key; DO NOT pass `value=`
+    edited = st.text_area(
+        "You can edit this before using it:",
+        key="cover_letter_box",
+        height=260,
+    )
+
+    # keep canonical value in sync
+    st.session_state["cover_letter"] = edited
+
+    try:
+        letter_pdf = render_cover_letter_pdf_bytes(
+            full_name=full_name or "Candidate",
+            letter_body=st.session_state["cover_letter"],
+            location=location or "",
+            email=email or "",
+            phone=phone or "",
+        )
+
+        letter_docx = render_cover_letter_docx_bytes(
+            full_name=full_name or "Candidate",
+            letter_body=st.session_state["cover_letter"],
+            location=location or "",
+            email=email or "",
+            phone=phone or "",
+        )
+
+        col_d11, col_d12 = st.columns(2)
+        with col_d11:
+            st.download_button(
+                label="📄 Download cover letter as PDF",
+                data=letter_pdf,
+                file_name="cover_letter.pdf",
+                mime="application/pdf",
+            )
+        with col_d12:
+            st.download_button(
+                label="📝 Download cover letter as Word (.docx)",
+                data=letter_docx,
+                file_name="cover_letter.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+
+    except Exception as e:
+        st.error(f"Error generating cover letter files: {e!r}")
+
+
+# -------------------------
 # CV Template mapping
 # -------------------------
 TEMPLATE_MAP = {
