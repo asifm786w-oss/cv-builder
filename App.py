@@ -143,6 +143,58 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
+def award_referral_bonus(conn, new_user_id: int, referral_code: str):
+    if not referral_code:
+        return
+
+    with conn:  # transaction
+        # Lock new user so double-submit cannot double-award
+        row = conn.execute("""
+            SELECT referral_bonus_applied, referred_by
+            FROM users
+            WHERE id = %s
+            FOR UPDATE
+        """, (new_user_id,)).fetchone()
+
+        if not row:
+            return
+
+        if row["referral_bonus_applied"]:
+            return  # already awarded
+
+        # Find referrer + lock
+        ref = conn.execute("""
+            SELECT id, referrals
+            FROM users
+            WHERE referral_code = %s
+            FOR UPDATE
+        """, (referral_code,)).fetchone()
+
+        if not ref:
+            return  # invalid code
+
+        if int(ref["referrals"] or 0) >= REFERRAL_CAP:
+            return  # cap reached, no award
+
+        # 1) Reward NEW USER
+        conn.execute("""
+            UPDATE users
+            SET cv_remaining = cv_remaining + %s,
+                ai_remaining = ai_remaining + %s,
+                referral_bonus_applied = TRUE,
+                referred_by = COALESCE(referred_by, %s)
+            WHERE id = %s
+        """, (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, referral_code, new_user_id))
+
+        # 2) Reward REFERRER + increment count
+        conn.execute("""
+            UPDATE users
+            SET cv_remaining = cv_remaining + %s,
+                ai_remaining = ai_remaining + %s,
+                referrals = COALESCE(referrals, 0) + 1
+            WHERE id = %s
+        """, (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, ref["id"]))
+
 
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")  # set in Railway (sk_test_... or sk_live_...)
 
