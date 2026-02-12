@@ -2082,6 +2082,15 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 open_auth_modal("Create account")
                 st.rerun()
 
+# =========================
+# CONSENT ENFORCEMENT (RUN EVERY TIME)
+# =========================
+
+if show_policy_page():
+    st.stop()
+
+show_consent_gate()
+
 
 # =========================
 # SIDEBAR (full)
@@ -2382,14 +2391,7 @@ def restore_form_state() -> None:
         if cur is None or (isinstance(cur, str) and not cur.strip()):
             st.session_state[k] = v
 
-# =========================
-# CONSENT ENFORCEMENT (RUN EVERY TIME)
-# =========================
 
-if show_policy_page():
-    st.stop()
-
-show_consent_gate()
 
 # ============================================================
 # CV Upload + AI Autofill (ONE block only)
