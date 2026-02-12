@@ -2412,8 +2412,63 @@ normalize_skills_state()
 st.header("2. Skills")
 
 # -------------------------
-# 2. Skills
+# 2. Skills (bullet points)
 # -------------------------
+
+def normalize_skills_to_bullets(text: str) -> str:
+    """
+    Accepts commas/newlines/bullets/paragraphs and returns clean bullet lines:
+    • Skill
+    • Skill
+    """
+    if not text:
+        return ""
+
+    t = text.strip()
+    if not t:
+        return ""
+
+    # Split on newlines first
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+
+    items: list[str] = []
+
+    if len(lines) <= 1:
+        # Single line: could be comma-separated or a paragraph
+        one = lines[0] if lines else t
+
+        # If commas likely represent a list, split on commas
+        if "," in one:
+            parts = [p.strip() for p in one.split(",") if p.strip()]
+            items.extend(parts)
+        else:
+            # Try splitting on "•" or "-" if user pasted bullets inline
+            # Otherwise keep as one item
+            tmp = one.replace("•", "\n•").replace(" - ", "\n- ")
+            tmp_lines = [x.strip() for x in tmp.splitlines() if x.strip()]
+            if len(tmp_lines) > 1:
+                lines = tmp_lines
+            else:
+                items.append(one)
+    else:
+        # Multiple lines: treat each line as an item after stripping bullet prefixes
+        for ln in lines:
+            cleaned = ln.lstrip("•*-–— \t").strip()
+            if cleaned:
+                items.append(cleaned)
+
+    # De-dupe while preserving order
+    seen = set()
+    uniq: list[str] = []
+    for it in items:
+        key = it.lower()
+        if key not in seen:
+            seen.add(key)
+            uniq.append(it)
+
+    # Format as bullets
+    return "\n".join(f"• {it}" for it in uniq)
+
 
 # ✅ Apply staged AI value BEFORE widget renders
 if "skills_pending" in st.session_state:
@@ -2421,12 +2476,12 @@ if "skills_pending" in st.session_state:
 
 # ✅ Default only if missing or None (never overwrite CV)
 if "skills_text" not in st.session_state or st.session_state["skills_text"] is None:
-    st.session_state["skills_text"] = "Python, SQL, Communication"
+    st.session_state["skills_text"] = "• Python\n• SQL\n• Communication"
 
 skills_text = st.text_area(
-    "Skills (comma separated)",
+    "Skills (one per line)",
     key="skills_text",
-    help="For example: Python, SQL, Leadership, Problem-solving",
+    help="Use one skill per line (bullets). Example:\n• Python\n• SQL\n• Leadership",
 )
 
 btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
@@ -2448,15 +2503,11 @@ if btn_skills:
             try:
                 improved = improve_bullets(skills_text)
 
-                # compress to comma-separated
-                improved_clean = ", ".join(
-                    line.strip("•- \t")
-                    for line in improved.splitlines()
-                    if line.strip()
-                )
+                # ✅ convert whatever the model returns into clean bullets
+                improved_bullets = normalize_skills_to_bullets(improved)
 
                 improved_limited = enforce_word_limit(
-                    improved_clean,
+                    improved_bullets,
                     MAX_DOC_WORDS,
                     label="Skills (AI)",
                 )
@@ -2475,12 +2526,29 @@ if btn_skills:
             except Exception as e:
                 st.error(f"AI error (skills improvement): {e}")
 
-# Build skills list ONCE for downstream use
-skills = [
-    s.strip()
-    for s in (st.session_state.get("skills_text") or "").replace("\n", ",").split(",")
-    if s.strip()
-]
+
+# Build skills list ONCE for downstream use (supports bullets OR commas)
+raw = (st.session_state.get("skills_text") or "").strip()
+
+skills: list[str] = []
+for ln in raw.splitlines():
+    ln = ln.strip()
+    if not ln:
+        continue
+    # Remove bullet prefix if present
+    ln = ln.lstrip("•*-–— \t").strip()
+    if not ln:
+        continue
+    # If someone pasted comma-separated into one line, split it
+    if "," in ln:
+        skills.extend([p.strip() for p in ln.split(",") if p.strip()])
+    else:
+        skills.append(ln)
+
+# Optional: de-dupe
+seen = set()
+skills = [s for s in skills if not (s.lower() in seen or seen.add(s.lower()))]
+
 
 
 restore_experience_from_parsed()
