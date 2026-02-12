@@ -1448,14 +1448,7 @@ st.session_state.setdefault("accepted_policies", False)
 st.session_state.setdefault("policy_view", None)  # None | cookies | privacy | terms | accessibility
 st.session_state.setdefault("guest_started_builder", False)
 
-# =========================
-# CONSENT ENFORCEMENT (RUN EVERY TIME)
-# =========================
 
-if show_policy_page():
-    st.stop()
-
-show_consent_gate()
 
 # =========================
 # POLICY FILE READER
@@ -2389,6 +2382,14 @@ def restore_form_state() -> None:
         if cur is None or (isinstance(cur, str) and not cur.strip()):
             st.session_state[k] = v
 
+# =========================
+# CONSENT ENFORCEMENT (RUN EVERY TIME)
+# =========================
+
+if show_policy_page():
+    st.stop()
+
+show_consent_gate()
 
 # ============================================================
 # CV Upload + AI Autofill (ONE block only)
