@@ -143,96 +143,79 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
-def award_referral_bonus(conn, new_user_email: str, referral_code: str):
-    """
-    Awards +5 CV/+5 AI to BOTH:
-    - the new user who signed up with a referral code
-    - the referrer (and increments referrals count)
-    Guards against double-award using referral_bonus_applied.
-    """
+def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
+    if not new_user_email or not referral_code:
+        return False
 
-    if not referral_code:
-        return
+    email = new_user_email.strip().lower()
+    code = referral_code.strip()
 
-    email = (new_user_email or "").strip().lower()
-    if not email:
-        return
+    conn = get_conn()  # <-- use your existing DB connection getter
 
-    with conn:  # transaction
-        # Lock new user row
-        row = conn.execute(
-            """
-            SELECT id, referral_bonus_applied, referred_by
+    def get(row, key, idx):
+        return row.get(key) if isinstance(row, dict) else row[idx]
+
+    with conn:
+        # 1) Lock new user
+        nu = conn.execute("""
+            SELECT id, COALESCE(referral_bonus_applied, FALSE) AS applied
             FROM users
             WHERE lower(email) = %s
             FOR UPDATE
-            """,
-            (email,),
-        ).fetchone()
+        """, (email,)).fetchone()
 
-        if not row:
-            return
+        if not nu:
+            return False
 
-        # Support both dict-row and tuple-row drivers
-        if isinstance(row, dict):
-            new_user_id = row.get("id")
-            already = bool(row.get("referral_bonus_applied"))
-        else:
-            # row ordering: id, referral_bonus_applied, referred_by
-            new_user_id = row[0]
-            already = bool(row[1])
-
+        new_user_id = get(nu, "id", 0)
+        already = bool(get(nu, "applied", 1))
         if already:
-            return  # already awarded
+            return True  # already processed
 
-        # Find referrer + lock
-        ref = conn.execute(
-            """
-            SELECT id, referrals
+        # 2) Lock referrer by referral_code
+        ref = conn.execute("""
+            SELECT id, COALESCE(referrals_count, 0) AS cnt
             FROM users
             WHERE referral_code = %s
             FOR UPDATE
-            """,
-            (referral_code,),
-        ).fetchone()
+        """, (code,)).fetchone()
 
         if not ref:
-            return  # invalid code
+            return False
 
-        if isinstance(ref, dict):
-            ref_id = ref.get("id")
-            ref_count = int(ref.get("referrals") or 0)
-        else:
-            ref_id = ref[0]
-            ref_count = int(ref[1] or 0)
+        ref_id = get(ref, "id", 0)
+        cnt = int(get(ref, "cnt", 1) or 0)
 
-        if ref_count >= REFERRAL_CAP:
-            return  # cap reached
+        if cnt >= REFERRAL_CAP:
+            # still mark as applied so it doesn't keep trying (optional)
+            conn.execute("""
+                UPDATE users
+                SET referral_bonus_applied = TRUE
+                WHERE id = %s
+            """, (new_user_id,))
+            return False
 
-        # 1) Reward NEW USER (by id we just fetched + locked)
-        conn.execute(
-            """
+        # 3) Pay ONLY referrer
+        conn.execute("""
             UPDATE users
-            SET cv_remaining = cv_remaining + %s,
-                ai_remaining = ai_remaining + %s,
-                referral_bonus_applied = TRUE,
+            SET cv_remaining = COALESCE(cv_remaining, 0) + %s,
+                ai_remaining = COALESCE(ai_remaining, 0) + %s,
+                referrals_count = COALESCE(referrals_count, 0) + 1
+            WHERE id = %s
+        """, (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, ref_id))
+
+        # 4) Mark the referral as processed on the NEW USER
+        conn.execute("""
+            UPDATE users
+            SET referral_bonus_applied = TRUE,
                 referred_by = COALESCE(referred_by, %s)
             WHERE id = %s
-            """,
-            (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, referral_code, new_user_id),
-        )
+        """, (code, new_user_id))
 
-        # 2) Reward REFERRER + increment count
-        conn.execute(
-            """
-            UPDATE users
-            SET cv_remaining = cv_remaining + %s,
-                ai_remaining = ai_remaining + %s,
-                referrals = COALESCE(referrals, 0) + 1
-            WHERE id = %s
-            """,
-            (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, ref_id),
-        )
+        return True
+
+
+
 
 
 
@@ -1325,20 +1308,31 @@ def auth_ui():
             elif reg_password != reg_password2:
                 st.error("Passwords do not match.")
             else:
-                referred_by_email = None
+                # Keep the referral CODE (not the referrer email)
+                ref_code = (reg_referral_code or "").strip() or None
 
-                if reg_referral_code.strip():
-                    ref_user = get_user_by_referral_code(reg_referral_code.strip())
+                # Validate referral code if provided
+                if ref_code:
+                    ref_user = get_user_by_referral_code(ref_code)
                     if not ref_user:
                         st.error("That referral code is not valid.")
                         st.stop()
-                    referred_by_email = ref_user["email"]
 
-                ok = create_user(reg_email, reg_password, reg_name, referred_by=referred_by_email)
+                # Store referral code on the new user row
+                ok = create_user(
+                    reg_email,
+                    reg_password,
+                    reg_name,
+                    referred_by=ref_code,  # <- store code, not email
+                )
 
                 if ok:
-                    if referred_by_email:
-                        apply_referral_bonus(referred_by_email)
+                    # Award ONLY the referrer, and mark this referral as processed
+                    if ref_code:
+                        apply_referral_bonus(
+                            new_user_email=reg_email,
+                            referral_code=ref_code,
+                        )
 
                     st.session_state["accepted_policies"] = False
 
@@ -1351,6 +1345,7 @@ def auth_ui():
                         st.success("Account created. Please sign in.")
                 else:
                     st.error("That email is already registered.")
+
 
     # ---- FORGOT PASSWORD TAB ----
     with tab_forgot:
