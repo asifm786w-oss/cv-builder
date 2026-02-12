@@ -304,6 +304,51 @@ Return ONLY improved bullet points:
     return response.choices[0].message.content.strip()
 
 # -------------------------------------------------------------------
+# 3b. Improve skills (STRICT: skills only, no sentences)
+# -------------------------------------------------------------------
+def improve_skills(skills_text: str) -> str:
+    client = _get_client()
+
+    prompt = f"""
+You are an expert UK CV writer.
+
+Convert the following into a clean SKILLS list.
+
+Hard rules (must follow):
+- Output ONLY bullet points.
+- Each bullet must be a SKILL keyword/phrase (1 to 3 words).
+- NO full sentences.
+- NO achievements/responsibilities.
+- NO verbs like: developed, implemented, cultivated, led, managed, delivered, spearheaded.
+- NO commas inside a bullet.
+- 10 to 18 bullets max.
+- UK spelling.
+- Do NOT invent skills not implied by the input.
+
+Input:
+\"\"\"{skills_text}\"\"\"
+
+Return ONLY the bullet list:
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You output only skill keywords for a CV skills section. "
+                    "Never output sentences or achievements."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.2,
+    )
+
+    return response.choices[0].message.content.strip()
+
+# -------------------------------------------------------------------
 # 4. Extract CV data (parser) - stricter role separation
 # -------------------------------------------------------------------
 def extract_cv_data(raw_text: str) -> dict:
