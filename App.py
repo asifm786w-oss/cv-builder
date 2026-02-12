@@ -1258,14 +1258,7 @@ div[role="dialog"] .stButton button{
     unsafe_allow_html=True,
 )
 
-# =========================
-# CONSENT ENFORCEMENT (RUN EVERY TIME)
-# =========================
 
-if show_policy_page():
-    st.stop()
-
-show_consent_gate()
 
 
 # =========================
@@ -1454,6 +1447,15 @@ st.session_state.setdefault("user", None)
 st.session_state.setdefault("accepted_policies", False)
 st.session_state.setdefault("policy_view", None)  # None | cookies | privacy | terms | accessibility
 st.session_state.setdefault("guest_started_builder", False)
+
+# =========================
+# CONSENT ENFORCEMENT (RUN EVERY TIME)
+# =========================
+
+if show_policy_page():
+    st.stop()
+
+show_consent_gate()
 
 # =========================
 # POLICY FILE READER
