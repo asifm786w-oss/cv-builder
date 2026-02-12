@@ -773,6 +773,23 @@ def increment_usage(email: str, counter_key: str, cost: int = 1) -> None:
 
         conn.commit()
 
+def get_user_by_email(email: str) -> dict | None:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM users WHERE email=%s", (email,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        cols = [d[0] for d in cur.description]
+        return dict(zip(cols, row))
+
+
+def get_ai_credits(email: str) -> int:
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COALESCE(ai_credits, 0) FROM users WHERE email=%s", (email,))
+        row = cur.fetchone()
+        return int(row[0]) if row else 0
 
 
 # -------------------------
@@ -2693,9 +2710,15 @@ references = st.text_area(
 
 
 
+# -----------------------------
+# Job Search (Adzuna) — FULL BLOCK (drop-in)
+# -----------------------------
 import streamlit as st
 from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
 
+# -----------------------------
+# Helpers (cache + formatting)
+# -----------------------------
 @st.cache_data(ttl=300, show_spinner=False)
 def _cached_adzuna_search(query: str, location: str, results: int = 10):
     return search_jobs(query=query, location=location, results=results)
@@ -2712,6 +2735,24 @@ def _format_salary(smin, smax) -> str:
     except Exception:
         return "Salary: available"
 
+
+# -----------------------------
+# REQUIRED DB HELPERS YOU MUST HAVE
+# (If you already have these elsewhere, REMOVE these stubs/import them.)
+# -----------------------------
+# get_ai_credits(email) -> int
+# get_user_by_email(email) -> dict | None
+# decrement_ai_credit(email, amount=1) -> bool
+
+# Example signatures (do NOT duplicate if already defined):
+# def get_ai_credits(email: str) -> int: ...
+# def get_user_by_email(email: str): ...
+# def decrement_ai_credit(email: str, amount: int = 1) -> bool: ...
+
+
+# -----------------------------
+# UI
+# -----------------------------
 st.subheader("Job Search (Adzuna)")
 
 # --- AUTH ---
@@ -2721,8 +2762,11 @@ if not email:
     st.warning("Please sign in to use Job Search.")
     st.stop()
 
-# ✅ CREDIT SOURCE OF TRUTH = user row
-ai_credits = int(user.get("ai_credits") or 0)
+# ✅ CREDIT SOURCE OF TRUTH = DB (not session)
+ai_credits = int(get_ai_credits(email) or 0)
+# keep session in sync so sidebar updates
+st.session_state["user"]["ai_credits"] = ai_credits
+
 if ai_credits <= 0:
     st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
     st.stop()
@@ -2730,9 +2774,17 @@ if ai_credits <= 0:
 # Inputs
 col1, col2 = st.columns(2)
 with col1:
-    keywords = st.text_input("Keywords", key="adzuna_keywords", placeholder="e.g. marketing manager")
+    keywords = st.text_input(
+        "Keywords",
+        key="adzuna_keywords",
+        placeholder="e.g. marketing manager",
+    )
 with col2:
-    location = st.text_input("Location", key="adzuna_location", placeholder="e.g. Walsall or WS2")
+    location = st.text_input(
+        "Location",
+        key="adzuna_location",
+        placeholder="e.g. Walsall or WS2",
+    )
 
 search_clicked = st.button("Search", type="primary", key="adzuna_search_btn")
 
@@ -2750,18 +2802,25 @@ if search_clicked:
         with st.spinner("Searching jobs..."):
             jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
-        # ✅ decrement 1 credit AFTER a successful API return
+        # ✅ decrement 1 credit AFTER successful API return
         ok = decrement_ai_credit(email, amount=1)
         if not ok:
             st.warning("You don’t have enough AI credits to perform this search.")
             st.stop()
 
-        # ✅ refresh user so sidebar updates immediately
-        st.session_state["user"] = get_user_by_email(email)  # rename to your actual fetch fn
+        # ✅ refresh user for sidebar / gating immediately
+        fresh = get_user_by_email(email)
+        if fresh:
+            st.session_state["user"] = fresh
+        else:
+            # fallback: at least update credits in-session
+            st.session_state["user"]["ai_credits"] = int(get_ai_credits(email) or 0)
 
         st.session_state["adzuna_results"] = jobs
+
         if not jobs:
             st.info("No results found. Try different keywords or a nearby location.")
+
         st.rerun()
 
     except AdzunaConfigError:
@@ -2771,7 +2830,10 @@ if search_clicked:
     except Exception as e:
         st.error(f"Job search failed: {e}")
 
+
+# -----------------------------
 # Results
+# -----------------------------
 jobs = st.session_state.get("adzuna_results") or []
 if jobs:
     st.caption("Showing up to 10 results.")
@@ -2800,10 +2862,10 @@ if jobs:
 
             with top[1]:
                 if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
-                    # ✅ write into your existing Section 5 text area
+                    # ✅ writes into your existing Section 5 text_area(key="job_description")
                     st.session_state["job_description"] = desc
 
-                    # ✅ clear derived outputs + force JD fingerprint refresh
+                    # ✅ force JD fingerprint refresh + clear derived outputs
                     st.session_state["_last_jd_fp"] = None
                     st.session_state.pop("job_summary_ai", None)
                     st.session_state.pop("cover_letter", None)
@@ -2820,6 +2882,7 @@ if jobs:
 
             with st.expander("Preview description"):
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+
 
 
 
