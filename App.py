@@ -506,57 +506,84 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
 
     st.session_state["education_items"] = cleaned
 
+
 def get_user_credits(email: str) -> dict:
+    """
+    Read-only: returns current available credits from the ledger.
+    Assumes the user already exists.
+    """
     with get_conn() as conn:
-        cur = conn.cursor()
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Get user id
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            u = cur.fetchone()
+            if not u:
+                # IMPORTANT: do not auto-create here anymore
+                return {"cv": 0, "ai": 0}
 
-        cur.execute(
-            """
-            SELECT
-                cv_credits,
-                ai_credits,
-                COALESCE(starter_credits_granted, FALSE)
-            FROM users
-            WHERE email = %s
-            """,
-            (email,),
-        )
-        row = cur.fetchone()
+            user_id = int(u["id"])
 
-        # If user does not exist yet, create them with starter credits
-        if row is None:
+            # Credits = grants - spends (ignoring expired grants)
             cur.execute(
                 """
-                INSERT INTO users (email, plan, cv_credits, ai_credits, starter_credits_granted)
-                VALUES (%s, 'free', 5, 5, TRUE)
+                SELECT
+                    COALESCE((
+                        SELECT SUM(cv_amount)
+                        FROM credit_grants
+                        WHERE user_id = %s
+                          AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0) -
+                    COALESCE((
+                        SELECT SUM(cv_amount)
+                        FROM credit_spends
+                        WHERE user_id = %s
+                    ), 0) AS cv,
+
+                    COALESCE((
+                        SELECT SUM(ai_amount)
+                        FROM credit_grants
+                        WHERE user_id = %s
+                          AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0) -
+                    COALESCE((
+                        SELECT SUM(ai_amount)
+                        FROM credit_spends
+                        WHERE user_id = %s
+                    ), 0) AS ai
                 """,
-                (email,),
+                (user_id, user_id, user_id, user_id),
             )
-            conn.commit()
-            return {"cv": 5, "ai": 5}
+            row = cur.fetchone() or {}
 
-        cv, ai, starter_granted = row
-        cv = int(cv or 0)
-        ai = int(ai or 0)
+            cv = max(int(row.get("cv", 0) or 0), 0)
+            ai = max(int(row.get("ai", 0) or 0), 0)
+            return {"cv": cv, "ai": ai}
 
-        # If row exists but starter credits never granted, grant once
-        if not starter_granted:
+def grant_starter_credits_once(user_id: int) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Only grant once
+            cur.execute(
+                "SELECT COALESCE(starter_credits_granted, FALSE) FROM users WHERE id=%s",
+                (user_id,),
+            )
+            already = cur.fetchone()
+            if already and already[0]:
+                return
+
+            # Grant starter credits via ledger
             cur.execute(
                 """
-                UPDATE users
-                SET
-                    cv_credits = GREATEST(COALESCE(cv_credits, 0), 5),
-                    ai_credits = GREATEST(COALESCE(ai_credits, 0), 5),
-                    starter_credits_granted = TRUE
-                WHERE email = %s
+                INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at, created_at)
+                VALUES (%s, 'starter', 5, 5, NULL, NOW())
                 """,
-                (email,),
+                (user_id,),
+            )
+            cur.execute(
+                "UPDATE users SET starter_credits_granted=TRUE WHERE id=%s",
+                (user_id,),
             )
             conn.commit()
-            return {"cv": max(cv, 5), "ai": max(ai, 5)}
-
-        return {"cv": cv, "ai": ai}
-
 
 
 
