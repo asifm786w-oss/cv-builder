@@ -1162,40 +1162,50 @@ def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount
             return True
 
 
-def get_user_credits_ledger(conn, user_id: int) -> dict:
-    """
-    Returns current credits from ledger:
-    sum(grants not expired) - sum(spends)
-    """
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT
-              COALESCE(SUM(cv_amount), 0) AS cv,
-              COALESCE(SUM(ai_amount), 0) AS ai
-            FROM credit_grants
-            WHERE user_id = %s
-              AND (expires_at IS NULL OR expires_at > now())
-            """,
-            (user_id,),
-        )
-        g = cur.fetchone() or {"cv": 0, "ai": 0}
 
-        cur.execute(
-            """
-            SELECT
-              COALESCE(SUM(cv_amount), 0) AS cv,
-              COALESCE(SUM(ai_amount), 0) AS ai
-            FROM credit_spends
-            WHERE user_id = %s
-            """,
-            (user_id,),
-        )
-        s = cur.fetchone() or {"cv": 0, "ai": 0}
 
-    cv_left = int(g["cv"]) - int(s["cv"])
-    ai_left = int(g["ai"]) - int(s["ai"])
-    return {"cv": max(cv_left, 0), "ai": max(ai_left, 0)}
+def get_user_credits_ledger(user_id: int) -> dict:
+    """
+    Read-only credits from ledger.
+    Uses its own DB connection so callers don't pass conn around.
+    """
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    COALESCE((
+                        SELECT SUM(cv_amount)
+                        FROM credit_grants
+                        WHERE user_id = %s
+                          AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0) -
+                    COALESCE((
+                        SELECT SUM(cv_amount)
+                        FROM credit_spends
+                        WHERE user_id = %s
+                    ), 0) AS cv,
+
+                    COALESCE((
+                        SELECT SUM(ai_amount)
+                        FROM credit_grants
+                        WHERE user_id = %s
+                          AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0) -
+                    COALESCE((
+                        SELECT SUM(ai_amount)
+                        FROM credit_spends
+                        WHERE user_id = %s
+                    ), 0) AS ai
+                """,
+                (user_id, user_id, user_id, user_id),
+            )
+            row = cur.fetchone() or {}
+            return {
+                "cv": max(int(row.get("cv", 0) or 0), 0),
+                "ai": max(int(row.get("ai", 0) or 0), 0),
+            }
+
 
 
 def get_user_credits(email: str) -> dict:
