@@ -1085,7 +1085,8 @@ def grant_credits(
     source: str,
     cv_amount: int = 0,
     ai_amount: int = 0,
-    expires_at: datetime.datetime | None = None,
+    expires_at: datetime | None = None
+
 ) -> None:
     with conn.cursor() as cur:
         cur.execute(
