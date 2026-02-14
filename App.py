@@ -327,29 +327,60 @@ if not APP_URL:
 # =========================
 # POLICIES: DB HELPERS (psycopg2) - NO policies_at column needed
 # =========================
+
 def has_accepted_policies(email: str) -> bool:
-    conn = get_conn()
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT COALESCE(accepted_policies, 0) FROM users WHERE lower(email) = %s",
-            (email.strip().lower(),),
-        )
-        row = cur.fetchone()
-        return bool(row and int(row[0]) == 1)
+    """
+    True if the user accepted policies.
+    Uses accepted_policies boolean first; falls back to accepted_policies_at.
+    Never throws for missing users.
+    """
+    if not email:
+        return False
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(accepted_policies, FALSE) AS accepted_policies,
+                    accepted_policies_at
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+
+            if bool(row.get("accepted_policies")):
+                return True
+
+            return row.get("accepted_policies_at") is not None
 
 
 def mark_policies_accepted(email: str) -> None:
-    conn = get_conn()
-    with conn:
+    """
+    Mark policies accepted in DB.
+    Sets accepted_policies=true and stamps accepted_policies_at once.
+    """
+    if not email:
+        return
+
+    with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE users
-                SET accepted_policies = 1
-                WHERE lower(email) = %s
+                SET
+                    accepted_policies = TRUE,
+                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
+                WHERE email = %s
                 """,
-                (email.strip().lower(),),
+                (email,),
             )
+        conn.commit()
+
 
 
 

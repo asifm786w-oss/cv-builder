@@ -631,38 +631,64 @@ def apply_referral_bonus(referrer_email: str, max_referrals: int = 10) -> None:
     conn.close()
 
 
+from psycopg2.extras import RealDictCursor
+from datetime import datetime, timezone
+
 # -------------------------
-# Policies consent helpers
+# Policies consent helpers (Postgres)
 # -------------------------
 def has_accepted_policies(email: str) -> bool:
-    email = email.strip().lower()
-    conn = get_conn()
-    cur = conn.cursor()
-    db_execute(cur, "SELECT accepted_policies FROM users WHERE email = ?", (email,))
-    row = _fetchone(cur)
-    conn.close()
-    if not row:
+    email = (email or "").strip().lower()
+    if not email:
         return False
-    return bool(row[0])
+
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    COALESCE(accepted_policies, FALSE) AS accepted_policies,
+                    accepted_policies_at
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+
+            if bool(row.get("accepted_policies")):
+                return True
+
+            return row.get("accepted_policies_at") is not None
+    finally:
+        conn.close()
 
 
 def mark_policies_accepted(email: str) -> None:
-    email = email.strip().lower()
-    now = datetime.utcnow().isoformat()
+    email = (email or "").strip().lower()
+    if not email:
+        return
+
     conn = get_conn()
-    cur = conn.cursor()
-    db_execute(
-        cur,
-        """
-        UPDATE users
-        SET accepted_policies = 1,
-            accepted_policies_at = ?
-        WHERE email = ?
-        """,
-        (now, email),
-    )
-    conn.commit()
-    conn.close()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET
+                    accepted_policies = TRUE,
+                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
+                WHERE email = %s
+                """,
+                (email,),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
 
 
 # -------------------------
