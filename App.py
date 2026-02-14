@@ -9,6 +9,8 @@ import requests
 import psycopg2
 import stripe
 import psycopg2.extras
+import datetime
+
 
 from openai import OpenAI
 from adzuna_client import search_jobs
@@ -107,11 +109,7 @@ st.markdown(
 
 
 
-# -------------------------
-# INIT (run once)
-# -------------------------
-verify_postgres_connection()
-init_db()
+
 
 
 # -------------------------
@@ -144,6 +142,20 @@ AI_USAGE_KEYS = {"summary_uses", "cover_uses", "bullets_uses", "job_summary_uses
 CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
+
+def init_db() -> None:
+    conn = get_db_connection()
+    try:
+        # ✅ keep your existing create/alter users tables here if you have them
+
+        # ✅ ledger tables (grants/spends/subscriptions)
+        ensure_credit_tables(conn)
+
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
     """
@@ -1775,19 +1787,13 @@ def auth_ui():
 # INIT (run once, early)
 # =========================
 init_db()
+verify_postgres_connection()
 
 st.session_state.setdefault("user", None)
 st.session_state.setdefault("accepted_policies", False)
 st.session_state.setdefault("policy_view", None)  # None | cookies | privacy | terms | accessibility
 st.session_state.setdefault("guest_started_builder", False)
 
-def init_db():
-    conn = get_db_connection()
-    try:
-        # your existing create tables / alters...
-        ensure_credit_tables(conn)
-    finally:
-        conn.close()
 
 
 # =========================
