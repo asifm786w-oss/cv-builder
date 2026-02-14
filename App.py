@@ -12,7 +12,7 @@ import psycopg2.extras
 import datetime
 
 
-
+from datetime import datetime, timezone
 from psycopg2.extras import RealDictCursor
 from openai import OpenAI
 from adzuna_client import search_jobs
@@ -1189,48 +1189,77 @@ def get_user_credits(email: str) -> dict:
             pass
 
 
+
+
+
 # =========================
 # 4) STREAMLIT: show "Pro active until X" + ledger credits
 # Replace your sidebar "get_user_credits(email)" calls with this pattern
 # =========================
 
 def get_active_subscription_for_user(user_id: int):
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT plan, status, current_period_end
-            FROM subscriptions
-            WHERE user_id=%s
-              AND status IN ('active','trialing')
-            ORDER BY current_period_end DESC NULLS LAST
-            LIMIT 1
-            """,
-            (user_id,),
-        )
-        return cur.fetchone()
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT plan, status, current_period_end, cancel_at_period_end
+                FROM subscriptions
+                WHERE user_id = %s
+                  AND status IN ('active', 'trialing')
+                ORDER BY current_period_end DESC NULLS LAST
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            return cur.fetchone()
 
-def format_dt(ts):
+
+def _as_utc_dt(ts):
+    if not ts:
+        return None
+    if getattr(ts, "tzinfo", None) is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def format_dt(ts) -> str:
+    ts = _as_utc_dt(ts)
     if not ts:
         return ""
-    # ts from psycopg2 is datetime already
-    return ts.astimezone(timezone.utc).strftime("%d %b %Y")
+    return ts.strftime("%d %b %Y")
+
 
 session_user = st.session_state.get("user") or {}
 email = session_user.get("email")
+
 if email:
     uid = get_user_id(email)
     if uid:
-        credits = get_user_credits_ledger(uid)
+        credits = get_user_credits_ledger(user_id=uid)
         sub = get_active_subscription_for_user(uid)
 
-        # plan label
-        if sub and sub.get("current_period_end") and sub["current_period_end"] > datetime.now(timezone.utc):
-            plan_label = f"{sub.get('plan','pro')} (active until {format_dt(sub['current_period_end'])})"
-        else:
-            plan_label = "free"
+        now_utc = datetime.now(timezone.utc)
 
-        st.session_state["user"]["plan"] = plan_label  # for display only
-        # Use credits['cv'], credits['ai'] everywhere
+        # machine-safe plan value (DO NOT put formatted strings in here)
+        plan_code = (session_user.get("plan") or "free").strip().lower()
+        plan_display = plan_code
+
+        if sub:
+            period_end = _as_utc_dt(sub.get("current_period_end"))
+            sub_plan = (sub.get("plan") or plan_code or "free").strip().lower()
+
+            if period_end and period_end > now_utc:
+                plan_code = sub_plan
+                plan_display = f"{sub_plan} (active until {format_dt(period_end)})"
+            else:
+                plan_display = plan_code
+
+        st.session_state["user"]["plan"] = plan_code
+        st.session_state["user"]["plan_display"] = plan_display
+
+        cv_left = int(credits.get("cv", 0) or 0)
+        ai_left = int(credits.get("ai", 0) or 0)
+
 
 # -------------------------
 # GLOBAL THEME + LAYOUT CSS
