@@ -124,3 +124,108 @@ def stripe_webhook():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     app.run(host="0.0.0.0", port=port)
+
+# =========================
+# 3) STRIPE WEBHOOK HANDLER (idempotent)
+# Put this into your stripe webhook route (where you already handle stripe_events)
+# This block assumes you already verified signature and parsed event JSON.
+# =========================
+
+def upsert_subscription_from_stripe(user_id: int, customer_id: str | None, subscription_id: str | None,
+                                   plan: str, status: str, period_end_ts: int | None, cancel_at_period_end: bool):
+    # period_end_ts is Stripe unix seconds -> timestamptz
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO subscriptions (user_id, stripe_customer_id, stripe_subscription_id, plan, status, current_period_end, cancel_at_period_end)
+            VALUES (
+              %s, %s, %s, %s, %s,
+              CASE WHEN %s IS NULL THEN NULL ELSE to_timestamp(%s) END,
+              %s
+            )
+            ON CONFLICT (stripe_subscription_id)
+            DO UPDATE SET
+              user_id=EXCLUDED.user_id,
+              stripe_customer_id=EXCLUDED.stripe_customer_id,
+              plan=EXCLUDED.plan,
+              status=EXCLUDED.status,
+              current_period_end=EXCLUDED.current_period_end,
+              cancel_at_period_end=EXCLUDED.cancel_at_period_end,
+              updated_at=now()
+            """,
+            (user_id, customer_id, subscription_id, plan, status, period_end_ts, period_end_ts, cancel_at_period_end),
+        )
+
+def handle_stripe_event(event: dict):
+    stripe_event_id = event["id"]
+    typ = event["type"]
+
+    # idempotency
+    if has_stripe_event(stripe_event_id):
+        return
+    record_stripe_event(stripe_event_id, typ)
+
+    obj = event["data"]["object"]
+
+    # Example: when payment succeeds for subscription invoice:
+    if typ in ("invoice.paid", "invoice.payment_succeeded"):
+        # You must map stripe customer/email -> user_id in YOUR system:
+        customer_id = obj.get("customer")
+        subscription_id = obj.get("subscription")
+
+        # Example mapping strategy:
+        # - store stripe_customer_id on users, or
+        # - read customer email via stripe API (you likely already do this)
+        user_id = find_user_id_from_stripe_customer(customer_id)  # <-- implement in your app
+
+        # Decide plan based on price/product id:
+        plan = plan_from_invoice(obj)  # <-- implement (monthly/pro/yearly)
+        status = "active"
+
+        period_end = None
+        lines = (obj.get("lines") or {}).get("data") or []
+        if lines and lines[0].get("period") and lines[0]["period"].get("end"):
+            period_end = int(lines[0]["period"]["end"])
+
+        cancel_at_period_end = False
+
+        upsert_subscription_from_stripe(
+            user_id=user_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            plan=plan,
+            status=status,
+            period_end_ts=period_end,
+            cancel_at_period_end=cancel_at_period_end,
+        )
+
+        # ✅ Professional credit model:
+        # Every paid invoice grants a "monthly bucket" that expires in 60 days
+        # (so user has 2 months to use it, as you asked)
+        cv_amt, ai_amt = credits_for_plan(plan)  # <-- implement using your PLAN_LIMITS or a new mapping
+        create_credit_grant(
+            user_id=user_id,
+            cv_amount=cv_amt,
+            ai_amount=ai_amt,
+            source=f"stripe:{plan}",
+            expires_in_days=60,
+            stripe_event_id=stripe_event_id,
+        )
+
+        return
+
+    # Optional: subscription canceled
+    if typ in ("customer.subscription.deleted",):
+        subscription_id = obj.get("id")
+        customer_id = obj.get("customer")
+        user_id = find_user_id_from_stripe_customer(customer_id)
+
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE subscriptions
+                SET status='canceled', updated_at=now()
+                WHERE stripe_subscription_id=%s
+                """,
+                (subscription_id,),
+            )
