@@ -10,7 +10,7 @@ import psycopg2
 import stripe
 import psycopg2.extras
 import datetime
-
+import RealDictCursor
 
 from openai import OpenAI
 from adzuna_client import search_jobs
@@ -143,19 +143,21 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
-def init_db() -> None:
+def get_db_connection():
+    return psycopg2.connect(
+        os.environ["DATABASE_URL"],
+        cursor_factory=RealDictCursor,
+        sslmode="require",
+    )
+
+
+def init_db():
     conn = get_db_connection()
     try:
-        # ✅ keep your existing create/alter users tables here if you have them
-
-        # ✅ ledger tables (grants/spends/subscriptions)
         ensure_credit_tables(conn)
-
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        conn.close()
+
 
 def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
     """
