@@ -677,43 +677,33 @@ def has_accepted_policies(email: str) -> bool:
     finally:
         conn.close()
 
-from psycopg2.extras import RealDictCursor
-
+# -------------------------
+# Policies consent helpers
+# -------------------------
 def has_accepted_policies(email: str) -> bool:
     email = (email or "").strip().lower()
     if not email:
         return False
 
     conn = get_conn()
+    cur = conn.cursor()
     try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    accepted_policies,
-                    accepted_policies_at
-                FROM users
-                WHERE email = %s
-                """,
-                (email,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return False
+        # Use db_execute so '?' becomes %s on Postgres automatically
+        db_execute(
+            cur,
+            """
+            SELECT COALESCE(accepted_policies, 0)
+            FROM users
+            WHERE email = ?
+            """,
+            (email,),
+        )
+        row = _fetchone(cur)
+        if not row:
+            return False
 
-            ap = row.get("accepted_policies")
-
-            # Handles: boolean True/False OR int 1/0 OR None
-            accepted_flag = False
-            if isinstance(ap, bool):
-                accepted_flag = ap
-            elif ap is None:
-                accepted_flag = False
-            else:
-                # int / str-ish
-                accepted_flag = str(ap).strip() in {"1", "true", "t", "yes", "y"}
-
-            return accepted_flag or (row.get("accepted_policies_at") is not None)
+        # row[0] can be 0/1, True/False depending on driver – normalize
+        return int(row[0] or 0) == 1
     finally:
         conn.close()
 
@@ -724,21 +714,23 @@ def mark_policies_accepted(email: str) -> None:
         return
 
     conn = get_conn()
+    cur = conn.cursor()
     try:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE users
-                SET
-                    accepted_policies = TRUE,
-                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
-                WHERE email = %s
-                """,
-                (email,),
-            )
+        db_execute(
+            cur,
+            """
+            UPDATE users
+            SET
+                accepted_policies = 1,
+                accepted_policies_at = COALESCE(accepted_policies_at, ?)
+            WHERE email = ?
+            """,
+            (datetime.utcnow().isoformat(), email),
+        )
         conn.commit()
     finally:
         conn.close()
+
 
 
 

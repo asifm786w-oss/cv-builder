@@ -272,15 +272,16 @@ if not APP_URL:
     APP_URL = "http://localhost:8501"
 
 # =========================
-# POLICIES: DB HELPERS (psycopg2) - NO policies_at column needed
+# POLICIES: DB HELPERS (psycopg2) - accepted_policies is INTEGER 0/1
 # =========================
 
 def has_accepted_policies(email: str) -> bool:
     """
     True if the user accepted policies.
-    Uses accepted_policies boolean first; falls back to accepted_policies_at.
+    Uses accepted_policies (0/1) first; falls back to accepted_policies_at.
     Never throws for missing users.
     """
+    email = (email or "").strip().lower()
     if not email:
         return False
 
@@ -289,7 +290,7 @@ def has_accepted_policies(email: str) -> bool:
             cur.execute(
                 """
                 SELECT
-                    COALESCE(accepted_policies, FALSE) AS accepted_policies,
+                    COALESCE(accepted_policies, 0) AS accepted_policies,
                     accepted_policies_at
                 FROM users
                 WHERE email = %s
@@ -300,7 +301,8 @@ def has_accepted_policies(email: str) -> bool:
             if not row:
                 return False
 
-            if bool(row.get("accepted_policies")):
+            # accepted_policies is stored as 0/1 integer
+            if int(row.get("accepted_policies") or 0) == 1:
                 return True
 
             return row.get("accepted_policies_at") is not None
@@ -309,8 +311,9 @@ def has_accepted_policies(email: str) -> bool:
 def mark_policies_accepted(email: str) -> None:
     """
     Mark policies accepted in DB.
-    Sets accepted_policies=true and stamps accepted_policies_at once.
+    Sets accepted_policies=1 and stamps accepted_policies_at once.
     """
+    email = (email or "").strip().lower()
     if not email:
         return
 
@@ -320,13 +323,14 @@ def mark_policies_accepted(email: str) -> None:
                 """
                 UPDATE users
                 SET
-                    accepted_policies = TRUE,
+                    accepted_policies = 1,
                     accepted_policies_at = COALESCE(accepted_policies_at, NOW())
                 WHERE email = %s
                 """,
                 (email,),
             )
         conn.commit()
+
 
 
 
