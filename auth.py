@@ -637,6 +637,8 @@ from datetime import datetime, timezone
 # -------------------------
 # Policies consent helpers (Postgres)
 # -------------------------
+from psycopg2.extras import RealDictCursor
+
 def has_accepted_policies(email: str) -> bool:
     email = (email or "").strip().lower()
     if not email:
@@ -648,7 +650,7 @@ def has_accepted_policies(email: str) -> bool:
             cur.execute(
                 """
                 SELECT
-                    COALESCE(accepted_policies, FALSE) AS accepted_policies,
+                    accepted_policies,
                     accepted_policies_at
                 FROM users
                 WHERE email = %s
@@ -659,10 +661,59 @@ def has_accepted_policies(email: str) -> bool:
             if not row:
                 return False
 
-            if bool(row.get("accepted_policies")):
-                return True
+            ap = row.get("accepted_policies")
 
-            return row.get("accepted_policies_at") is not None
+            # Handles: boolean True/False OR int 1/0 OR None
+            accepted_flag = False
+            if isinstance(ap, bool):
+                accepted_flag = ap
+            elif ap is None:
+                accepted_flag = False
+            else:
+                # int / str-ish
+                accepted_flag = str(ap).strip() in {"1", "true", "t", "yes", "y"}
+
+            return accepted_flag or (row.get("accepted_policies_at") is not None)
+    finally:
+        conn.close()
+
+from psycopg2.extras import RealDictCursor
+
+def has_accepted_policies(email: str) -> bool:
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    accepted_policies,
+                    accepted_policies_at
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return False
+
+            ap = row.get("accepted_policies")
+
+            # Handles: boolean True/False OR int 1/0 OR None
+            accepted_flag = False
+            if isinstance(ap, bool):
+                accepted_flag = ap
+            elif ap is None:
+                accepted_flag = False
+            else:
+                # int / str-ish
+                accepted_flag = str(ap).strip() in {"1", "true", "t", "yes", "y"}
+
+            return accepted_flag or (row.get("accepted_policies_at") is not None)
     finally:
         conn.close()
 

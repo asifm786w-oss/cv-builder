@@ -162,59 +162,6 @@ def init_db():
 
 
 
-def has_accepted_policies(email: str) -> bool:
-    """
-    Returns True if user has accepted policies.
-    Uses accepted_policies boolean primarily, falls back to accepted_policies_at if needed.
-    """
-    if not email:
-        return False
-
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    COALESCE(accepted_policies, FALSE) AS accepted_policies,
-                    accepted_policies_at
-                FROM users
-                WHERE email = %s
-                """,
-                (email,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return False
-
-            if bool(row.get("accepted_policies")):
-                return True
-
-            # fallback (in case older rows only have timestamp)
-            return row.get("accepted_policies_at") is not None
-
-
-def mark_policies_accepted(email: str) -> None:
-    """
-    Marks policies accepted for the user.
-    Sets accepted_policies=true and accepted_policies_at=NOW().
-    """
-    if not email:
-        return
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE users
-                SET
-                    accepted_policies = TRUE,
-                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
-                WHERE email = %s
-                """,
-                (email,),
-            )
-        conn.commit()
-
 
 
 def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
