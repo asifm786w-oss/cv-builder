@@ -985,97 +985,192 @@ def create_credit_grant(
                 (user_id, source, stripe_event_id, cv_amount, ai_amount),
             )
 
-def spend_credits(user_id: int, cv_amount: int = 0, ai_amount: int = 0, reason: str = "usage") -> bool:
-    """Atomic spend: checks balance from ledger then writes a spend row."""
-    cv_amount = int(cv_amount or 0)
-    ai_amount = int(ai_amount or 0)
+# =========================
+# CREDITS LEDGER (grants/spends) + MIGRATIONS
+# =========================
 
-    if cv_amount < 0 or ai_amount < 0:
-        raise ValueError("spend amounts must be positive")
+def ensure_credit_tables(conn) -> None:
+    """
+    Creates / repairs credit_grants, credit_spends, subscriptions tables.
+    Also adds missing columns/defaults to prevent runtime crashes.
+    Safe to run on every boot.
+    """
+    with conn.cursor() as cur:
+        # --- credit_grants ---
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS credit_grants (
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            cv_amount INTEGER NOT NULL DEFAULT 0,
+            ai_amount INTEGER NOT NULL DEFAULT 0,
+            expires_at TIMESTAMP NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        );
+        """)
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
+        # Repair columns if your Railway UI created wrong types (text etc)
+        # We'll only add missing columns (won't change existing types blindly).
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS cv_amount INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS ai_amount INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();")
+
+        # --- credit_spends ---
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS credit_spends (
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            cv_amount INTEGER NOT NULL DEFAULT 0,
+            ai_amount INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        );
+        """)
+
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS cv_amount INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS ai_amount INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();")
+
+        # --- subscriptions ---
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            stripe_customer_id TEXT NULL,
+            stripe_subscription_id TEXT NULL,
+            plan TEXT NOT NULL DEFAULT 'free',
+            status TEXT NOT NULL DEFAULT 'inactive',
+            current_period_end TIMESTAMP NULL,
+            cancel_at_period_end BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP NOT NULL DEFAULT now()
+        );
+        """)
+
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT NULL;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT NULL;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'inactive';")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMP NULL;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN NOT NULL DEFAULT false;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT now();")
+
+    conn.commit()
+
+
+def get_user_id_by_email(conn, email: str) -> int | None:
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+        row = cur.fetchone()
+        return int(row["id"]) if row else None
+
+
+def grant_credits(
+    conn,
+    user_id: int,
+    source: str,
+    cv_amount: int = 0,
+    ai_amount: int = 0,
+    expires_at: datetime.datetime | None = None,
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+            VALUES (%s, %s, %s, %s, %s)
+            """,
+            (user_id, source, int(cv_amount), int(ai_amount), expires_at),
+        )
+    conn.commit()
+
+
+def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
+    """
+    Atomic spend: checks ledger balance and writes a spend row if enough.
+    Returns True if spent, False if insufficient.
+    """
+    cv_amount = int(cv_amount)
+    ai_amount = int(ai_amount)
+
+    with conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             # lock user row to avoid race conditions
-            cur.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
+            cur.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user_id,))
             if not cur.fetchone():
                 return False
 
-            # compute available from ledger (unexpired grants)
-            cur.execute(
-                """
-                SELECT
-                  COALESCE(SUM(g.cv_amount),0) AS cv_granted,
-                  COALESCE(SUM(g.ai_amount),0) AS ai_granted
-                FROM credit_grants g
-                WHERE g.user_id=%s
-                  AND (g.expires_at IS NULL OR g.expires_at > now())
-                """,
-                (user_id,),
-            )
-            granted = cur.fetchone() or {}
-            cv_granted = int(granted.get("cv_granted") or 0)
-            ai_granted = int(granted.get("ai_granted") or 0)
+            bal = get_user_credits_ledger(conn, user_id)
 
-            cur.execute(
-                """
-                SELECT
-                  COALESCE(SUM(s.cv_amount),0) AS cv_spent,
-                  COALESCE(SUM(s.ai_amount),0) AS ai_spent
-                FROM credit_spends s
-                WHERE s.user_id=%s
-                """,
-                (user_id,),
-            )
-            spent = cur.fetchone() or {}
-            cv_spent = int(spent.get("cv_spent") or 0)
-            ai_spent = int(spent.get("ai_spent") or 0)
-
-            cv_left = cv_granted - cv_spent
-            ai_left = ai_granted - ai_spent
-
-            if cv_left < cv_amount or ai_left < ai_amount:
+            if cv_amount > 0 and bal["cv"] < cv_amount:
+                return False
+            if ai_amount > 0 and bal["ai"] < ai_amount:
                 return False
 
             cur.execute(
                 """
-                INSERT INTO credit_spends (user_id, reason, cv_amount, ai_amount)
+                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
                 VALUES (%s, %s, %s, %s)
                 """,
-                (user_id, reason, cv_amount, ai_amount),
+                (user_id, source, cv_amount, ai_amount),
             )
             return True
 
-def get_user_credits_ledger(user_id: int) -> dict:
-    """Returns live remaining credits (ledger-based)."""
-    with get_conn() as conn, conn.cursor() as cur:
+
+def get_user_credits_ledger(conn, user_id: int) -> dict:
+    """
+    Returns current credits from ledger:
+    sum(grants not expired) - sum(spends)
+    """
+    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
         cur.execute(
             """
             SELECT
-              COALESCE(SUM(g.cv_amount),0) AS cv_granted,
-              COALESCE(SUM(g.ai_amount),0) AS ai_granted
-            FROM credit_grants g
-            WHERE g.user_id=%s
-              AND (g.expires_at IS NULL OR g.expires_at > now())
+              COALESCE(SUM(cv_amount), 0) AS cv,
+              COALESCE(SUM(ai_amount), 0) AS ai
+            FROM credit_grants
+            WHERE user_id = %s
+              AND (expires_at IS NULL OR expires_at > now())
             """,
             (user_id,),
         )
-        g = cur.fetchone() or {}
+        g = cur.fetchone() or {"cv": 0, "ai": 0}
+
         cur.execute(
             """
             SELECT
-              COALESCE(SUM(s.cv_amount),0) AS cv_spent,
-              COALESCE(SUM(s.ai_amount),0) AS ai_spent
-            FROM credit_spends s
-            WHERE s.user_id=%s
+              COALESCE(SUM(cv_amount), 0) AS cv,
+              COALESCE(SUM(ai_amount), 0) AS ai
+            FROM credit_spends
+            WHERE user_id = %s
             """,
             (user_id,),
         )
-        s = cur.fetchone() or {}
+        s = cur.fetchone() or {"cv": 0, "ai": 0}
 
-    cv_left = int(g.get("cv_granted") or 0) - int(s.get("cv_spent") or 0)
-    ai_left = int(g.get("ai_granted") or 0) - int(s.get("ai_spent") or 0)
-
+    cv_left = int(g["cv"]) - int(s["cv"])
+    ai_left = int(g["ai"]) - int(s["ai"])
     return {"cv": max(cv_left, 0), "ai": max(ai_left, 0)}
+
+
+def get_user_credits(email: str) -> dict:
+    """
+    High-level helper used by sidebar/UI.
+    """
+    conn = get_db_connection()  # <-- use YOUR existing function
+    try:
+        ensure_credit_tables(conn)
+        uid = get_user_id_by_email(conn, email)
+        if not uid:
+            return {"cv": 0, "ai": 0}
+        return get_user_credits_ledger(conn, uid)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
 
 # =========================
 # 4) STREAMLIT: show "Pro active until X" + ledger credits
@@ -1686,6 +1781,13 @@ st.session_state.setdefault("accepted_policies", False)
 st.session_state.setdefault("policy_view", None)  # None | cookies | privacy | terms | accessibility
 st.session_state.setdefault("guest_started_builder", False)
 
+def init_db():
+    conn = get_db_connection()
+    try:
+        # your existing create tables / alters...
+        ensure_credit_tables(conn)
+    finally:
+        conn.close()
 
 
 # =========================
