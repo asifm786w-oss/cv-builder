@@ -10,8 +10,10 @@ import psycopg2
 import stripe
 import psycopg2.extras
 import datetime
-import RealDictCursor
 
+
+
+from psycopg2.extras import RealDictCursor
 from openai import OpenAI
 from adzuna_client import search_jobs
 from datetime import datetime, timezone
