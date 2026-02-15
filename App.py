@@ -541,57 +541,74 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
     st.session_state["education_items"] = cleaned
 
 
-def get_user_credits(email: str) -> dict:
+from psycopg2.extras import RealDictCursor
+
+def get_user_credits_ledger(user_id: int) -> dict:
     """
-    Read-only: returns current available credits from the ledger.
-    Assumes the user already exists.
+    Internal: compute credits from ledger tables.
+    credits = SUM(grants not expired) - SUM(spends)
     """
     with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Get user id
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-            u = cur.fetchone()
-            if not u:
-                # IMPORTANT: do not auto-create here anymore
-                return {"cv": 0, "ai": 0}
-
-            user_id = int(u["id"])
-
-            # Credits = grants - spends (ignoring expired grants)
             cur.execute(
                 """
                 SELECT
-                    COALESCE((
-                        SELECT SUM(cv_amount)
-                        FROM credit_grants
-                        WHERE user_id = %s
-                          AND (expires_at IS NULL OR expires_at > NOW())
-                    ), 0) -
-                    COALESCE((
-                        SELECT SUM(cv_amount)
-                        FROM credit_spends
-                        WHERE user_id = %s
-                    ), 0) AS cv,
+                    GREATEST(
+                        COALESCE((
+                            SELECT SUM(cv_amount)
+                            FROM credit_grants
+                            WHERE user_id = %s
+                              AND (expires_at IS NULL OR expires_at > NOW())
+                        ), 0)
+                        -
+                        COALESCE((
+                            SELECT SUM(cv_amount)
+                            FROM credit_spends
+                            WHERE user_id = %s
+                        ), 0),
+                    0) AS cv,
 
-                    COALESCE((
-                        SELECT SUM(ai_amount)
-                        FROM credit_grants
-                        WHERE user_id = %s
-                          AND (expires_at IS NULL OR expires_at > NOW())
-                    ), 0) -
-                    COALESCE((
-                        SELECT SUM(ai_amount)
-                        FROM credit_spends
-                        WHERE user_id = %s
-                    ), 0) AS ai
+                    GREATEST(
+                        COALESCE((
+                            SELECT SUM(ai_amount)
+                            FROM credit_grants
+                            WHERE user_id = %s
+                              AND (expires_at IS NULL OR expires_at > NOW())
+                        ), 0)
+                        -
+                        COALESCE((
+                            SELECT SUM(ai_amount)
+                            FROM credit_spends
+                            WHERE user_id = %s
+                        ), 0),
+                    0) AS ai
                 """,
                 (user_id, user_id, user_id, user_id),
             )
             row = cur.fetchone() or {}
+            return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
 
-            cv = max(int(row.get("cv", 0) or 0), 0)
-            ai = max(int(row.get("ai", 0) or 0), 0)
-            return {"cv": cv, "ai": ai}
+
+def get_user_credits(email: str) -> dict:
+    """
+    Public: call this everywhere in the app.
+    Looks up user_id by email then returns ledger credits.
+    Does NOT create users.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return {"cv": 0, "ai": 0}
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
+            u = cur.fetchone()
+            if not u:
+                return {"cv": 0, "ai": 0}
+            user_id = int(u["id"])
+
+    return get_user_credits_ledger(user_id)
+
 
 def grant_starter_credits_once(user_id: int) -> None:
     with get_conn() as conn:
@@ -1194,71 +1211,6 @@ def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount
                 (user_id, source, cv_amount, ai_amount),
             )
             return True
-
-
-
-
-def get_user_credits_ledger(user_id: int) -> dict:
-    """
-    Read-only credits from ledger.
-    Uses its own DB connection so callers don't pass conn around.
-    """
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    COALESCE((
-                        SELECT SUM(cv_amount)
-                        FROM credit_grants
-                        WHERE user_id = %s
-                          AND (expires_at IS NULL OR expires_at > NOW())
-                    ), 0) -
-                    COALESCE((
-                        SELECT SUM(cv_amount)
-                        FROM credit_spends
-                        WHERE user_id = %s
-                    ), 0) AS cv,
-
-                    COALESCE((
-                        SELECT SUM(ai_amount)
-                        FROM credit_grants
-                        WHERE user_id = %s
-                          AND (expires_at IS NULL OR expires_at > NOW())
-                    ), 0) -
-                    COALESCE((
-                        SELECT SUM(ai_amount)
-                        FROM credit_spends
-                        WHERE user_id = %s
-                    ), 0) AS ai
-                """,
-                (user_id, user_id, user_id, user_id),
-            )
-            row = cur.fetchone() or {}
-            return {
-                "cv": max(int(row.get("cv", 0) or 0), 0),
-                "ai": max(int(row.get("ai", 0) or 0), 0),
-            }
-
-
-
-def get_user_credits(email: str) -> dict:
-    """
-    High-level helper used by sidebar/UI.
-    """
-    conn = get_db_connection()  # <-- use YOUR existing function
-    try:
-        ensure_credit_tables(conn)
-        uid = get_user_id_by_email(conn, email)
-        if not uid:
-            return {"cv": 0, "ai": 0}
-        return get_user_credits_ledger(conn, uid)
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
 
 
 
