@@ -1,5 +1,4 @@
 import os
-import json
 import stripe
 import psycopg2
 from flask import Flask, request, jsonify
@@ -14,11 +13,6 @@ PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY", "").strip()
 PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "").strip()
 
 CREDIT_STACKING = os.getenv("CREDIT_STACKING", "false").lower() == "true"
-DEBUG_WEBHOOK = os.getenv("DEBUG_WEBHOOK", "true").lower() == "true"
-
-
-def log(*args):
-    print("[WEBHOOK]", *args, flush=True)
 
 
 def get_conn():
@@ -30,16 +24,19 @@ def get_conn():
 def ensure_stripe_events_table():
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             CREATE TABLE IF NOT EXISTS stripe_events (
                 event_id TEXT PRIMARY KEY,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
-        """)
+            """
+        )
         conn.commit()
 
 
 def mark_event_processed(event_id: str) -> bool:
+    """True if inserted (new), False if duplicate retry."""
     ensure_stripe_events_table()
     with get_conn() as conn:
         cur = conn.cursor()
@@ -52,6 +49,15 @@ def mark_event_processed(event_id: str) -> bool:
             return False
 
 
+def credits_for_plan(plan: str) -> tuple[int, int]:
+    plan = (plan or "").strip().lower()
+    if plan == "monthly":
+        return (20, 30)
+    if plan == "pro":
+        return (50, 90)
+    return (0, 0)
+
+
 def plan_from_price(price_id: str) -> str | None:
     if price_id == PRICE_MONTHLY:
         return "monthly"
@@ -60,38 +66,43 @@ def plan_from_price(price_id: str) -> str | None:
     return None
 
 
-def credits_for_plan(plan: str) -> tuple[int, int]:
-    if plan == "monthly":
-        return (20, 30)
-    if plan == "pro":
-        return (50, 90)
-    return (0, 0)
-
-
 def get_or_create_user_id(email: str) -> int:
     email = (email or "").strip().lower()
     if not email:
         raise ValueError("Missing email")
+
     with get_conn() as conn:
         cur = conn.cursor()
-        # requires users.email unique (you have users_email_key)
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO users (email)
             VALUES (%s)
             ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
             RETURNING id
-        """, (email,))
+            """,
+            (email,),
+        )
         uid = cur.fetchone()[0]
         conn.commit()
         return int(uid)
 
 
-def upsert_subscription(user_id: int, customer_id: str, subscription_id: str,
-                        plan: str, status: str, period_end_unix: int | None,
-                        cancel_at_period_end: bool):
+def upsert_subscription(
+    user_id: int,
+    customer_id: str | None,
+    subscription_id: str | None,
+    plan: str,
+    status: str,
+    period_end_unix: int | None,
+    cancel_at_period_end: bool,
+):
+    if not subscription_id:
+        return
+
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO subscriptions
               (user_id, stripe_customer_id, stripe_subscription_id, plan, status, current_period_end, cancel_at_period_end)
             VALUES
@@ -106,16 +117,37 @@ def upsert_subscription(user_id: int, customer_id: str, subscription_id: str,
               current_period_end = EXCLUDED.current_period_end,
               cancel_at_period_end = EXCLUDED.cancel_at_period_end,
               updated_at = now()
-        """, (user_id, customer_id, subscription_id, plan, status,
-              period_end_unix, period_end_unix, cancel_at_period_end))
+            """,
+            (
+                user_id,
+                customer_id,
+                subscription_id,
+                plan,
+                status,
+                period_end_unix,
+                period_end_unix,
+                cancel_at_period_end,
+            ),
+        )
         conn.commit()
 
 
-def insert_credit_grant(user_id: int, source: str, cv_amount: int, ai_amount: int, expires_at_unix: int | None) -> bool:
-    """Returns True if inserted, False if conflict/ignored."""
+def insert_credit_grant(
+    user_id: int,
+    source: str,
+    cv_amount: int,
+    ai_amount: int,
+    expires_at_unix: int | None,
+) -> bool:
+    """
+    Inserts a grant into credit_grants.
+    Requires UNIQUE(source) on credit_grants.
+    Returns True if inserted, False if already existed.
+    """
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
             VALUES (
               %s, %s, %s, %s,
@@ -123,34 +155,34 @@ def insert_credit_grant(user_id: int, source: str, cv_amount: int, ai_amount: in
             )
             ON CONFLICT (source) DO NOTHING
             RETURNING id
-        """, (user_id, source, cv_amount, ai_amount, expires_at_unix, expires_at_unix))
+            """,
+            (user_id, source, cv_amount, ai_amount, expires_at_unix, expires_at_unix),
+        )
         row = cur.fetchone()
         conn.commit()
         return bool(row)
 
 
-def extract_price_id(invoice: dict) -> tuple[str, list[str]]:
+def extract_price_id_from_invoice(invoice: dict) -> str:
     """
-    Your payload shows: lines.data[0].pricing.price_details.price
-    We'll scan all lines and collect any price IDs we see.
+    Supports your payload shape:
+      lines.data[*].pricing.price_details.price
     """
-    found = []
     lines = (invoice.get("lines") or {}).get("data") or []
     for ln in lines:
         pricing = ln.get("pricing") or {}
         pd = pricing.get("price_details") or {}
         pid = (pd.get("price") or "").strip()
         if pid:
-            found.append(pid)
-            continue
+            return pid
 
         # fallback legacy
         p = ln.get("price") or {}
         pid2 = (p.get("id") or "").strip()
         if pid2:
-            found.append(pid2)
+            return pid2
 
-    return (found[0] if found else ""), found
+    return ""
 
 
 @app.post("/stripe/webhook")
@@ -170,122 +202,132 @@ def stripe_webhook():
             secret=STRIPE_WEBHOOK_SECRET,
         )
     except Exception as e:
-        log("signature/parse error:", e)
         return jsonify({"error": str(e)}), 400
 
     event_id = event.get("id", "")
+    if event_id and not mark_event_processed(event_id):
+        return jsonify({"status": "duplicate_ignored"}), 200
+
     typ = event.get("type")
     obj = (event.get("data") or {}).get("object") or {}
 
-    debug = {
-        "event_id": event_id,
-        "type": typ,
-        "env_price_monthly": PRICE_MONTHLY,
-        "env_price_pro": PRICE_PRO,
-    }
+    # ------------------------------------------------------------
+    # 1) FIRST PAYMENT: checkout.session.completed (uses metadata.pack)
+    # ------------------------------------------------------------
+    if typ == "checkout.session.completed":
+        session = obj
+        metadata = session.get("metadata") or {}
+        pack = (metadata.get("pack") or "").strip().lower()
 
-    if event_id and not mark_event_processed(event_id):
-        debug["dedupe"] = "duplicate_ignored"
-        log("duplicate ignored", event_id, typ)
-        return jsonify({"status": "duplicate_ignored", "debug": debug}), 200
+        email = (
+            (metadata.get("app_user_email") or "").strip().lower()
+            or ((session.get("customer_details") or {}).get("email") or "").strip().lower()
+            or (session.get("customer_email") or "").strip().lower()
+        )
 
-    try:
-        # Handle invoice-paid variants (covers renewals)
-        if typ in ("invoice.paid", "invoice.payment_succeeded", "invoice.payment.paid"):
-            invoice = obj
-            invoice_id = (invoice.get("id") or "").strip()
-            customer_id = (invoice.get("customer") or "").strip()
-            subscription_id = (invoice.get("subscription") or "").strip() or None
+        customer_id = (session.get("customer") or "").strip() or None
+        subscription_id = (session.get("subscription") or "").strip() or None
 
-            price_id, all_prices = extract_price_id(invoice)
-            debug.update({
-                "invoice_id": invoice_id,
-                "customer_id": customer_id,
-                "subscription_id": subscription_id,
-                "price_id": price_id,
-                "all_prices": all_prices,
-            })
+        if not pack:
+            return jsonify({"status": "ignored", "reason": "missing_pack"}), 200
+        if not email:
+            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
-            plan = plan_from_price(price_id)
-            debug["plan"] = plan
+        user_id = get_or_create_user_id(email)
 
-            if not plan:
-                log("IGNORED unknown_price", json.dumps(debug))
-                return jsonify({"status": "ignored", "reason": "unknown_price", "debug": debug}), 200
+        # Fetch subscription for period end + status
+        status = "unknown"
+        period_end = None
+        cancel_at_period_end = False
 
-            # Prefer invoice.customer_email if present, else stripe customer email
-            email = (invoice.get("customer_email") or "").strip().lower()
-            if not email and customer_id:
-                cust = stripe.Customer.retrieve(customer_id)
-                email = (cust.get("email") or "").strip().lower()
+        if subscription_id:
+            sub = stripe.Subscription.retrieve(subscription_id)
+            status = (sub.get("status") or "unknown")
+            period_end = sub.get("current_period_end")
+            cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
 
-            debug["email"] = email
-
-            if not email:
-                log("IGNORED no_customer_email", json.dumps(debug))
-                return jsonify({"status": "ignored", "reason": "no_customer_email", "debug": debug}), 200
-
-            user_id = get_or_create_user_id(email)
-            debug["user_id"] = user_id
-
-            # Sub details
-            status = "unknown"
-            period_end = None
-            cancel_at_period_end = False
-
-            if subscription_id:
-                sub = stripe.Subscription.retrieve(subscription_id)
-                status = (sub.get("status") or "unknown")
-                period_end = sub.get("current_period_end")
-                cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
-
-            debug.update({
-                "sub_status": status,
-                "period_end": period_end,
-                "cancel_at_period_end": cancel_at_period_end,
-            })
-
-            if subscription_id:
-                upsert_subscription(
-                    user_id=user_id,
-                    customer_id=customer_id,
-                    subscription_id=subscription_id,
-                    plan=plan,
-                    status=status,
-                    period_end_unix=period_end,
-                    cancel_at_period_end=cancel_at_period_end,
-                )
-                debug["subscription_upsert"] = True
-            else:
-                debug["subscription_upsert"] = False
-
-            cv_amt, ai_amt = credits_for_plan(plan)
-            expires_at = None if CREDIT_STACKING else period_end
-
-            inserted = insert_credit_grant(
+            upsert_subscription(
                 user_id=user_id,
-                source=f"stripe_invoice:{invoice_id}",
-                cv_amount=cv_amt,
-                ai_amount=ai_amt,
-                expires_at_unix=expires_at,
+                customer_id=customer_id,
+                subscription_id=subscription_id,
+                plan=pack,
+                status=status,
+                period_end_unix=period_end,
+                cancel_at_period_end=cancel_at_period_end,
             )
-            debug["credit_grant_inserted"] = inserted
-            debug["cv_amt"] = cv_amt
-            debug["ai_amt"] = ai_amt
-            debug["expires_at_unix"] = expires_at
 
-            log("OK granted", json.dumps(debug))
-            return jsonify({"status": "ok", "granted": True, "debug": debug}), 200
+        cv_amt, ai_amt = credits_for_plan(pack)
+        expires_at = None if CREDIT_STACKING else period_end
 
-        # Default: ignore other events (still 200)
-        debug["note"] = "event_not_handled"
-        return jsonify({"status": "ok", "debug": debug}), 200
+        inserted = insert_credit_grant(
+            user_id=user_id,
+            source=f"stripe_checkout:{session.get('id')}",
+            cv_amount=cv_amt,
+            ai_amount=ai_amt,
+            expires_at_unix=expires_at,
+        )
 
-    except Exception as e:
-        # Return 200 so Stripe won't spam retries forever; but log the exception
-        debug["exception"] = str(e)
-        log("EXCEPTION", json.dumps(debug))
-        return jsonify({"status": "error", "debug": debug}), 200
+        return jsonify({"status": "ok", "granted": True, "inserted": inserted}), 200
+
+    # ------------------------------------------------------------
+    # 2) RENEWALS: invoice.paid / invoice.payment_succeeded
+    # ------------------------------------------------------------
+    if typ in ("invoice.paid", "invoice.payment_succeeded"):
+        invoice = obj
+        invoice_id = (invoice.get("id") or "").strip()
+        customer_id = (invoice.get("customer") or "").strip() or None
+        subscription_id = (invoice.get("subscription") or "").strip() or None
+
+        price_id = extract_price_id_from_invoice(invoice)
+        plan = plan_from_price(price_id)
+
+        if not plan:
+            return jsonify({"status": "ignored", "reason": "unknown_price"}), 200
+
+        email = (invoice.get("customer_email") or "").strip().lower()
+        if not email and customer_id:
+            cust = stripe.Customer.retrieve(customer_id)
+            email = (cust.get("email") or "").strip().lower()
+
+        if not email:
+            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
+
+        user_id = get_or_create_user_id(email)
+
+        status = "unknown"
+        period_end = None
+        cancel_at_period_end = False
+
+        if subscription_id:
+            sub = stripe.Subscription.retrieve(subscription_id)
+            status = (sub.get("status") or "unknown")
+            period_end = sub.get("current_period_end")
+            cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
+
+            upsert_subscription(
+                user_id=user_id,
+                customer_id=customer_id,
+                subscription_id=subscription_id,
+                plan=plan,
+                status=status,
+                period_end_unix=period_end,
+                cancel_at_period_end=cancel_at_period_end,
+            )
+
+        cv_amt, ai_amt = credits_for_plan(plan)
+        expires_at = None if CREDIT_STACKING else period_end
+
+        inserted = insert_credit_grant(
+            user_id=user_id,
+            source=f"stripe_invoice:{invoice_id}",
+            cv_amount=cv_amt,
+            ai_amount=ai_amt,
+            expires_at_unix=expires_at,
+        )
+
+        return jsonify({"status": "ok", "granted": True, "inserted": inserted}), 200
+
+    return jsonify({"status": "ok"}), 200
 
 
 if __name__ == "__main__":
