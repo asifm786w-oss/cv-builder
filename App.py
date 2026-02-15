@@ -347,6 +347,59 @@ def create_checkout_session(price_id: str, pack: str, customer_email: str | None
 
 
 
+def migrate_user_credits_to_ledger_once(email: str) -> None:
+    email = (email or "").strip().lower()
+    if not email:
+        return
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # Find user + their old credit columns
+            cur.execute(
+                """
+                SELECT id,
+                       COALESCE(cv_credits, 0) AS cv_credits,
+                       COALESCE(ai_credits, 0) AS ai_credits
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            u = cur.fetchone()
+            if not u:
+                return
+
+            user_id = int(u["id"])
+            cv_old = int(u["cv_credits"] or 0)
+            ai_old = int(u["ai_credits"] or 0)
+
+            # If no old credits, nothing to migrate
+            if cv_old <= 0 and ai_old <= 0:
+                return
+
+            # If already has ANY ledger grants, assume migrated
+            cur.execute("SELECT 1 FROM credit_grants WHERE user_id=%s LIMIT 1", (user_id,))
+            if cur.fetchone():
+                return
+
+            # Insert a single migration grant
+            cur.execute(
+                """
+                INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at, created_at)
+                VALUES (%s, 'migration_users_columns', %s, %s, NULL, NOW())
+                """,
+                (user_id, cv_old, ai_old),
+            )
+
+            # Optional but strongly recommended: zero out old columns to prevent confusion
+            cur.execute(
+                "UPDATE users SET cv_credits=0, ai_credits=0 WHERE id=%s",
+                (user_id,),
+            )
+
+        conn.commit()
+
+
 def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
     """
     Per-user cooldown for a given action_key.
@@ -1283,6 +1336,11 @@ if email:
         cv_left = int(credits.get("cv", 0) or 0)
         ai_left = int(credits.get("ai", 0) or 0)
 
+session_user = st.session_state.get("user") or {}
+email = session_user.get("email")
+if email:
+    migrate_user_credits_to_ledger_once(email)
+    credits = get_user_credits(email)   # ledger-based now
 
 # -------------------------
 # GLOBAL THEME + LAYOUT CSS
