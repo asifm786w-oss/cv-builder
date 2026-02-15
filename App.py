@@ -816,7 +816,20 @@ def grant_starter_credits_once(user_id: int) -> None:
             )
             conn.commit()
 
+def spend_ai(email: str, source: str, amount: int = 1) -> bool:
+    email = (email or "").strip().lower()
+    if not email:
+        return False
 
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+            row = cur.fetchone()
+            if not row:
+                return False
+            uid = int(row["id"])
+
+        return spend_credits(conn, uid, source=source, ai_amount=amount)
 
 def _clear_education_persistence_for_new_cv():
     """
