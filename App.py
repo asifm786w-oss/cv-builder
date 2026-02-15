@@ -198,25 +198,12 @@ def get_credits_by_user_id(user_id: int) -> dict:
 
 def improve_skills(skills_text: str) -> str:
     """
-    Skills-only improvement.
-    Returns text that will later be normalized into bullets by normalize_skills_to_bullets().
+    Skills-only AI improvement.
+    Uses the same AI pipeline as improve_bullets(), then your normalizer
+    will convert output into clean 1–3 word skill bullets.
     """
-    prompt = f"""
-You are improving the Skills section of a CV.
+    return improve_bullets(skills_text)
 
-Rules:
-- Output ONLY skill phrases (1–3 words each).
-- No sentences. No explanations. No headings.
-- Prefer concrete, marketable skills.
-- Keep it relevant to the input.
-- One skill per line (bullets are ok too).
-
-Input:
-{skills_text}
-""".strip()
-
-    # Replace this with your existing model call:
-    return call_ai(prompt)
 
 
 
