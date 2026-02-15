@@ -2989,6 +2989,29 @@ def _safe_set(key: str, value):
     if value is not None and (not isinstance(value, str) or value.strip()):
         st.session_state[key] = value
 
+def _infer_num_experiences(parsed: dict) -> int:
+    """
+    Try common parser keys to determine how many roles were extracted.
+    Falls back to 1.
+    """
+    candidates = [
+        parsed.get("experiences"),
+        parsed.get("experience"),
+        parsed.get("work_experience"),
+        parsed.get("employment_history"),
+        parsed.get("roles"),
+    ]
+    for c in candidates:
+        if isinstance(c, list):
+            return max(1, len(c))
+    # Some parsers return {"experience": {"items":[...]}}
+    for c in candidates:
+        if isinstance(c, dict):
+            items = c.get("items") or c.get("roles") or c.get("entries")
+            if isinstance(items, list):
+                return max(1, len(items))
+    return 1
+
 uploaded_cv = st.file_uploader(
     "Upload your current CV (PDF, DOCX or TXT)",
     type=["pdf", "docx", "txt"],
@@ -3015,6 +3038,24 @@ if uploaded_cv is not None and fill_clicked:
     cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
     last_fp = st.session_state.get("_last_cv_fingerprint")
 
+    # ---- Spend credits BEFORE parsing/applying (prevents partial state mutation) ----
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    if not email_for_usage:
+        st.warning("Please sign in to use AI features.")
+        st.stop()
+
+    uid = get_user_id(email_for_usage)
+    if not uid:
+        st.warning("Could not load your account. Please sign in again.")
+        st.stop()
+
+    with get_conn() as conn:
+        ok = spend_credits(conn, uid, source="upload_parse", ai_amount=1)
+
+    if not ok:
+        st.warning("You don't have enough AI credits for CV parsing.")
+        st.stop()
+
     with st.spinner("Reading and analysing your CV..."):
         parsed = extract_cv_data(raw_text)
 
@@ -3027,6 +3068,10 @@ if uploaded_cv is not None and fill_clicked:
         _reset_outputs_on_new_cv()
         _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
+
+    # ✅ Make sure the Experience UI can render multiple roles
+    parsed_n = _infer_num_experiences(parsed)
+    st.session_state["parsed_num_experiences"] = max(1, min(5, int(parsed_n)))
 
     # ✅ Apply parsed data (your existing function)
     _apply_parsed_cv_to_session(parsed)
@@ -3045,22 +3090,10 @@ if uploaded_cv is not None and fill_clicked:
     st.session_state["_just_autofilled_from_cv"] = True
     st.session_state["_skip_restore_personal_once"] = True  # << important
 
-    # ✅ charge credits (ledger) + keep old counters if you want analytics
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if email_for_usage:
-        uid = get_user_id(email_for_usage)
-        if uid:
-            # Spend 1 AI credit for parsing (adjust if you want)
-            with get_conn() as conn:
-                ok = spend_credits(conn, uid, source="upload_parse", ai_amount=1)
+    # ✅ Optional analytics counter (keep if you like dashboards)
+    st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
+    increment_usage(email_for_usage, "upload_parses")
 
-            if not ok:
-                st.warning("You don't have enough AI credits for CV parsing.")
-                st.stop()
-
-        # Optional analytics counter (keep if you like dashboards)
-        st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-        increment_usage(email_for_usage, "upload_parses")
 
 
 # ============================================================
@@ -3315,7 +3348,12 @@ st.header("3. Experience (multiple roles)")
 # 3. Experience (multiple roles)
 # -------------------------
 
-# Keep count stable (parsed -> UI)
+# ✅ If we just autofilled from CV, sync the UI role count to what was parsed
+if st.session_state.get("_just_autofilled_from_cv", False):
+    parsed_n = int(st.session_state.get("parsed_num_experiences", 1) or 1)
+    st.session_state["num_experiences"] = max(1, min(5, parsed_n))  # respect UI bounds
+
+# Keep count stable (parsed -> UI) (only if still missing/None)
 if "num_experiences" not in st.session_state or st.session_state["num_experiences"] is None:
     st.session_state["num_experiences"] = st.session_state.get("parsed_num_experiences", 1)
 
@@ -3453,8 +3491,10 @@ if run_now and role_to_improve is not None:
             st.error(f"AI error: {e}")
 
 
+# ✅ Keep your existing pop (ensures sync only happens once after autofill)
 if not st.session_state.pop("_just_autofilled_from_cv", False):
     pass
+
 
     restore_education_state()
 
