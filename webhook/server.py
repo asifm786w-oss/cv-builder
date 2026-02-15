@@ -77,7 +77,6 @@ def find_user_id_by_email(email: str) -> int | None:
         return int(row[0]) if row else None
 
 
-
 def upsert_subscription(
     user_id: int,
     customer_id: str | None,
@@ -224,9 +223,9 @@ def stripe_webhook():
         if not email:
             return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
-        user_id = get_or_create_user_id(email)
+        user_id = find_user_id_by_email(email)
         if not user_id:
-			return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
+            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
 
         # Fetch subscription for period end + status
         status = "unknown"
@@ -275,7 +274,7 @@ def stripe_webhook():
         plan = plan_from_price(price_id)
 
         if not plan:
-            return jsonify({"status": "ignored", "reason": "unknown_price"}), 200
+            return jsonify({"status": "ignored", "reason": "unknown_price", "price_id": price_id}), 200
 
         email = (invoice.get("customer_email") or "").strip().lower()
         if not email and customer_id:
@@ -288,7 +287,6 @@ def stripe_webhook():
         user_id = find_user_id_by_email(email)
         if not user_id:
             return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
-
 
         status = "unknown"
         period_end = None
