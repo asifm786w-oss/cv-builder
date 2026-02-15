@@ -816,6 +816,28 @@ def grant_starter_credits_once(user_id: int) -> None:
             )
             conn.commit()
 
+from psycopg2.extras import RealDictCursor
+
+def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
+    """
+    Spends AI credits from ledger. Returns True if spent, False if insufficient.
+    Safe to call from any UI block.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+            row = cur.fetchone()
+            if not row:
+                return False
+            uid = int(row["id"])
+
+        return spend_credits(conn, uid, source=source, ai_amount=int(amount))
+
+
 def spend_ai(email: str, source: str, amount: int = 1) -> bool:
     email = (email or "").strip().lower()
     if not email:
@@ -3150,7 +3172,6 @@ def normalize_skills_to_bullets(text: str) -> str:
     # 1) Break input into candidate chunks
     for ln in lines:
         ln = ln.lstrip("•*-–— \t").strip()
-
         if not ln:
             continue
 
@@ -3213,35 +3234,45 @@ if btn_skills:
 
     if not skills_text.strip():
         st.warning("Please add some skills first.")
-    elif not has_free_quota("bullets_uses", 1, "AI skills improvement"):
         st.stop()
-    else:
-        with st.spinner("Improving your skills..."):
-            try:
-                # 🔥 IMPORTANT: this MUST be skills-specific
-                improved = improve_skills(skills_text)
 
-                improved_bullets = normalize_skills_to_bullets(improved)
+    # ✅ Spend 1 AI credit (ledger)  <-- NEW FLOW (replaces has_free_quota)
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    if not email_for_usage:
+        st.warning("Please sign in to use AI features.")
+        st.stop()
 
-                improved_limited = enforce_word_limit(
-                    improved_bullets,
-                    MAX_DOC_WORDS,
-                    label="Skills (AI)",
-                )
+    ok_spend = spend_ai_credit(email_for_usage, source="ai_skills_improve", amount=1)
+    if not ok_spend:
+        st.warning("You don’t have enough AI credits for this action.")
+        st.stop()
 
-                # ✅ Stage for NEXT run
-                st.session_state["skills_pending"] = improved_limited
+    with st.spinner("Improving your skills..."):
+        try:
+            # 🔥 IMPORTANT: this MUST be skills-specific
+            improved = improve_skills(skills_text)
 
-                st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
-                email_for_usage = (st.session_state.get("user") or {}).get("email")
-                if email_for_usage:
-                    increment_usage(email_for_usage, "bullets_uses")
+            improved_bullets = normalize_skills_to_bullets(improved)
 
-                st.success("AI skills applied.")
-                st.rerun()
+            improved_limited = enforce_word_limit(
+                improved_bullets,
+                MAX_DOC_WORDS,
+                label="Skills (AI)",
+            )
 
-            except Exception as e:
-                st.error(f"AI error (skills improvement): {e}")
+            # ✅ Stage for NEXT run
+            st.session_state["skills_pending"] = improved_limited
+
+            # ✅ Analytics (keep this, not credits)
+            st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
+            increment_usage(email_for_usage, "bullets_uses")
+
+            st.success("AI skills applied.")
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"AI error (skills improvement): {e}")
+
 
 
 # -------------------------
@@ -3369,15 +3400,23 @@ if run_now and role_to_improve is not None:
     if not gate_premium("use AI role improvements"):
         st.stop()
 
-    desc_key    = f"description_{i}"
-    pending_key = f"description_pending_{i}"
+    desc_key     = f"description_{i}"
+    pending_key  = f"description_pending_{i}"
     current_text = (st.session_state.get(desc_key) or "").strip()
 
     if not current_text:
         st.warning("Please add text for this role first.")
         st.stop()
 
-    if not has_free_quota("bullets_uses", 1, "role description improvements"):
+    # ✅ Replace free-quota check with AI credit spend (ledger)
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    if not email_for_usage:
+        st.warning("Please sign in to use AI features.")
+        st.stop()
+
+    ok_spend = spend_ai_credit(email_for_usage, source=f"ai_role_improve_{i+1}", amount=1)
+    if not ok_spend:
+        st.warning("You don’t have enough AI credits for this action.")
         st.stop()
 
     with st.spinner(f"Improving Role {i+1} description..."):
@@ -3392,10 +3431,9 @@ if run_now and role_to_improve is not None:
             # Stage update for next render
             st.session_state[pending_key] = improved_limited
 
+            # ✅ Keep existing analytics increment right after success
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
-            email_for_usage = (st.session_state.get("user") or {}).get("email")
-            if email_for_usage:
-                increment_usage(email_for_usage, "bullets_uses")
+            increment_usage(email_for_usage, "bullets_uses")
 
             st.success(f"Role {i+1} updated.")
             st.rerun()
@@ -3405,6 +3443,8 @@ if run_now and role_to_improve is not None:
 
 
 if not st.session_state.pop("_just_autofilled_from_cv", False):
+    pass
+
     restore_education_state()
 
 # -------------------------
