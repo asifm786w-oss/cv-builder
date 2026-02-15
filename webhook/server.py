@@ -50,6 +50,19 @@ def mark_event_processed(event_id: str) -> bool:
             conn.rollback()
             return False
 
+def get_or_create_user_id(email: str) -> int:
+    email = (email or "").strip().lower()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO users (email)
+            VALUES (%s)
+            ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+            RETURNING id
+        """, (email,))
+        uid = cur.fetchone()[0]
+        conn.commit()
+        return int(uid)
 
 # ---------- HELPERS ----------
 def plan_from_price(price_id: str) -> str | None:
@@ -202,9 +215,7 @@ def stripe_webhook():
         if not email:
             return jsonify({"status": "ignored", "reason": "no_customer_email"}), 200
 
-        user_id = find_user_id_by_email(email)
-        if not user_id:
-            return jsonify({"status": "ignored", "reason": "no_matching_user", "email": email}), 200
+        user_id = get_or_create_user_id(email)
 
         # Subscription truth (status + period end)
         sub = stripe.Subscription.retrieve(subscription_id) if subscription_id else None
@@ -251,7 +262,8 @@ def stripe_webhook():
 
         cust = stripe.Customer.retrieve(customer_id)
         email = (cust.get("email") or "").strip().lower()
-        user_id = find_user_id_by_email(email) if email else None
+        user_id = get_or_create_user_id(email)
+
 
         if user_id and subscription_id:
             upsert_subscription(
