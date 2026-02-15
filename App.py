@@ -331,10 +331,6 @@ def mark_policies_accepted(email: str) -> None:
             )
         conn.commit()
 
-
-
-
-
 def create_checkout_session(price_id: str, pack: str, customer_email: str | None = None) -> str:
     customer_email_clean = (customer_email or "").strip().lower()
 
