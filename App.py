@@ -1427,7 +1427,7 @@ email = session_user.get("email")
 if email:
     uid = get_user_id(email)
     if uid:
-        credits = get_user_credits_ledger(user_id=uid)
+        credits = get_user_credits(email)
         sub = get_active_subscription_for_user(uid)
 
         now_utc = datetime.now(timezone.utc)
