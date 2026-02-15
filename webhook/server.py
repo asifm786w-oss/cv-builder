@@ -66,25 +66,16 @@ def plan_from_price(price_id: str) -> str | None:
     return None
 
 
-def get_or_create_user_id(email: str) -> int:
+def find_user_id_by_email(email: str) -> int | None:
     email = (email or "").strip().lower()
     if not email:
-        raise ValueError("Missing email")
-
+        return None
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO users (email)
-            VALUES (%s)
-            ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
-            RETURNING id
-            """,
-            (email,),
-        )
-        uid = cur.fetchone()[0]
-        conn.commit()
-        return int(uid)
+        cur.execute("SELECT id FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
+        row = cur.fetchone()
+        return int(row[0]) if row else None
+
 
 
 def upsert_subscription(
@@ -234,6 +225,8 @@ def stripe_webhook():
             return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
         user_id = get_or_create_user_id(email)
+        if not user_id:
+			return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
 
         # Fetch subscription for period end + status
         status = "unknown"
@@ -292,7 +285,10 @@ def stripe_webhook():
         if not email:
             return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
-        user_id = get_or_create_user_id(email)
+        user_id = find_user_id_by_email(email)
+        if not user_id:
+            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
+
 
         status = "unknown"
         period_end = None
