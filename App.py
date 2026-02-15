@@ -405,9 +405,12 @@ def mark_policies_accepted(email: str) -> None:
 
 
 
+
+
 def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
-    success_url = st.secrets.get("SUCCESS_URL", None) or "https://YOUR_DOMAIN/success?session_id={CHECKOUT_SESSION_ID}"
-    cancel_url  = st.secrets.get("CANCEL_URL", None)  or "https://YOUR_DOMAIN/pricing"
+    app_url = (os.getenv("APP_URL") or "http://localhost:8501").rstrip("/")
+    success_url = os.getenv("SUCCESS_URL") or f"{app_url}/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url  = os.getenv("CANCEL_URL")  or f"{app_url}/pricing"
 
     session = stripe.checkout.Session.create(
         mode="subscription",
@@ -419,6 +422,7 @@ def create_subscription_checkout_session(price_id: str, pack: str, customer_emai
         metadata={"pack": pack, "app_user_email": customer_email},
     )
     return session.url
+
 
 
 
