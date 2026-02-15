@@ -403,19 +403,24 @@ def mark_policies_accepted(email: str) -> None:
             )
         conn.commit()
 
-def create_checkout_session(price_id: str, pack: str, customer_email: str | None = None) -> str:
-    customer_email_clean = (customer_email or "").strip().lower()
+
+
+def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
+    success_url = st.secrets.get("SUCCESS_URL", None) or "https://YOUR_DOMAIN/success?session_id={CHECKOUT_SESSION_ID}"
+    cancel_url  = st.secrets.get("CANCEL_URL", None)  or "https://YOUR_DOMAIN/pricing"
 
     session = stripe.checkout.Session.create(
-        mode="payment",
+        mode="subscription",
+        customer_email=customer_email,
         line_items=[{"price": price_id, "quantity": 1}],
-        success_url=f"{APP_URL}/?stripe=success",
-        cancel_url=f"{APP_URL}/?stripe=cancel",
-        customer_email=customer_email_clean or None,
         allow_promotion_codes=True,
-        metadata={"pack": pack, "user_email": customer_email_clean},
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={"pack": pack, "app_user_email": customer_email},
     )
     return session.url
+
+
 
 
 
@@ -4129,9 +4134,15 @@ with col_monthly:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
             st.stop()
 
-        # NOTE: create_checkout_session should be in subscription mode for Stripe Prices
-        url = create_checkout_session(PRICE_MONTHLY, pack="monthly", customer_email=email_for_checkout)
-        st.link_button("Continue to secure checkout", url)
+        try:
+            url = create_subscription_checkout_session(
+                PRICE_MONTHLY,
+                pack="monthly",
+                customer_email=email_for_checkout,
+            )
+            st.link_button("Continue to secure checkout", url)
+        except Exception as e:
+            st.error(f"Stripe error: {e}")
 
 with col_pro:
     st.subheader("Pro")
@@ -4156,8 +4167,15 @@ with col_pro:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
             st.stop()
 
-        url = create_checkout_session(PRICE_PRO, pack="pro", customer_email=email_for_checkout)
-        st.link_button("Continue to secure checkout", url)
+        try:
+            url = create_subscription_checkout_session(
+                PRICE_PRO,
+                pack="pro",
+                customer_email=email_for_checkout,
+            )
+            st.link_button("Continue to secure checkout", url)
+        except Exception as e:
+            st.error(f"Stripe error: {e}")
 
 st.markdown("---")
 st.subheader("Enterprise (organisations & programmes)")
@@ -4175,6 +4193,7 @@ st.caption(
     "Subscriptions fund the platform and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
+
 
 
 
