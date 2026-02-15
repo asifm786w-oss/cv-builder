@@ -3998,6 +3998,20 @@ TEMPLATE_MAP = {
     "Classic Grey": "classic_grey.html",
 }
 
+# ✅ Ensure a default template label exists
+if "template_label" not in st.session_state or not st.session_state["template_label"]:
+    st.session_state["template_label"] = "Blue"
+
+# ✅ UI: Template dropdown
+template_label = st.selectbox(
+    "Choose a CV template",
+    options=list(TEMPLATE_MAP.keys()),
+    key="template_label",
+    index=list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
+          if st.session_state["template_label"] in TEMPLATE_MAP else 0,
+)
+
+
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
     action_label="generate and download your CV",
