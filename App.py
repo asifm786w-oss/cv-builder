@@ -161,6 +161,68 @@ def init_db():
         conn.close()
 
 
+from psycopg2.extras import RealDictCursor
+
+def get_user_id(email: str) -> int | None:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+        row = cur.fetchone()
+        return int(row[0]) if row else None
+
+
+def get_credits_by_user_id(user_id: int) -> dict:
+    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT
+              GREATEST(
+                COALESCE((SELECT SUM(cv_amount) FROM credit_grants
+                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+                -
+                COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
+              0) AS cv,
+              GREATEST(
+                COALESCE((SELECT SUM(ai_amount) FROM credit_grants
+                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+                -
+                COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
+              0) AS ai
+            """,
+            (user_id, user_id, user_id, user_id),
+        )
+        row = cur.fetchone() or {}
+        return {"cv": int(row["cv"]), "ai": int(row["ai"])}
+
+
+def try_spend(user_id: int, source: str, cv: int = 0, ai: int = 0) -> bool:
+    cv = int(cv or 0)
+    ai = int(ai or 0)
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
+            if not cur.fetchone():
+                return False
+
+            bal = get_credits_by_user_id(user_id)
+
+            if cv > 0 and bal["cv"] < cv:
+                return False
+            if ai > 0 and bal["ai"] < ai:
+                return False
+
+            cur.execute(
+                """
+                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (user_id, source, cv, ai),
+            )
+        conn.commit()
+        return True
 
 
 
@@ -2595,7 +2657,6 @@ with st.sidebar:
     st.markdown("### 📊 Usage")
 
     if not sidebar_logged_in:
-        # Guest preview only (doesn't cost you anything)
         st.markdown("**CV Remaining:** 0")
         st.progress(0)
         st.markdown("**AI Remaining:** 0")
@@ -2608,10 +2669,16 @@ with st.sidebar:
             st.markdown("**AI Tools:** ♾️ Unlimited")
         else:
             email = (session_user or {}).get("email") or ""
-            credits = get_user_credits(email)
+            email = email.strip().lower()
 
-            cv_left = int(credits.get("cv", 0))
-            ai_left = int(credits.get("ai", 0))
+            uid = get_user_id(email)  # must exist in App.py
+            credits = {"cv": 0, "ai": 0}
+
+            if uid:
+                credits = get_credits_by_user_id(uid)  # ✅ ledger truth
+
+            cv_left = int(credits.get("cv", 0) or 0)
+            ai_left = int(credits.get("ai", 0) or 0)
 
             # Optional: show a “session progress” bar (not lifetime).
             used_cv_session = int(st.session_state.get("cv_generations", 0) or 0)
@@ -2623,7 +2690,6 @@ with st.sidebar:
                 + (st.session_state.get("upload_parses", 0) or 0)
             )
 
-            # For progress bars we need a “total”. Use credits at login/session as baseline.
             cv_total_session = max(cv_left + used_cv_session, 1)
             ai_total_session = max(ai_left + used_ai_session, 1)
 
@@ -2636,6 +2702,7 @@ with st.sidebar:
             st.caption("Credits stack when you repurchase. No monthly reset.")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
 
 
     # ---------- Referrals ----------
@@ -2890,14 +2957,22 @@ if uploaded_cv is not None and fill_clicked:
     st.session_state["_just_autofilled_from_cv"] = True
     st.session_state["_skip_restore_personal_once"] = True  # << important
 
-    # ✅ usage counting (only for logged-in users)
+    # ✅ charge credits (ledger) + keep old counters if you want analytics
     email_for_usage = (st.session_state.get("user") or {}).get("email")
     if email_for_usage:
+        uid = get_user_id(email_for_usage)
+        if uid:
+            # Spend 1 AI credit for parsing (adjust if you want)
+            with get_conn() as conn:
+                ok = spend_credits(conn, uid, source="upload_parse", ai_amount=1)
+
+            if not ok:
+                st.warning("You don't have enough AI credits for CV parsing.")
+                st.stop()
+
+        # Optional analytics counter (keep if you like dashboards)
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
         increment_usage(email_for_usage, "upload_parses")
-   
-    st.success("Form fields updated from your CV. Scroll down to review and edit.")
-    st.rerun()
 
 
 # ============================================================
@@ -3461,6 +3536,8 @@ def _safe_refresh_user_from_db(email: str) -> dict | None:
 expanded = bool(st.session_state.get("adzuna_results"))
 with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
+    st.session_state.setdefault("adzuna_results", [])
+
     # --- AUTH ---
     session_user = st.session_state.get("user") or {}
     email = (session_user.get("email") or "").strip().lower()
@@ -3470,26 +3547,19 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
         st.warning("Please sign in to use Job Search.")
         can_use = False
 
-    # ✅ Refresh user from DB so this block matches the sidebar truth
-    # (If DB is unavailable, fall back to session_user)
-    fresh_user = _safe_refresh_user_from_db(email) if email else None
-    if fresh_user:
-        st.session_state["user"] = fresh_user
-        user = fresh_user
-    else:
-        user = session_user
+    uid = None
+    credits = {"cv": 0, "ai": 0}
 
-    # ✅ Credits: read from SAME user object the sidebar should be using
-    ai_credits = _extract_ai_credits_from_user(user)
-
-    # If we can't find credits, don't block the whole app; just disable Job Search.
-    if can_use and ai_credits is None:
-        st.warning("Couldn’t load your AI credits right now. Job Search is disabled, but the rest of the app will still work.")
-        can_use = False
-
-    if can_use and int(ai_credits or 0) <= 0:
-        st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
-        can_use = False
+    if can_use:
+        uid = get_user_id(email)  # must exist in App.py
+        if not uid:
+            st.warning("Couldn’t find your account. Please sign out and sign in again.")
+            can_use = False
+        else:
+            credits = get_credits_by_user_id(uid)  # ledger truth
+            if int(credits.get("ai", 0) or 0) <= 0:
+                st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
+                can_use = False
 
     # Inputs
     with st.container(border=True):
@@ -3521,8 +3591,6 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
         st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
 
-    st.session_state.setdefault("adzuna_results", [])
-
     if search_clicked and can_use:
         query_clean = (keywords or "").strip()
         loc_clean = (location or "").strip()
@@ -3534,20 +3602,18 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 with st.spinner("Searching jobs..."):
                     jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
-                # ✅ Decrement 1 credit AFTER successful API return
-                ok = decrement_ai_credit(email, amount=1)
-                if not ok:
+                # ✅ Spend 1 AI credit only if API returned (successful call)
+                spent = try_spend(uid, source="job_search", ai=1)
+                if not spent:
                     st.warning("You don’t have enough AI credits to perform this search.")
-                else:
-                    # ✅ Refresh user again so sidebar + everything stays in sync
-                    refreshed = _safe_refresh_user_from_db(email)
-                    if refreshed:
-                        st.session_state["user"] = refreshed
+                    st.stop()
 
-                    st.session_state["adzuna_results"] = jobs
-                    if not jobs:
-                        st.info("No results found. Try different keywords or a nearby location.")
-                    st.rerun()
+                # Store results
+                st.session_state["adzuna_results"] = jobs
+                if not jobs:
+                    st.info("No results found. Try different keywords or a nearby location.")
+
+                st.rerun()
 
             except AdzunaConfigError:
                 st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
@@ -3555,6 +3621,58 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 st.error("Job search is temporarily unavailable. Please try again shortly.")
             except Exception as e:
                 st.error(f"Job search failed: {e}")
+
+    # -----------------------------
+    # Results (each job collapsible)
+    # -----------------------------
+    jobs = st.session_state.get("adzuna_results") or []
+    if jobs:
+        st.divider()
+        st.caption("Showing up to 10 results.")
+
+        for idx, job in enumerate(jobs):
+            title = job.get("title") or "Untitled"
+            company = job.get("company") or "Unknown company"
+            loc = job.get("location") or "Unknown location"
+            created = job.get("created") or ""
+            url = job.get("url") or ""
+            smin = job.get("salary_min")
+            smax = job.get("salary_max")
+            desc = job.get("description") or ""
+
+            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
+
+                with st.container(border=True):
+                    top = st.columns([4, 1])
+                    with top[0]:
+                        if created:
+                            st.caption(f"Posted: {created}")
+                        sal = _format_salary(smin, smax)
+                        if sal:
+                            st.caption(sal)
+                        if url:
+                            st.link_button("Open listing", url)
+
+                    with top[1]:
+                        if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
+                            st.session_state["job_description"] = desc
+                            st.session_state["_last_jd_fp"] = None
+                            st.session_state.pop("job_summary_ai", None)
+                            st.session_state.pop("cover_letter", None)
+                            st.session_state.pop("cover_letter_box", None)
+
+                            st.session_state["selected_job"] = {
+                                "title": title,
+                                "company": company,
+                                "url": url,
+                            }
+
+                            st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
+                            st.rerun()
+
+                st.markdown("**Preview description**")
+                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+
 
     # -----------------------------
     # Results (each job collapsible)
