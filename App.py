@@ -196,6 +196,29 @@ def get_credits_by_user_id(user_id: int) -> dict:
         row = cur.fetchone() or {}
         return {"cv": int(row["cv"]), "ai": int(row["ai"])}
 
+def improve_skills(skills_text: str) -> str:
+    """
+    Skills-only improvement.
+    Returns text that will later be normalized into bullets by normalize_skills_to_bullets().
+    """
+    prompt = f"""
+You are improving the Skills section of a CV.
+
+Rules:
+- Output ONLY skill phrases (1–3 words each).
+- No sentences. No explanations. No headings.
+- Prefer concrete, marketable skills.
+- Keep it relevant to the input.
+- One skill per line (bullets are ok too).
+
+Input:
+{skills_text}
+""".strip()
+
+    # Replace this with your existing model call:
+    return call_ai(prompt)
+
+
 
 def try_spend(user_id: int, source: str, cv: int = 0, ai: int = 0) -> bool:
     cv = int(cv or 0)
@@ -4060,35 +4083,37 @@ if generate_clicked:
 
 
 # -------------------------
-# Pricing (CREDITS PACKS)
+# Pricing (SUBSCRIPTIONS)
 # -------------------------
 st.header("Pricing")
 
-col_free, col_job, col_pro = st.columns(3)
+col_free, col_monthly, col_pro = st.columns(3)
 
 email_for_checkout = (st.session_state.get("user") or {}).get("email")
 
 with col_free:
     st.subheader("Free")
     st.markdown(
-        "**£0**\n\n"
+        "**£0 / month**\n\n"
         "- Sign in required for downloads + AI tools\n"
-        "- Starter credits: **5 CV + 5 AI** (optional)\n"
-        "- Templates available\n"
+        "- Includes a small starter allowance (if enabled): **5 CV + 5 AI**\n"
+        "- CV templates included\n"
+        "- Upgrade anytime\n"
     )
 
-with col_job:
-    st.subheader("Monthly Pack")
+with col_monthly:
+    st.subheader("Monthly")
     st.markdown(
-        "**£2.99**\n\n"
-        "- **+20 CV credits**\n"
-        "- **+30 AI credits**\n"
-        "- Credits stack when you repurchase\n"
+        "**£2.99 / month**\n\n"
+        "- Monthly allowance: **20 CV + 30 AI**\n"
         "- PDF + Word downloads\n"
         "- Email support\n"
+        "- Cancel anytime\n"
+        "\n"
+        "*(Unused credits may carry over if you’ve enabled stacking — otherwise they reset monthly.)*"
     )
 
-    if st.button("Buy Monthly Pack", key="buy_monthly_pack"):
+    if st.button("Start Monthly Subscription", key="start_monthly_sub"):
         if not email_for_checkout:
             st.warning("Please sign in first.")
             st.stop()
@@ -4099,21 +4124,23 @@ with col_job:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
             st.stop()
 
+        # NOTE: create_checkout_session should be in subscription mode for Stripe Prices
         url = create_checkout_session(PRICE_MONTHLY, pack="monthly", customer_email=email_for_checkout)
         st.link_button("Continue to secure checkout", url)
 
 with col_pro:
-    st.subheader("Pro Pack")
+    st.subheader("Pro")
     st.markdown(
-        "**£5.99**\n\n"
-        "- **+50 CV credits**\n"
-        "- **+90 AI credits**\n"
-        "- Credits stack when you repurchase\n"
+        "**£5.99 / month**\n\n"
+        "- Monthly allowance: **50 CV + 90 AI**\n"
         "- PDF + Word downloads\n"
         "- Priority support\n"
+        "- Cancel anytime\n"
+        "\n"
+        "*(Unused credits may carry over if you’ve enabled stacking — otherwise they reset monthly.)*"
     )
 
-    if st.button("Buy Pro Pack", key="buy_pro_pack"):
+    if st.button("Start Pro Subscription", key="start_pro_sub"):
         if not email_for_checkout:
             st.warning("Please sign in first.")
             st.stop()
@@ -4140,9 +4167,10 @@ st.markdown(
 )
 
 st.caption(
-    "Credits keep the service reliable and prevent abuse. "
+    "Subscriptions fund the platform and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
+
 
 
 # ==============================================
