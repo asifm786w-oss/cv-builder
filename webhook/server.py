@@ -13,7 +13,6 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY", "").strip()
 PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "").strip()
 
-# Optional: if true, credits don't expire at period end
 CREDIT_STACKING = os.getenv("CREDIT_STACKING", "false").lower() == "true"
 
 
@@ -39,10 +38,7 @@ def ensure_stripe_events_table():
 
 
 def mark_event_processed(event_id: str) -> bool:
-    """
-    Returns True if inserted (new event).
-    Returns False if already processed (Stripe retry).
-    """
+    """True if inserted (new), False if duplicate (Stripe retry)."""
     ensure_stripe_events_table()
     with get_conn() as conn:
         cur = conn.cursor()
@@ -57,9 +53,9 @@ def mark_event_processed(event_id: str) -> bool:
 
 # ---------- HELPERS ----------
 def plan_from_price(price_id: str) -> str | None:
-    if price_id and price_id == PRICE_MONTHLY:
+    if price_id == PRICE_MONTHLY:
         return "monthly"
-    if price_id and price_id == PRICE_PRO:
+    if price_id == PRICE_PRO:
         return "pro"
     return None
 
@@ -82,15 +78,9 @@ def find_user_id_by_email(email: str) -> int | None:
         return int(row[0]) if row else None
 
 
-def upsert_subscription(
-    user_id: int,
-    customer_id: str,
-    subscription_id: str,
-    plan: str,
-    status: str,
-    period_end_unix: int | None,
-    cancel_at_period_end: bool,
-):
+def upsert_subscription(user_id: int, customer_id: str, subscription_id: str,
+                        plan: str, status: str, period_end_unix: int | None,
+                        cancel_at_period_end: bool):
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -109,31 +99,14 @@ def upsert_subscription(
               current_period_end = EXCLUDED.current_period_end,
               cancel_at_period_end = EXCLUDED.cancel_at_period_end
             """,
-            (
-                user_id,
-                customer_id,
-                subscription_id,
-                plan,
-                status,
-                period_end_unix,
-                period_end_unix,
-                cancel_at_period_end,
-            ),
+            (user_id, customer_id, subscription_id, plan, status,
+             period_end_unix, period_end_unix, cancel_at_period_end),
         )
         conn.commit()
 
 
-def insert_credit_grant(
-    user_id: int,
-    source: str,
-    cv_amount: int,
-    ai_amount: int,
-    expires_at_unix: int | None,
-):
-    """
-    Inserts a grant into credit_grants.
-    Requires UNIQUE(source) so we never double-grant.
-    """
+def insert_credit_grant(user_id: int, source: str, cv_amount: int, ai_amount: int, expires_at_unix: int | None):
+    """Requires UNIQUE(source) on credit_grants."""
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -150,35 +123,29 @@ def insert_credit_grant(
         conn.commit()
 
 
-def extract_price_id(invoice: dict, subscription_id: str | None) -> tuple[str, dict]:
+def extract_price_id_from_invoice(invoice: dict) -> str:
     """
-    Returns (price_id, debug_dict).
-    Strategy:
-      1) scan invoice lines for a price.id
-      2) fall back to subscription items[0].price.id
+    Your Stripe invoice payload stores price here:
+      lines.data[0].pricing.price_details.price
+    Fallback to older shapes just in case.
     """
-    debug = {"invoice_line_price_ids": [], "subscription_item_price_id": ""}
-
-    # 1) scan invoice lines
     lines = (invoice.get("lines") or {}).get("data") or []
-    for ln in lines:
-        pid = ((ln.get("price") or {}).get("id") or "").strip()
-        if pid:
-            debug["invoice_line_price_ids"].append(pid)
+    if not lines:
+        return ""
 
-    if debug["invoice_line_price_ids"]:
-        return debug["invoice_line_price_ids"][0], debug
+    ln0 = lines[0]
 
-    # 2) fall back to subscription
-    if subscription_id:
-        sub = stripe.Subscription.retrieve(subscription_id)
-        items = (sub.get("items") or {}).get("data") or []
-        if items:
-            pid = ((items[0].get("price") or {}).get("id") or "").strip()
-            debug["subscription_item_price_id"] = pid
-            return pid, debug
+    # Newer shape: pricing.price_details.price (STRING)
+    pricing = ln0.get("pricing") or {}
+    price_details = pricing.get("price_details") or {}
+    pid = (price_details.get("price") or "").strip()
+    if pid:
+        return pid
 
-    return "", debug
+    # Older shape: price.id
+    p = ln0.get("price") or {}
+    pid = (p.get("id") or "").strip()
+    return pid
 
 
 # ---------- WEBHOOK ----------
@@ -187,14 +154,10 @@ def stripe_webhook():
     payload = request.get_data(as_text=False)
     sig_header = request.headers.get("Stripe-Signature", "")
 
-    # Basic env sanity
     if not stripe.api_key:
         return jsonify({"error": "Missing STRIPE_SECRET_KEY"}), 500
     if not STRIPE_WEBHOOK_SECRET:
         return jsonify({"error": "Missing STRIPE_WEBHOOK_SECRET"}), 500
-    if not PRICE_MONTHLY or not PRICE_PRO:
-        # We'll still run, but we return these in debug responses too.
-        pass
 
     try:
         event = stripe.Webhook.construct_event(
@@ -212,14 +175,15 @@ def stripe_webhook():
     typ = event.get("type")
     obj = (event.get("data") or {}).get("object") or {}
 
-    # ✅ Handle ALL common "invoice paid" events
+    # ✅ subscriptions: grant on invoice success (covers renewals)
     if typ in ("invoice.paid", "invoice.payment_succeeded", "invoice.payment.paid"):
         invoice = obj
         invoice_id = (invoice.get("id") or "").strip()
         customer_id = (invoice.get("customer") or "").strip()
+        subscription_id = (invoice.get("parent", {}) or {}).get("subscription_details", {}) or None
         subscription_id = (invoice.get("subscription") or "").strip() or None
 
-        price_id, price_debug = extract_price_id(invoice, subscription_id)
+        price_id = extract_price_id_from_invoice(invoice)
         plan = plan_from_price(price_id)
 
         if not plan:
@@ -228,12 +192,11 @@ def stripe_webhook():
                 "reason": "unknown_price",
                 "event_type": typ,
                 "price_id_seen": price_id,
-                "price_debug": price_debug,
                 "env_monthly": PRICE_MONTHLY,
                 "env_pro": PRICE_PRO,
             }), 200
 
-        # Get customer email
+        # Get customer email from Stripe (your invoice also has customer_email, but this is safest)
         cust = stripe.Customer.retrieve(customer_id)
         email = (cust.get("email") or "").strip().lower()
         if not email:
@@ -243,13 +206,12 @@ def stripe_webhook():
         if not user_id:
             return jsonify({"status": "ignored", "reason": "no_matching_user", "email": email}), 200
 
-        # Get subscription truth
+        # Subscription truth (status + period end)
         sub = stripe.Subscription.retrieve(subscription_id) if subscription_id else None
         status = (sub.get("status") if sub else "unknown") or "unknown"
         period_end = sub.get("current_period_end") if sub else None
         cancel_at_period_end = bool(sub.get("cancel_at_period_end")) if sub else False
 
-        # Upsert subscription row
         if subscription_id:
             upsert_subscription(
                 user_id=user_id,
@@ -261,13 +223,12 @@ def stripe_webhook():
                 cancel_at_period_end=cancel_at_period_end,
             )
 
-        # Grant credits (ledger)
         cv_amt, ai_amt = credits_for_plan(plan)
-        expires_at = None if CREDIT_STACKING else period_end  # reset monthly by default
+        expires_at = None if CREDIT_STACKING else period_end
 
         insert_credit_grant(
             user_id=user_id,
-            source=f"stripe_invoice:{invoice_id}",  # idempotent
+            source=f"stripe_invoice:{invoice_id}",
             cv_amount=cv_amt,
             ai_amount=ai_amt,
             expires_at_unix=expires_at,
@@ -275,7 +236,7 @@ def stripe_webhook():
 
         return jsonify({"status": "ok", "granted": True, "plan": plan, "email": email}), 200
 
-    # Keep subscription status synced too
+    # Optional: keep subscription record synced
     if typ in ("customer.subscription.updated", "customer.subscription.deleted"):
         sub = obj
         customer_id = (sub.get("customer") or "").strip()
@@ -284,7 +245,6 @@ def stripe_webhook():
         period_end = sub.get("current_period_end")
         cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
 
-        # Determine price id from subscription items
         items = (sub.get("items") or {}).get("data") or []
         price_id = ((items[0].get("price") or {}).get("id") or "").strip() if items else ""
         plan = plan_from_price(price_id) or "unknown"
