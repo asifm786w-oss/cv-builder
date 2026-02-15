@@ -678,6 +678,31 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
 
     st.session_state["education_items"] = cleaned
 
+def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
+    cv_amount = int(cv_amount)
+    ai_amount = int(ai_amount)
+
+    with conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user_id,))
+            if not cur.fetchone():
+                return False
+
+            bal = get_user_credits_ledger(conn, user_id)
+
+            if cv_amount > 0 and bal["cv"] < cv_amount:
+                return False
+            if ai_amount > 0 and bal["ai"] < ai_amount:
+                return False
+
+            cur.execute(
+                """
+                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (user_id, source, cv_amount, ai_amount),
+            )
+            return True
 
 from psycopg2.extras import RealDictCursor
 
