@@ -485,6 +485,7 @@ def migrate_user_credits_to_ledger_once(email: str) -> None:
 
 
 
+
 def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
     """
     Per-user cooldown for a given action_key.
@@ -3794,7 +3795,6 @@ jd_fp = _fingerprint(job_description)
 last_jd_fp = st.session_state.get("_last_jd_fp")
 
 if last_jd_fp and jd_fp != last_jd_fp:
-    # Job changed: clear anything derived from it
     st.session_state.pop("job_summary_ai", None)
     st.session_state.pop("cover_letter", None)
     st.session_state.pop("cover_letter_box", None)
@@ -3808,86 +3808,58 @@ st.caption(
 
 col_jd1, col_jd2 = st.columns(2)
 with col_jd1:
-    job_summary_clicked = st.button(
-        "Suggest tailored summary (AI)",
-        key="btn_job_summary",
-    )
+    job_summary_clicked = st.button("Suggest tailored summary (AI)", key="btn_job_summary")
 with col_jd2:
-    ai_cover_letter_clicked = st.button(
-        "Generate cover letter (AI)",
-        key="btn_cover",
-    )
+    ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key="btn_cover")
 
-# --- AI job-description summary (separate from professional summary) ---
+
+# --- AI job-description summary ---
 if job_summary_clicked:
     if not gate_premium("generate a job summary"):
         st.stop()
 
-    # Guard: must complete Section 1 first
     if not (full_name.strip() and email.strip()):
-        st.warning(
-            "Complete Section 1 (Full name + Email) first — these are automatically used in your outputs."
-        )
+        st.warning("Complete Section 1 (Full name + Email) first — these are used in outputs.")
         st.stop()
 
-    # Guard: need a job description
     if not job_description.strip():
         st.error("Please paste a job description first.")
         st.stop()
 
-    # Quota check
-    if not has_free_quota("job_summary_uses", 1, "AI job summary"):
+    # ✅ LEDGER SPEND (1 AI credit)
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    uid = get_user_id(email_for_usage) if email_for_usage else None
+    if not uid:
+        st.error("Please sign in again.")
+        st.stop()
+
+    spent = try_spend(uid, source="job_summary", ai=1)
+    if not spent:
+        st.warning("You don’t have enough AI credits to generate a job summary.")
         st.stop()
 
     with st.spinner("Generating AI job summary..."):
         try:
-            jd_limited = enforce_word_limit(
-                job_description,
-                MAX_DOC_WORDS,
-                label="Job description",
-            )
-
+            jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description")
             job_summary_text = generate_job_summary(jd_limited)
 
             st.session_state["job_summary_ai"] = job_summary_text
-            st.session_state["job_summary_uses"] = (
-                st.session_state.get("job_summary_uses", 0) + 1
-            )
+            st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
 
-            email_for_usage = (st.session_state.get("user") or {}).get("email")
+            # Optional analytics only (won't affect credits)
             if email_for_usage:
                 increment_usage(email_for_usage, "job_summary_uses")
 
-            st.success(
-                "AI job summary generated below. "
-                "You can copy it into applications or your notes."
-            )
-
+            st.success("AI job summary generated below.")
         except Exception as e:
             st.error(f"AI error (job summary): {e}")
 
-# --- DISPLAY JOB SUMMARY (THIS WAS MISSING) ---
+
+# --- DISPLAY JOB SUMMARY ---
 job_summary_text = st.session_state.get("job_summary_ai", "")
 if job_summary_text:
     st.markdown("**AI job summary for this role (read-only):**")
     st.write(job_summary_text)
-# --- AI cover letter ---
-
-# ✅ JD fingerprint clearing: if JD changes, clear derived outputs
-import hashlib
-
-def _fingerprint(text: str) -> str:
-    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
-
-jd_fp = _fingerprint(job_description)
-last_jd_fp = st.session_state.get("_last_jd_fp")
-
-if last_jd_fp and jd_fp != last_jd_fp:
-    st.session_state.pop("job_summary_ai", None)
-    st.session_state.pop("cover_letter", None)
-    st.session_state.pop("cover_letter_box", None)
-
-st.session_state["_last_jd_fp"] = jd_fp
 
 
 # --- AI cover letter generation ---
@@ -3895,20 +3867,24 @@ if ai_cover_letter_clicked:
     if not gate_premium("generate a cover letter"):
         st.stop()
 
-    # ✅ Guard: must complete Section 1 first
     if not (full_name.strip() and email.strip()):
-        st.warning(
-            "Complete Section 1 (Full name + Email) first — these are automatically added to your cover letter."
-        )
+        st.warning("Complete Section 1 (Full name + Email) first — added to cover letter.")
         st.stop()
 
-    # ✅ Guard: need a job description
     if not job_description.strip():
         st.error("Please paste a job description first.")
         st.stop()
 
-    # ✅ Quota check
-    if not has_free_quota("cover_uses", 1, "AI cover letter"):
+    # ✅ LEDGER SPEND (1 AI credit)
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    uid = get_user_id(email_for_usage) if email_for_usage else None
+    if not uid:
+        st.error("Please sign in again.")
+        st.stop()
+
+    spent = try_spend(uid, source="cover_letter", ai=1)
+    if not spent:
+        st.warning("You don’t have enough AI credits to generate a cover letter.")
         st.stop()
 
     with st.spinner("Generating cover letter..."):
@@ -3922,40 +3898,22 @@ if ai_cover_letter_clicked:
                 "location": location,
             }
 
-            jd_limited = enforce_word_limit(
-                job_description,
-                MAX_DOC_WORDS,
-                label="Job description (AI input)",
-            )
-
+            jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description (AI input)")
             job_summary = st.session_state.get("job_summary_ai", "") or ""
 
-            cover_text = generate_cover_letter_ai(
-                cover_input,
-                jd_limited,
-                job_summary,
-            )
-
+            cover_text = generate_cover_letter_ai(cover_input, jd_limited, job_summary)
             cleaned = clean_cover_letter_body(cover_text)
 
-            final_letter = enforce_word_limit(
-                cleaned,
-                MAX_LETTER_WORDS,
-                label="cover letter",
-            )
+            final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-            # ✅ Set BOTH keys BEFORE rendering the widget (no `value=` on widget)
             st.session_state["cover_letter"] = final_letter
             st.session_state["cover_letter_box"] = final_letter
 
             st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
-            email_for_usage = (st.session_state.get("user") or {}).get("email")
             if email_for_usage:
                 increment_usage(email_for_usage, "cover_uses")
 
-            st.success(
-                "AI cover letter generated below. You can edit it before downloading."
-            )
+            st.success("AI cover letter generated below. You can edit it before downloading.")
             st.rerun()
 
         except Exception as e:
@@ -3968,14 +3926,12 @@ st.session_state.setdefault("cover_letter", "")
 if st.session_state["cover_letter"]:
     st.subheader("✏️ Cover letter")
 
-    # ✅ Widget reads from session_state via key; DO NOT pass `value=`
     edited = st.text_area(
         "You can edit this before using it:",
         key="cover_letter_box",
         height=260,
     )
 
-    # keep canonical value in sync
     st.session_state["cover_letter"] = edited
 
     try:
@@ -4015,6 +3971,7 @@ if st.session_state["cover_letter"]:
         st.error(f"Error generating cover letter files: {e!r}")
 
 
+
 # -------------------------
 # CV Template mapping
 # -------------------------
@@ -4027,21 +3984,6 @@ TEMPLATE_MAP = {
     "Classic Grey": "classic_grey.html",
 }
 
-# -------------------------
-# 7. Generate CV
-# -------------------------
-
-st.header("CV Template")
-
-st.session_state.setdefault("template_label", "Blue")
-
-template_label = st.selectbox(
-    "Choose a CV template",
-    options=list(TEMPLATE_MAP.keys()),
-    key="template_label",
-)
-
-# 🔒 Premium-gated button (keeps app scrollable for guests)
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
     action_label="generate and download your CV",
@@ -4049,31 +3991,31 @@ generate_clicked = locked_action_button(
 )
 
 if generate_clicked:
-    # Must be logged in at this point (locked_action_button enforces it)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
 
     if not full_name or not email:
         st.error("Please fill in at least your full name and email.")
         st.stop()
 
-    # Optional: extra safety if email somehow missing
     if not email_for_usage:
         st.error("Please sign in again.")
         open_auth_modal("Sign in")
         st.stop()
 
-    # Quota check stays exactly as you already had it
-    if not has_free_quota("cv_generations", 1, "CV generation"):
+    uid = get_user_id(email_for_usage)
+    if not uid:
+        st.error("Please sign in again.")
+        st.stop()
+
+    # ✅ LEDGER SPEND (1 CV credit)
+    spent = try_spend(uid, source="cv_generate", cv=1)
+    if not spent:
+        st.warning("You don’t have enough CV credits to generate a CV.")
         st.stop()
 
     try:
         raw_summary = st.session_state.get("summary", "") or ""
-
-        cv_summary = enforce_word_limit(
-            raw_summary,
-            MAX_DOC_WORDS,
-            "Professional summary",
-        )
+        cv_summary = enforce_word_limit(raw_summary, MAX_DOC_WORDS, "Professional summary")
 
         cv = CV(
             full_name=full_name,
@@ -4089,10 +4031,7 @@ if generate_clicked:
             references=references or None,
         )
 
-        template_name = TEMPLATE_MAP.get(
-            st.session_state.get("template_label"),
-            "Blue Theme.html",
-        )
+        template_name = TEMPLATE_MAP.get(st.session_state.get("template_label"), "Blue Theme.html")
 
         pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
         docx_bytes = render_cv_docx_bytes(cv)
@@ -4101,26 +4040,22 @@ if generate_clicked:
 
         col_cv1, col_cv2 = st.columns(2)
         with col_cv1:
-            st.download_button(
-                label="📄 Download CV as PDF",
-                data=pdf_bytes,
-                file_name="cv.pdf",
-                mime="application/pdf",
-            )
+            st.download_button("📄 Download CV as PDF", data=pdf_bytes, file_name="cv.pdf", mime="application/pdf")
         with col_cv2:
             st.download_button(
-                label="📝 Download CV as Word (.docx)",
+                "📝 Download CV as Word (.docx)",
                 data=docx_bytes,
                 file_name="cv.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
+        # Optional analytics only
         st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
-        if email_for_usage:
-            increment_usage(email_for_usage, "cv_generations")
+        increment_usage(email_for_usage, "cv_generations")
 
     except Exception as e:
         st.error(f"Something went wrong while generating the CV: {e}")
+
 
 
 
