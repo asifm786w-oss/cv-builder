@@ -347,19 +347,28 @@ def create_checkout_session(price_id: str, pack: str, customer_email: str | None
 
 
 
+from psycopg2.extras import RealDictCursor
+
 def migrate_user_credits_to_ledger_once(email: str) -> None:
+    """
+    Move legacy users.cv_credits / users.ai_credits into the ledger once.
+    Safe to call on every boot/login.
+    Skips only if THIS migration has already run for the user.
+    """
     email = (email or "").strip().lower()
     if not email:
         return
 
     with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # Find user + their old credit columns
+            # 1) Get user id + legacy balances (tolerate missing cols by defaulting to 0)
+            # If your users table does not have cv_credits/ai_credits, just treat as 0.
             cur.execute(
                 """
-                SELECT id,
-                       COALESCE(cv_credits, 0) AS cv_credits,
-                       COALESCE(ai_credits, 0) AS ai_credits
+                SELECT
+                    id,
+                    COALESCE(cv_credits, 0) AS cv_credits,
+                    COALESCE(ai_credits, 0) AS ai_credits
                 FROM users
                 WHERE email = %s
                 """,
@@ -370,34 +379,48 @@ def migrate_user_credits_to_ledger_once(email: str) -> None:
                 return
 
             user_id = int(u["id"])
-            cv_old = int(u["cv_credits"] or 0)
-            ai_old = int(u["ai_credits"] or 0)
+            cv_old = int(u.get("cv_credits") or 0)
+            ai_old = int(u.get("ai_credits") or 0)
 
-            # If no old credits, nothing to migrate
+            # Nothing to migrate
             if cv_old <= 0 and ai_old <= 0:
                 return
 
-            # If already has ANY ledger grants, assume migrated
-            cur.execute("SELECT 1 FROM credit_grants WHERE user_id=%s LIMIT 1", (user_id,))
+            # 2) Skip only if the migration grant already exists for this user
+            cur.execute(
+                """
+                SELECT 1
+                FROM credit_grants
+                WHERE user_id = %s AND source = 'migration_users_columns'
+                LIMIT 1
+                """,
+                (user_id,),
+            )
             if cur.fetchone():
                 return
 
-            # Insert a single migration grant
+            # 3) Write migration grant
             cur.execute(
                 """
-                INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at, created_at)
-                VALUES (%s, 'migration_users_columns', %s, %s, NULL, NOW())
+                INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+                VALUES (%s, 'migration_users_columns', %s, %s, NULL)
                 """,
                 (user_id, cv_old, ai_old),
             )
 
-            # Optional but strongly recommended: zero out old columns to prevent confusion
+            # 4) Zero out legacy columns (prevents double counting / confusion)
             cur.execute(
-                "UPDATE users SET cv_credits=0, ai_credits=0 WHERE id=%s",
+                """
+                UPDATE users
+                SET cv_credits = 0,
+                    ai_credits = 0
+                WHERE id = %s
+                """,
                 (user_id,),
             )
 
         conn.commit()
+
 
 
 def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
@@ -1133,17 +1156,17 @@ def create_credit_grant(
             )
 
 # =========================
-# CREDITS LEDGER (grants/spends) + MIGRATIONS
+# CREDITS LEDGER (grants/spends) + SUBSCRIPTIONS + REPAIRS
 # =========================
-
 def ensure_credit_tables(conn) -> None:
     """
     Creates / repairs credit_grants, credit_spends, subscriptions tables.
-    Also adds missing columns/defaults to prevent runtime crashes.
     Safe to run on every boot.
     """
     with conn.cursor() as cur:
-        # --- credit_grants ---
+        # -------------------------
+        # credit_grants
+        # -------------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS credit_grants (
             id BIGSERIAL PRIMARY KEY,
@@ -1156,14 +1179,31 @@ def ensure_credit_tables(conn) -> None:
         );
         """)
 
-        # Repair columns if your Railway UI created wrong types (text etc)
-        # We'll only add missing columns (won't change existing types blindly).
+        # Add missing columns (safe)
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS user_id INTEGER;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS source TEXT;")
         cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS cv_amount INTEGER NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS ai_amount INTEGER NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL;")
         cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();")
 
-        # --- credit_spends ---
+        # Repair: if Railway UI created id without sequence/default, force it
+        cur.execute("CREATE SEQUENCE IF NOT EXISTS credit_grants_id_seq;")
+        cur.execute("""
+            ALTER TABLE credit_grants
+            ALTER COLUMN id SET DEFAULT nextval('credit_grants_id_seq');
+        """)
+        cur.execute("""
+            SELECT setval(
+                'credit_grants_id_seq',
+                COALESCE((SELECT MAX(id) FROM credit_grants), 0) + 1,
+                false
+            );
+        """)
+
+        # -------------------------
+        # credit_spends
+        # -------------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS credit_spends (
             id BIGSERIAL PRIMARY KEY,
@@ -1175,11 +1215,28 @@ def ensure_credit_tables(conn) -> None:
         );
         """)
 
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS user_id INTEGER;")
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS source TEXT;")
         cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS cv_amount INTEGER NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS ai_amount INTEGER NOT NULL DEFAULT 0;")
         cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();")
 
-        # --- subscriptions ---
+        cur.execute("CREATE SEQUENCE IF NOT EXISTS credit_spends_id_seq;")
+        cur.execute("""
+            ALTER TABLE credit_spends
+            ALTER COLUMN id SET DEFAULT nextval('credit_spends_id_seq');
+        """)
+        cur.execute("""
+            SELECT setval(
+                'credit_spends_id_seq',
+                COALESCE((SELECT MAX(id) FROM credit_spends), 0) + 1,
+                false
+            );
+        """)
+
+        # -------------------------
+        # subscriptions
+        # -------------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS subscriptions (
             id BIGSERIAL PRIMARY KEY,
@@ -1195,6 +1252,7 @@ def ensure_credit_tables(conn) -> None:
         );
         """)
 
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_id INTEGER;")
         cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT NULL;")
         cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT NULL;")
         cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';")
@@ -1205,65 +1263,6 @@ def ensure_credit_tables(conn) -> None:
         cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT now();")
 
     conn.commit()
-
-
-def get_user_id_by_email(conn, email: str) -> int | None:
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-        cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-        row = cur.fetchone()
-        return int(row["id"]) if row else None
-
-
-def grant_credits(
-    conn,
-    user_id: int,
-    source: str,
-    cv_amount: int = 0,
-    ai_amount: int = 0,
-    expires_at: datetime | None = None
-
-) -> None:
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
-            VALUES (%s, %s, %s, %s, %s)
-            """,
-            (user_id, source, int(cv_amount), int(ai_amount), expires_at),
-        )
-    conn.commit()
-
-
-def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
-    """
-    Atomic spend: checks ledger balance and writes a spend row if enough.
-    Returns True if spent, False if insufficient.
-    """
-    cv_amount = int(cv_amount)
-    ai_amount = int(ai_amount)
-
-    with conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            # lock user row to avoid race conditions
-            cur.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user_id,))
-            if not cur.fetchone():
-                return False
-
-            bal = get_user_credits_ledger(conn, user_id)
-
-            if cv_amount > 0 and bal["cv"] < cv_amount:
-                return False
-            if ai_amount > 0 and bal["ai"] < ai_amount:
-                return False
-
-            cur.execute(
-                """
-                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (user_id, source, cv_amount, ai_amount),
-            )
-            return True
 
 
 
@@ -1338,9 +1337,6 @@ if email:
 
 session_user = st.session_state.get("user") or {}
 email = session_user.get("email")
-if email:
-    migrate_user_credits_to_ledger_once(email)
-    credits = get_user_credits(email)   # ledger-based now
 
 # -------------------------
 # GLOBAL THEME + LAYOUT CSS
@@ -2326,6 +2322,11 @@ else:
 
 # Consent gate for logged-in users only
 show_consent_gate()
+
+if email:
+    migrate_user_credits_to_ledger_once(email)
+    credits = get_user_credits(email)  # ledger-based
+
 
 # =========================
 # Referral code (ONLY when logged in)
