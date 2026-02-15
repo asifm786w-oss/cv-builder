@@ -3769,60 +3769,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
 
 
-    # -----------------------------
-    # Results (each job collapsible)
-    # -----------------------------
-    jobs = st.session_state.get("adzuna_results") or []
-    if jobs:
-        st.divider()
-        st.caption("Showing up to 10 results.")
 
-        for idx, job in enumerate(jobs):
-            title = job.get("title") or "Untitled"
-            company = job.get("company") or "Unknown company"
-            loc = job.get("location") or "Unknown location"
-            created = job.get("created") or ""
-            url = job.get("url") or ""
-            smin = job.get("salary_min")
-            smax = job.get("salary_max")
-            desc = job.get("description") or ""
-
-            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
-
-                with st.container(border=True):
-                    top = st.columns([4, 1])
-                    with top[0]:
-                        if created:
-                            st.caption(f"Posted: {created}")
-                        sal = _format_salary(smin, smax)
-                        if sal:
-                            st.caption(sal)
-                        if url:
-                            st.link_button("Open listing", url)
-
-                    with top[1]:
-                        if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
-                            # ✅ Write into your existing Section 5 text area
-                            st.session_state["job_description"] = desc
-
-                            # ✅ Force JD fingerprint refresh + clear derived outputs
-                            st.session_state["_last_jd_fp"] = None
-                            st.session_state.pop("job_summary_ai", None)
-                            st.session_state.pop("cover_letter", None)
-                            st.session_state.pop("cover_letter_box", None)
-
-                            # ✅ Store selected job metadata
-                            st.session_state["selected_job"] = {
-                                "title": title,
-                                "company": company,
-                                "url": url,
-                            }
-
-                            st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
-                            st.rerun()
-
-                st.markdown("**Preview description**")
-                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
 
 
 
