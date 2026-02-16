@@ -609,14 +609,7 @@ PRESERVE_KEYS = [
     # any other section keys you use
 ]
 
-def snapshot_form_state():
-    st.session_state["_form_snapshot"] = {k: st.session_state.get(k) for k in PRESERVE_KEYS}
 
-def restore_form_state():
-    snap = st.session_state.get("_form_snapshot") or {}
-    for k, v in snap.items():
-        if v is not None:
-            st.session_state[k] = v
 
 
 def freeze_defaults():
@@ -3043,12 +3036,49 @@ FORM_KEYS_TO_SNAPSHOT = [
     "template_label", "references",
 ]
 
-def snapshot_form_state() -> None:
+def snapshot_form_state():
+    """
+    Save a snapshot of form inputs so navigating to policies doesn't wipe them.
+    Includes both legacy keys + cv_* keys (safe).
+    """
+    keys_to_save = [
+        # --- Section 1 (current widgets) ---
+        "full_name",
+        "title",
+        "email",
+        "phone",
+        "location",
+        "summary",
+
+        # --- cv_* mirror keys (if you use them anywhere) ---
+        "cv_full_name",
+        "cv_title",
+        "cv_email",
+        "cv_phone",
+        "cv_location",
+        "cv_summary",
+
+        # --- Anything else you KNOW should persist ---
+        "template_label",
+        "job_description",
+        "adzuna_keywords",
+        "adzuna_location",
+        "selected_job",
+        "adzuna_results",
+        "cover_letter",
+        "cover_letter_box",
+        "job_summary_ai",
+        "education_items",
+        # add more keys if needed
+    ]
+
     snap = {}
-    for k in FORM_KEYS_TO_SNAPSHOT:
+    for k in keys_to_save:
         if k in st.session_state:
-            snap[k] = st.session_state.get(k)
+            snap[k] = st.session_state[k]
+
     st.session_state["_form_snapshot"] = snap
+    st.session_state["_has_form_snapshot"] = True
 
 def restore_form_state() -> None:
     snap = st.session_state.get("_form_snapshot") or {}
