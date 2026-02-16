@@ -170,19 +170,6 @@ def get_db_connection():
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
 
-def get_user_by_email(email: str) -> dict | None:
-    email = (email or "").strip().lower()
-    if not email:
-        return None
-
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
-        row = cur.fetchone()
-        return dict(row) if row else None   # <-- works for RealDictCursor
-
-
-def get_conn():
-    return get_db_connection()
 
 
 def refresh_session_user_from_db() -> None:
@@ -1279,11 +1266,6 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 
-
-def get_user_id(email: str) -> int | None:
-    u = get_user_by_email(email)
-    return int(u["id"]) if u and u.get("id") is not None else None
-
 def has_stripe_event(stripe_event_id: str) -> bool:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("SELECT 1 FROM stripe_events WHERE stripe_event_id=%s", (stripe_event_id,))
@@ -2145,6 +2127,20 @@ def show_policy_page() -> bool:
 
     return True
 
+def get_user_by_email(email: str):
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
+        return cur.fetchone()
+
+def get_conn():
+    return get_db_connection()
+
+def get_user_id(email: str) -> int | None:
+    u = get_user_by_email(email)
+    return int(u["id"]) if u and u.get("id") is not None else None
 
 
 
@@ -2503,13 +2499,14 @@ else:
 # Consent gate for logged-in users only
 show_consent_gate()
 
-if email:
-    migrate_user_credits_to_ledger_once(email)
-    credits = get_user_credits(email)  # ledger-based
-
 email = (st.session_state.get("user") or {}).get("email")
 if email:
-    st.session_state["user_id"] = ensure_user_row(email)
+    uid = get_user_id(email)  # lookup only (no inserts)
+    if not uid:
+        st.error("No account found for this email. Please sign out and sign in again.")
+        st.stop()
+    st.session_state["user_id"] = uid
+
 
 
 
