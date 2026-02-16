@@ -2943,8 +2943,6 @@ else:
 
 st.markdown("</div>", unsafe_allow_html=True)
 
-
-
     # ---------- Referrals ----------
     st.markdown('<div class="sb-card">', unsafe_allow_html=True)
     st.markdown("### 🎁 Referrals")
