@@ -145,13 +145,6 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
-def get_db_connection():
-    return psycopg2.connect(
-        os.environ["DATABASE_URL"],
-        cursor_factory=RealDictCursor,
-        sslmode="require",
-    )
-
 
 def init_db():
     conn = get_db_connection()
@@ -160,6 +153,26 @@ def init_db():
     finally:
         conn.close()
 
+def get_user_row_by_id(user_id: int) -> dict | None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM users WHERE id = %s LIMIT 1", (user_id,))
+        row = cur.fetchone()
+        return dict(row) if row else None
+
+
+def refresh_session_user_from_db() -> None:
+    """Refresh st.session_state['user'] from DB using the user id."""
+    u = st.session_state.get("user") or {}
+    uid = u.get("id")
+    if not uid:
+        return
+    db_u = get_user_row_by_id(int(uid))
+    if db_u:
+        # keep anything you store only in session (optional)
+        for k in ("role",):
+            if k in u and k not in db_u:
+                db_u[k] = u[k]
+        st.session_state["user"] = db_u
 
 from psycopg2.extras import RealDictCursor
 
@@ -424,6 +437,22 @@ def create_subscription_checkout_session(price_id: str, pack: str, customer_emai
     return session.url
 
 
+def ensure_user_row(email: str) -> int:
+    email = (email or "").strip().lower()
+    if not email:
+        raise ValueError("Missing email")
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO users (email)
+            VALUES (%s)
+            ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+            RETURNING id
+        """, (email,))
+        uid = cur.fetchone()[0]
+        conn.commit()
+        return uid
 
 
 
@@ -536,16 +565,6 @@ def restore_form_state():
     for k, v in snap.items():
         if v is not None:
             st.session_state[k] = v
-
-def get_conn():
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is not set")
-
-    return psycopg2.connect(
-        dsn,
-        sslmode="require",
-    )
 
 
 def freeze_defaults():
@@ -1222,15 +1241,8 @@ def increment_usage(email: str, counter_key: str, cost: int = 1) -> None:
 
         conn.commit()
 
-def get_user_by_email(email: str) -> dict | None:
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM users WHERE email=%s", (email,))
-        row = cur.fetchone()
-        if not row:
-            return None
-        cols = [d[0] for d in cur.description]
-        return dict(zip(cols, row))
+
+
 
 
 def get_ai_credits(email: str) -> int:
@@ -1250,14 +1262,53 @@ def get_ai_credits(email: str) -> int:
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 def get_conn():
-    if not DATABASE_URL:
-        raise RuntimeError("DATABASE_URL not set")
-    return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL is not set")
 
-def get_user_by_email(email: str):
+    return psycopg2.connect(
+        dsn,
+        sslmode="require",
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
+
+def get_user_by_email(email: str) -> dict | None:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+
     with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM users WHERE email = %s", (email.lower().strip(),))
-        return cur.fetchone()
+        cur.execute("""
+            SELECT
+              id,
+              email,
+              full_name,
+              plan,
+              role,
+              accepted_policies,
+              is_banned,
+              referral_code,
+              referrals_count
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+        """, (email,))
+        row = cur.fetchone()
+        if not row:
+            return None
+
+        return {
+            "id": int(row[0]),
+            "email": row[1],
+            "full_name": row[2],
+            "plan": row[3],
+            "role": row[4],
+            "accepted_policies": bool(row[5]),
+            "is_banned": bool(row[6]),
+            "referral_code": row[7],
+            "referrals_count": int(row[8] or 0),
+        }
+
 
 def get_user_id(email: str) -> int | None:
     u = get_user_by_email(email)
@@ -2486,6 +2537,11 @@ if email:
     migrate_user_credits_to_ledger_once(email)
     credits = get_user_credits(email)  # ledger-based
 
+email = (st.session_state.get("user") or {}).get("email")
+if email:
+    st.session_state["user_id"] = ensure_user_row(email)
+
+
 
 # =========================
 # Referral code (ONLY when logged in)
@@ -2688,6 +2744,15 @@ def render_mulyba_brand_header(is_logged_in: bool):
 with st.sidebar:
     session_user = st.session_state.get("user")
     sidebar_logged_in = _is_logged_in_user(session_user)
+
+    # ✅ Refresh session user from DB so plan/premium updates instantly
+    if sidebar_logged_in:
+        email0 = ((session_user or {}).get("email") or "").strip().lower()
+        fresh = get_user_by_email(email0)  # dict | None
+        if fresh:
+            st.session_state["user"] = {**(st.session_state.get("user") or {}), **fresh}
+            session_user = st.session_state["user"]
+
     sidebar_role = (session_user or {}).get("role", "user")
 
     # Brand header (your existing function)
@@ -2726,21 +2791,24 @@ with st.sidebar:
         st.markdown("**Status:** ✅ Active")
         st.markdown("**Policies accepted:** No")
     else:
-        full_name = session_user.get("full_name") or "Member"
-        email = session_user.get("email") or "—"
-        plan = (session_user.get("plan") or "free").strip()
+        full_name = (session_user or {}).get("full_name") or "Member"
+        email = (session_user or {}).get("email") or "—"
+        plan = ((session_user or {}).get("plan") or "free").strip().lower()
+
+        # ✅ show premium properly
+        plan_label = "Pro" if plan == "pro" else ("Monthly" if plan == "monthly" else "Free")
 
         st.markdown(f"**{full_name}**")
         st.markdown(f'<div class="sb-muted">{email}</div>', unsafe_allow_html=True)
-        st.markdown(f"**Plan:** {plan}")
+        st.markdown(f"**Plan:** {plan_label}")
 
         if sidebar_role in {"owner", "admin"}:
             st.caption(f"Admin: {sidebar_role}")
 
-        is_banned = bool(session_user.get("is_banned"))
+        is_banned = bool((session_user or {}).get("is_banned"))
         st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
 
-        accepted = bool(session_user.get("accepted_policies"))
+        accepted = bool((session_user or {}).get("accepted_policies"))
         st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
 
         if st.button("Log out", key="sb_logout_btn"):
@@ -2760,24 +2828,25 @@ with st.sidebar:
         st.progress(0)
         st.caption("Sign in to buy credits and unlock downloads + AI tools.")
     else:
-        # Owner/admin = unlimited
+        # Always refresh session user so plan updates after webhook + login
+        refresh_session_user_from_db()
+
+        session_user = st.session_state.get("user") or {}
+        uid = session_user.get("id")
+        plan = (session_user.get("plan") or "free").strip().lower()
+
+        # Admin unlimited
         if sidebar_role in {"owner", "admin"}:
             st.markdown("**CV Generations:** ♾️ Unlimited")
             st.markdown("**AI Tools:** ♾️ Unlimited")
         else:
-            email = (session_user or {}).get("email") or ""
-            email = email.strip().lower()
-
-            uid = get_user_id(email)  # must exist in App.py
             credits = {"cv": 0, "ai": 0}
-
             if uid:
-                credits = get_credits_by_user_id(uid)  # ✅ ledger truth
+                credits = get_credits_by_user_id(int(uid))  # ledger truth
 
             cv_left = int(credits.get("cv", 0) or 0)
             ai_left = int(credits.get("ai", 0) or 0)
 
-            # Optional: show a “session progress” bar (not lifetime).
             used_cv_session = int(st.session_state.get("cv_generations", 0) or 0)
             used_ai_session = int(
                 (st.session_state.get("summary_uses", 0) or 0)
@@ -2790,15 +2859,18 @@ with st.sidebar:
             cv_total_session = max(cv_left + used_cv_session, 1)
             ai_total_session = max(ai_left + used_ai_session, 1)
 
+            st.markdown(f"**Plan:** {plan}")
             st.markdown(f"**CV Remaining:** {cv_left}")
             st.progress(cv_left / cv_total_session)
 
             st.markdown(f"**AI Remaining:** {ai_left}")
             st.progress(ai_left / ai_total_session)
 
-            st.caption("Credits stack when you repurchase. No monthly reset.")
+            st.caption("Credits are calculated from the ledger (credit_grants - credit_spends).")
 
     st.markdown("</div>", unsafe_allow_html=True)
+
+
 
 
 
