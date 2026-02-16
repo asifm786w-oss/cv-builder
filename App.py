@@ -146,6 +146,11 @@ CV_USAGE_KEYS = {"cv_generations"}
 COOLDOWN_SECONDS = 5
 
 
+
+def get_user_id(email: str) -> int | None:
+    u = get_user_by_email(email)
+    return int(u["id"]) if u and u.get("id") is not None else None
+
 def init_db():
     conn = get_db_connection()
     try:
@@ -170,7 +175,16 @@ def get_db_connection():
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
 
+def get_user_by_email(email: str):
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
+        return cur.fetchone()
 
+def get_conn():
+    return get_db_connection()
 
 def refresh_session_user_from_db() -> None:
     """Refresh st.session_state['user'] from DB using the user id."""
@@ -2126,23 +2140,6 @@ def show_policy_page() -> bool:
         st.rerun()
 
     return True
-
-def get_user_by_email(email: str):
-    email = (email or "").strip().lower()
-    if not email:
-        return None
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
-        return cur.fetchone()
-
-def get_conn():
-    return get_db_connection()
-
-def get_user_id(email: str) -> int | None:
-    u = get_user_by_email(email)
-    return int(u["id"]) if u and u.get("id") is not None else None
-
-
 
 
 # =========================
