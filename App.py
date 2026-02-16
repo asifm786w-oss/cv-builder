@@ -3160,32 +3160,30 @@ backup_skills_state()
 # -------------------------
 st.header("1. Personal details")
 
-# (Optional) If you have any “defaults” for personal fields elsewhere, do NOT set them here.
-
-full_name = st.text_input("Full name *", key="full_name")
-title = st.text_input("Professional title (e.g. Software Engineer)", key="title")
-email = st.text_input("Email *", key="email")
-phone = st.text_input("Phone", key="phone")
-location = st.text_input("Location (City, Country)", key="location")
+cv_full_name = st.text_input("Full name *", key="cv_full_name")
+cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key="cv_title")
+cv_email     = st.text_input("Email *", key="cv_email")
+cv_phone     = st.text_input("Phone", key="cv_phone")
+cv_location  = st.text_input("Location (City, Country)", key="cv_location")
 
 # --- Apply staged summary BEFORE widget renders ---
-if "summary_pending" in st.session_state:
-    st.session_state["summary"] = st.session_state.pop("summary_pending")
+if "cv_summary_pending" in st.session_state:
+    st.session_state["cv_summary"] = st.session_state.pop("cv_summary_pending")
 
-summary_text = st.text_area("Professional summary", height=120, key="summary")
+cv_summary_text = st.text_area("Professional summary", height=120, key="cv_summary")
 st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
 
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
-# ... keep your existing AI summary handler below ...
 
 if btn_summary:
     if not gate_premium("improve your professional summary"):
-        st.stop()  # optional: stop only the ACTION path (not the whole app render)
+        st.stop()
+
     ok, left = cooldown_ok("improve_summary", 5)
     if not ok:
         st.warning(f"⏳ Please wait {left}s before trying again.")
     else:
-        if not summary_text.strip():
+        if not cv_summary_text.strip():
             st.error("Please write a professional summary first.")
         elif not has_free_quota("summary_uses", 1, "AI professional summary"):
             st.stop()
@@ -3193,10 +3191,10 @@ if btn_summary:
             with st.spinner("Improving your professional summary..."):
                 try:
                     cv_like = {
-                        "full_name": full_name,
-                        "current_title": title,
-                        "location": location,
-                        "existing_summary": summary_text,
+                        "full_name": cv_full_name,
+                        "current_title": cv_title,
+                        "location": cv_location,
+                        "existing_summary": cv_summary_text,
                     }
 
                     instructions = (
@@ -3213,7 +3211,7 @@ if btn_summary:
                     )
 
                     # stage for next rerun (do not mutate key after widget renders)
-                    st.session_state["summary_pending"] = improved_limited
+                    st.session_state["cv_summary_pending"] = improved_limited
 
                     st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
                     email_for_usage = (st.session_state.get("user") or {}).get("email")
@@ -3225,6 +3223,7 @@ if btn_summary:
 
                 except Exception as e:
                     st.error(f"AI error (summary improvement): {e}")
+
 
 
 normalize_skills_state()
@@ -4093,11 +4092,21 @@ template_label = st.selectbox(
 
 
 
+# -------------------------
+# Generate CV (spend 1 credit)
+# -------------------------
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
     action_label="generate and download your CV",
     key="btn_generate_cv",
 )
+
+if generate_clicked:
+    # IMPORTANT: make sure this does NOT clear cv_* keys
+    # If it does, comment it out or fix it
+    clear_ai_upload_state_only()
+
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
 
     # Pull CV fields ONLY from cv_* keys
     cv_full_name = get_cv_field("cv_full_name")
@@ -4107,10 +4116,12 @@ generate_clicked = locked_action_button(
     cv_location  = get_cv_field("cv_location")
     raw_summary  = get_cv_field("cv_summary", "")
 
+    # Validate CV fields (NOT auth email)
     if not cv_full_name or not cv_email:
         st.error("Please fill in at least your full name and email.")
         st.stop()
 
+    # Validate login
     if not email_for_usage:
         st.error("Please sign in again.")
         open_auth_modal("Sign in")
@@ -4121,7 +4132,7 @@ generate_clicked = locked_action_button(
         st.error("Please sign in again.")
         st.stop()
 
-    # ✅ LEDGER SPEND (1 CV credit)
+    # Spend ledger credit (1 CV)
     spent = try_spend(uid, source="cv_generate", cv=1)
     if not spent:
         st.warning("You don’t have enough CV credits to generate a CV.")
@@ -4176,14 +4187,13 @@ generate_clicked = locked_action_button(
             )
 
         # Optional analytics only
-        st.session_state["cv_generations"] = (
-            st.session_state.get("cv_generations", 0) + 1
-        )
+        st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
         increment_usage(email_for_usage, "cv_generations")
 
     except Exception as e:
         st.error(f"CV generation failed: {e}")
         st.stop()
+
 
 
 
