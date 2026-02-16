@@ -2874,8 +2874,7 @@ with st.sidebar:
 
             st.markdown(f"**AI Remaining:** {ai_left}")
             st.progress(ai_left / ai_total_session)
-
-            st.caption("Credits are calculated from the ledger (credit_grants - credit_spends).")
+          
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -4338,8 +4337,7 @@ with col_monthly:
         "- PDF + Word downloads\n"
         "- Email support\n"
         "- Cancel anytime\n"
-        "\n"
-        "*(Unused credits may carry over if you’ve enabled stacking — otherwise they reset monthly.)*"
+        "\n"       
     )
 
     if st.button("Start Monthly Subscription", key="start_monthly_sub"):
@@ -4371,8 +4369,7 @@ with col_pro:
         "- PDF + Word downloads\n"
         "- Priority support\n"
         "- Cancel anytime\n"
-        "\n"
-        "*(Unused credits may carry over if you’ve enabled stacking — otherwise they reset monthly.)*"
+        "\n"        
     )
 
     if st.button("Start Pro Subscription", key="start_pro_sub"):
