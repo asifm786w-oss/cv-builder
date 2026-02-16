@@ -233,6 +233,16 @@ def improve_skills(skills_text: str) -> str:
     """
     return improve_bullets(skills_text)
 
+def clear_ai_upload_state_only():
+    """
+    Remove only AI/upload/parse leftovers so they don't leak into CV output.
+    DO NOT touch cv_* keys (your form fields).
+    """
+    for k in list(st.session_state.keys()):
+        if k.startswith(("ai_", "upload_", "parsed_", "adzuna_", "job_")):
+            st.session_state.pop(k, None)
+
+
 
 def get_cv_field(key: str, fallback=None):
     """Read CV-only session state first, else fall back to existing variable/value."""
@@ -4082,6 +4092,7 @@ template_label = st.selectbox(
 )
 
 
+
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
     action_label="generate and download your CV",
@@ -4089,6 +4100,7 @@ generate_clicked = locked_action_button(
 )
 
 if generate_clicked:
+	clear_ai_upload_state_only()
     email_for_usage = (st.session_state.get("user") or {}).get("email")
 
     # Pull CV fields ONLY from cv_* keys
