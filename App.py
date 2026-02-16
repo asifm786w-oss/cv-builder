@@ -4098,10 +4098,6 @@ generate_clicked = locked_action_button(
     action_label="generate and download your CV",
     key="btn_generate_cv",
 )
-
-if generate_clicked:
-    clear_ai_upload_state_only()
-
     email_for_usage = (st.session_state.get("user") or {}).get("email")
 
     # Pull CV fields ONLY from cv_* keys
