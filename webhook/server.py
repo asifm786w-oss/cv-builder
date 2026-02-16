@@ -77,6 +77,15 @@ def find_user_id_by_email(email: str) -> int | None:
         return int(row[0]) if row else None
 
 
+# ✅ NEW: keep users.plan in sync with Stripe subscription
+def set_user_plan(user_id: int, plan: str) -> None:
+    plan = (plan or "free").strip().lower()
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET plan=%s WHERE id=%s", (plan, user_id))
+        conn.commit()
+
+
 def upsert_subscription(
     user_id: int,
     customer_id: str | None,
@@ -227,6 +236,9 @@ def stripe_webhook():
         if not user_id:
             return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
 
+        # ✅ NEW: update users.plan immediately so dashboard shows Monthly/Pro
+        set_user_plan(user_id, pack)
+
         # Fetch subscription for period end + status
         status = "unknown"
         period_end = None
@@ -307,6 +319,10 @@ def stripe_webhook():
                 period_end_unix=period_end,
                 cancel_at_period_end=cancel_at_period_end,
             )
+
+        # ✅ NEW: keep plan synced on renewals too (only set if active)
+        if status == "active":
+            set_user_plan(user_id, plan)
 
         cv_amt, ai_amt = credits_for_plan(plan)
         expires_at = None if CREDIT_STACKING else period_end
