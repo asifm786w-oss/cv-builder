@@ -158,6 +158,10 @@ def init_db():
     finally:
         conn.close()
 
+def get_personal_value(primary_key: str, fallback_key: str) -> str:
+    return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
+
+
 def get_user_row_by_id(user_id: int) -> dict | None:
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute("SELECT * FROM users WHERE id = %s LIMIT 1", (user_id,))
@@ -3905,10 +3909,6 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
 
 
-
-
-
-
 # -------------------------
 # 5. Target Job (optional, for AI)
 # -------------------------
@@ -3918,6 +3918,17 @@ import hashlib
 
 def _fingerprint(text: str) -> str:
     return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
+
+def get_personal_value(primary_key: str, fallback_key: str) -> str:
+    """Read personal details from either the main Section 1 keys OR cv_* keys."""
+    return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
+
+# Pull personal details safely (works with either key system)
+full_name_ss = get_personal_value("full_name", "cv_full_name")
+email_ss     = get_personal_value("email", "cv_email")
+title_ss     = get_personal_value("title", "cv_title")
+phone_ss     = get_personal_value("phone", "cv_phone")
+location_ss  = get_personal_value("location", "cv_location")
 
 job_description = st.text_area(
     "Paste the job description here",
@@ -3929,6 +3940,7 @@ job_description = st.text_area(
 jd_fp = _fingerprint(job_description)
 last_jd_fp = st.session_state.get("_last_jd_fp")
 
+# If JD changed, clear AI outputs
 if last_jd_fp and jd_fp != last_jd_fp:
     st.session_state.pop("job_summary_ai", None)
     st.session_state.pop("cover_letter", None)
@@ -3947,15 +3959,14 @@ with col_jd1:
 with col_jd2:
     ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key="btn_cover")
 
-# --- AI job-description summary ---
+# -------------------------
+# AI job-description summary
+# -------------------------
 if job_summary_clicked:
     if not gate_premium("generate a job summary"):
         st.stop()
 
-    # Always read from session_state so we don't rely on local variables existing
-    full_name_ss = (st.session_state.get("full_name") or "").strip()
-    email_ss = (st.session_state.get("email") or "").strip()
-
+    # ✅ use safe personal values
     if not (full_name_ss and email_ss):
         st.warning("Complete Section 1 (Full name + Email) first — these are used in outputs.")
         st.stop()
@@ -3965,7 +3976,7 @@ if job_summary_clicked:
         st.stop()
 
     # ✅ LEDGER SPEND (1 AI credit)
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
     if not uid:
         st.error("Please sign in again.")
@@ -3992,24 +4003,20 @@ if job_summary_clicked:
         except Exception as e:
             st.error(f"AI error (job summary): {e}")
 
-# --- DISPLAY JOB SUMMARY ---
+# Display job summary
 job_summary_text = st.session_state.get("job_summary_ai", "")
 if job_summary_text:
     st.markdown("**AI job summary for this role (read-only):**")
     st.write(job_summary_text)
 
-# --- AI cover letter generation ---
+# -------------------------
+# AI cover letter generation
+# -------------------------
 if ai_cover_letter_clicked:
     if not gate_premium("generate a cover letter"):
         st.stop()
 
-    # Always read from session_state so we don't rely on local variables existing
-    full_name_ss = (st.session_state.get("full_name") or "").strip()
-    title_ss = (st.session_state.get("title") or "").strip()
-    email_ss = (st.session_state.get("email") or "").strip()
-    phone_ss = (st.session_state.get("phone") or "").strip()
-    location_ss = (st.session_state.get("location") or "").strip()
-
+    # ✅ use safe personal values
     if not (full_name_ss and email_ss):
         st.warning("Complete Section 1 (Full name + Email) first — added to cover letter.")
         st.stop()
@@ -4019,7 +4026,7 @@ if ai_cover_letter_clicked:
         st.stop()
 
     # ✅ LEDGER SPEND (1 AI credit)
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
     if not uid:
         st.error("Please sign in again.")
@@ -4039,8 +4046,6 @@ if ai_cover_letter_clicked:
                 "experiences": [exp.dict() for exp in experiences],
                 "education": st.session_state.get("education_items", []),
                 "location": location_ss,
-                "phone": phone_ss,
-                "email": email_ss,
             }
 
             jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description (AI input)")
@@ -4063,14 +4068,10 @@ if ai_cover_letter_clicked:
         except Exception as e:
             st.error(f"AI error (cover letter): {e}")
 
-# --- Cover letter editor + downloads ---
+# -------------------------
+# Cover letter editor + downloads
+# -------------------------
 st.session_state.setdefault("cover_letter", "")
-
-# ✅ CRITICAL: define these from session_state so downloads never crash (phone/name/email scope)
-full_name = (st.session_state.get("full_name") or "").strip()
-email = (st.session_state.get("email") or "").strip()
-phone = (st.session_state.get("phone") or "").strip()
-location = (st.session_state.get("location") or "").strip()
 
 if st.session_state["cover_letter"]:
     st.subheader("✏️ Cover letter")
@@ -4080,24 +4081,24 @@ if st.session_state["cover_letter"]:
         key="cover_letter_box",
         height=260,
     )
-
     st.session_state["cover_letter"] = edited
 
     try:
+        # ✅ use safe values so we never hit NameError or blank fields
         letter_pdf = render_cover_letter_pdf_bytes(
-            full_name=full_name or "Candidate",
+            full_name=full_name_ss or "Candidate",
             letter_body=st.session_state["cover_letter"],
-            location=location or "",
-            email=email or "",
-            phone=phone or "",
+            location=location_ss,
+            email=email_ss,
+            phone=phone_ss,
         )
 
         letter_docx = render_cover_letter_docx_bytes(
-            full_name=full_name or "Candidate",
+            full_name=full_name_ss or "Candidate",
             letter_body=st.session_state["cover_letter"],
-            location=location or "",
-            email=email or "",
-            phone=phone or "",
+            location=location_ss,
+            email=email_ss,
+            phone=phone_ss,
         )
 
         col_d11, col_d12 = st.columns(2)
@@ -4118,6 +4119,7 @@ if st.session_state["cover_letter"]:
 
     except Exception as e:
         st.error(f"Error generating cover letter files: {e!r}")
+
 
 
 
