@@ -170,6 +170,9 @@ def get_db_connection():
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
 
+def get_conn():
+    return get_db_connection()
+
 
 def refresh_session_user_from_db() -> None:
     """Refresh st.session_state['user'] from DB using the user id."""
