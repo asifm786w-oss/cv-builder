@@ -609,6 +609,22 @@ PRESERVE_KEYS = [
     # any other section keys you use
 ]
 
+def restore_form_state_if_needed():
+    """
+    Restore snapshot after returning from policy pages.
+    MUST run before widgets render or Streamlit will ignore changes.
+    """
+    if not st.session_state.get("_has_form_snapshot"):
+        return
+
+    snap = st.session_state.get("_form_snapshot") or {}
+    for k, v in snap.items():
+        # Only restore if empty/missing to avoid overriding user edits
+        if k not in st.session_state or st.session_state.get(k) in (None, ""):
+            st.session_state[k] = v
+
+    # one-time restore
+    st.session_state["_has_form_snapshot"] = False
 
 
 
@@ -3189,6 +3205,7 @@ if not just_autofilled:
 
 backup_skills_state()
 
+restore_form_state_if_needed()
 
 # -------------------------
 # 1. Personal details
