@@ -4136,7 +4136,7 @@ if generate_clicked:
         cv_summary = enforce_word_limit(
             raw_summary or "",
             MAX_DOC_WORDS,
-            "Professional summary"
+            "Professional summary",
         )
 
         cv = CV(
@@ -4155,7 +4155,7 @@ if generate_clicked:
 
         template_name = TEMPLATE_MAP.get(
             st.session_state.get("template_label"),
-            "Blue Theme.html"
+            "Blue Theme.html",
         )
 
         pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
@@ -4189,6 +4189,7 @@ if generate_clicked:
     except Exception as e:
         st.error(f"CV generation failed: {e}")
         st.stop()
+
 
 
 
