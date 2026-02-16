@@ -2942,63 +2942,61 @@ else:
         st.progress(ai_left / ai_total_session)
 
 st.markdown("</div>", unsafe_allow_html=True)
+# ---------- Referrals ----------
+st.markdown('<div class="sb-card">', unsafe_allow_html=True)
+st.markdown("### 🎁 Referrals")
 
-    # ---------- Referrals ----------
-    st.markdown('<div class="sb-card">', unsafe_allow_html=True)
-    st.markdown("### 🎁 Referrals")
+if not sidebar_logged_in:
+    st.markdown(
+        '<div class="sb-muted">Sign in to get your referral code.</div>',
+        unsafe_allow_html=True,
+    )
+else:
+    email = (session_user or {}).get("email")
 
-    if not sidebar_logged_in:
-        st.markdown(
-            '<div class="sb-muted">Sign in to get your referral code.</div>',
-            unsafe_allow_html=True,
-        )
-    else:
-        email = (session_user or {}).get("email")
+    # Ensure referral code exists
+    ref_code = (session_user or {}).get("referral_code")
+    if not ref_code and email:
+        ref_code = ensure_referral_code(email)
+        st.session_state["user"]["referral_code"] = ref_code
+        session_user = st.session_state["user"]
 
-        # Ensure referral code exists
-        ref_code = (session_user or {}).get("referral_code")
-        if not ref_code and email:
-            ref_code = ensure_referral_code(email)
-            st.session_state["user"]["referral_code"] = ref_code
-            session_user = st.session_state["user"]
+    ref_count = int((session_user or {}).get("referrals_count", 0) or 0)
+    ref_count = min(ref_count, REFERRAL_CAP)
 
-        ref_count = int((session_user or {}).get("referrals_count", 0) or 0)
-        ref_count = min(ref_count, REFERRAL_CAP)
-
-        st.markdown(f"**Referrals:** {ref_count} / {REFERRAL_CAP}")
-        st.caption(
-            f"+{BONUS_PER_REFERRAL_CV} CV & +{BONUS_PER_REFERRAL_AI} AI per referral"
-        )
-
-        if ref_code:
-            st.markdown("**Your referral code:**")
-            st.code(ref_code, language="text")
-        else:
-            st.warning("Referral code not available yet. Refresh or re-login.")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-
-    # ---------- Help ----------
-    st.markdown('<div class="sb-card">', unsafe_allow_html=True)
-    st.markdown("### 📘 Help")
-
-    help_topic = st.radio(
-        "Choose a topic",
-        [
-            "Quick Start",
-            "AI Tools & Usage",
-            "Cover Letter Rules",
-            "Templates & Downloads",
-            "Troubleshooting",
-            "Privacy & Refunds",
-        ],
-        key="help_topic_sidebar",
+    st.markdown(f"**Referrals:** {ref_count} / {REFERRAL_CAP}")
+    st.caption(
+        f"+{BONUS_PER_REFERRAL_CV} CV & +{BONUS_PER_REFERRAL_AI} AI per referral"
     )
 
-    HELP_TEXT = {
-        "Quick Start": """
+    if ref_code:
+        st.markdown("**Your referral code:**")
+        st.code(ref_code, language="text")
+    else:
+        st.warning("Referral code not available yet. Refresh or re-login.")
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ---------- Help ----------
+st.markdown('<div class="sb-card">', unsafe_allow_html=True)
+st.markdown("### 📘 Help")
+
+help_topic = st.radio(
+    "Choose a topic",
+    [
+        "Quick Start",
+        "AI Tools & Usage",
+        "Cover Letter Rules",
+        "Templates & Downloads",
+        "Troubleshooting",
+        "Privacy & Refunds",
+    ],
+    key="help_topic_sidebar",
+)
+
+HELP_TEXT = {
+    "Quick Start": """
 ### Quick start (recommended order)
 
 1️⃣ **Fill Personal Details**  
@@ -3021,7 +3019,7 @@ Dates are optional and can be edited before download.
 Preview carefully before downloading.  
 You are responsible for checking spelling, dates, and accuracy.
 """,
-        "AI Tools & Usage": """
+    "AI Tools & Usage": """
 ### AI tools & usage
 
 AI can help:
@@ -3035,7 +3033,7 @@ Always review and edit before final use.
 
 ⏳ Please wait while AI is running before clicking again.
 """,
-        "Cover Letter Rules": """
+    "Cover Letter Rules": """
 ### Cover letter rules
 
 To generate a cover letter:
@@ -3045,7 +3043,7 @@ To generate a cover letter:
 
 Always review and customise cover letters before sending.
 """,
-        "Templates & Downloads": """
+    "Templates & Downloads": """
 ### Templates & downloads
 
 - Templates affect layout and styling only
@@ -3054,7 +3052,7 @@ Always review and customise cover letters before sending.
 
 Once downloaded, files cannot be edited inside the app.
 """,
-        "Troubleshooting": """
+    "Troubleshooting": """
 ### Troubleshooting
 
 - Use one browser tab only
@@ -3062,7 +3060,7 @@ Once downloaded, files cannot be edited inside the app.
 - Wait for AI actions to complete
 - Scroll to review all sections before download
 """,
-        "Privacy & Refunds": """
+    "Privacy & Refunds": """
 ### Privacy & refunds
 
 - Upload only information you are comfortable sharing
@@ -3071,21 +3069,22 @@ Once downloaded, files cannot be edited inside the app.
 
 ⚠️ Payments are non-refundable due to instant digital delivery.
 """,
-    }
+}
 
-    st.markdown(HELP_TEXT[help_topic])
+st.markdown(HELP_TEXT[help_topic])
 
-    st.markdown(
-        """
+st.markdown(
+    """
 ---
 📩 **Need help or spotted an issue?**  
 Contact **support@affiliateworldcommissions.com**
 
 Please ensure your details are reviewed before downloading.
-""",
-    )
+"""
+)
 
-    st.markdown("</div>", unsafe_allow_html=True)
+st.markdown("</div>", unsafe_allow_html=True)
+
 
 # =========================
 # CV Upload + AI Autofill (ONE block only)
