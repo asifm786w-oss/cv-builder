@@ -170,6 +170,17 @@ def get_db_connection():
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
 
+def get_user_by_email(email: str) -> dict | None:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
+        row = cur.fetchone()
+        return dict(row) if row else None   # <-- works for RealDictCursor
+
+
 def get_conn():
     return get_db_connection()
 
@@ -188,16 +199,6 @@ def refresh_session_user_from_db() -> None:
                 db_u[k] = u[k]
         st.session_state["user"] = db_u
 
-from psycopg2.extras import RealDictCursor
-
-def get_user_id(email: str) -> int | None:
-    email = (email or "").strip().lower()
-    if not email:
-        return None
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT id FROM users WHERE email=%s", (email,))
-        row = cur.fetchone()
-        return int(row[0]) if row else None
 
 
 def get_credits_by_user_id(user_id: int) -> dict:
@@ -1276,42 +1277,7 @@ def get_ai_credits(email: str) -> int:
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
-def get_user_by_email(email: str) -> dict | None:
-    email = (email or "").strip().lower()
-    if not email:
-        return None
 
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("""
-            SELECT
-              id,
-              email,
-              full_name,
-              plan,
-              role,
-              accepted_policies,
-              is_banned,
-              referral_code,
-              referrals_count
-            FROM users
-            WHERE LOWER(email) = LOWER(%s)
-            LIMIT 1
-        """, (email,))
-        row = cur.fetchone()
-        if not row:
-            return None
-
-        return {
-            "id": int(row[0]),
-            "email": row[1],
-            "full_name": row[2],
-            "plan": row[3],
-            "role": row[4],
-            "accepted_policies": bool(row[5]),
-            "is_banned": bool(row[6]),
-            "referral_code": row[7],
-            "referrals_count": int(row[8] or 0),
-        }
 
 
 def get_user_id(email: str) -> int | None:
