@@ -234,6 +234,28 @@ def improve_skills(skills_text: str) -> str:
     return improve_bullets(skills_text)
 
 
+def get_cv_field(key: str, fallback=None):
+    """Read CV-only session state first, else fall back to existing variable/value."""
+    v = st.session_state.get(key, None)
+    return fallback if (v is None or v == "") else v
+
+
+def set_cv_defaults_from_existing(full_name=None, title=None, email=None, phone=None, location=None, summary=None):
+    """
+    One-time migration: if you already had values in old variables, copy them into cv_* keys.
+    Won't overwrite if cv_* already set.
+    """
+    defaults = {
+        "cv_full_name": full_name,
+        "cv_title": title,
+        "cv_email": email,
+        "cv_phone": phone,
+        "cv_location": location,
+        "cv_summary": summary,
+    }
+    for k, v in defaults.items():
+        if (st.session_state.get(k) is None or st.session_state.get(k) == "") and v:
+            st.session_state[k] = v
 
 
 def try_spend(user_id: int, source: str, cv: int = 0, ai: int = 0) -> bool:
@@ -4052,8 +4074,11 @@ template_label = st.selectbox(
     "Choose a CV template",
     options=list(TEMPLATE_MAP.keys()),
     key="template_label",
-    index=list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
-          if st.session_state["template_label"] in TEMPLATE_MAP else 0,
+    index=(
+        list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
+        if st.session_state["template_label"] in TEMPLATE_MAP
+        else 0
+    ),
 )
 
 
@@ -4066,7 +4091,15 @@ generate_clicked = locked_action_button(
 if generate_clicked:
     email_for_usage = (st.session_state.get("user") or {}).get("email")
 
-    if not full_name or not email:
+    # Pull CV fields ONLY from cv_* keys
+    cv_full_name = get_cv_field("cv_full_name")
+    cv_title     = get_cv_field("cv_title")
+    cv_email     = get_cv_field("cv_email")
+    cv_phone     = get_cv_field("cv_phone")
+    cv_location  = get_cv_field("cv_location")
+    raw_summary  = get_cv_field("cv_summary", "")
+
+    if not cv_full_name or not cv_email:
         st.error("Please fill in at least your full name and email.")
         st.stop()
 
@@ -4087,16 +4120,15 @@ if generate_clicked:
         st.stop()
 
     try:
-        raw_summary = st.session_state.get("summary", "") or ""
-        cv_summary = enforce_word_limit(raw_summary, MAX_DOC_WORDS, "Professional summary")
+        cv_summary = enforce_word_limit(raw_summary or "", MAX_DOC_WORDS, "Professional summary")
 
         cv = CV(
-            full_name=full_name,
-            title=title or None,
-            email=email,
-            phone=phone or None,
+            full_name=cv_full_name,
+            title=cv_title or None,
+            email=cv_email,
+            phone=cv_phone or None,
             full_address=None,
-            location=location or None,
+            location=cv_location or None,
             summary=cv_summary or None,
             skills=skills,
             experiences=experiences,
@@ -4127,7 +4159,9 @@ if generate_clicked:
         increment_usage(email_for_usage, "cv_generations")
 
     except Exception as e:
-        st.error(f"Something went wrong while generating the CV: {e}")
+        st.error(f"CV generation failed: {e}")
+        st.stop()
+
 
 
 
