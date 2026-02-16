@@ -4100,7 +4100,8 @@ generate_clicked = locked_action_button(
 )
 
 if generate_clicked:
-	clear_ai_upload_state_only()
+    clear_ai_upload_state_only()
+
     email_for_usage = (st.session_state.get("user") or {}).get("email")
 
     # Pull CV fields ONLY from cv_* keys
@@ -4132,7 +4133,11 @@ if generate_clicked:
         st.stop()
 
     try:
-        cv_summary = enforce_word_limit(raw_summary or "", MAX_DOC_WORDS, "Professional summary")
+        cv_summary = enforce_word_limit(
+            raw_summary or "",
+            MAX_DOC_WORDS,
+            "Professional summary"
+        )
 
         cv = CV(
             full_name=cv_full_name,
@@ -4148,7 +4153,10 @@ if generate_clicked:
             references=references or None,
         )
 
-        template_name = TEMPLATE_MAP.get(st.session_state.get("template_label"), "Blue Theme.html")
+        template_name = TEMPLATE_MAP.get(
+            st.session_state.get("template_label"),
+            "Blue Theme.html"
+        )
 
         pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
         docx_bytes = render_cv_docx_bytes(cv)
@@ -4157,7 +4165,13 @@ if generate_clicked:
 
         col_cv1, col_cv2 = st.columns(2)
         with col_cv1:
-            st.download_button("📄 Download CV as PDF", data=pdf_bytes, file_name="cv.pdf", mime="application/pdf")
+            st.download_button(
+                "📄 Download CV as PDF",
+                data=pdf_bytes,
+                file_name="cv.pdf",
+                mime="application/pdf",
+            )
+
         with col_cv2:
             st.download_button(
                 "📝 Download CV as Word (.docx)",
@@ -4167,12 +4181,15 @@ if generate_clicked:
             )
 
         # Optional analytics only
-        st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
+        st.session_state["cv_generations"] = (
+            st.session_state.get("cv_generations", 0) + 1
+        )
         increment_usage(email_for_usage, "cv_generations")
 
     except Exception as e:
         st.error(f"CV generation failed: {e}")
         st.stop()
+
 
 
 
