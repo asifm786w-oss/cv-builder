@@ -3738,12 +3738,12 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
     credits = {"cv": 0, "ai": 0}
 
     if can_use:
-        uid = get_user_id(email)  # must exist in App.py
+        uid = get_user_id(email)
         if not uid:
             st.warning("Couldn’t find your account. Please sign out and sign in again.")
             can_use = False
         else:
-            credits = get_credits_by_user_id(uid)  # ledger truth
+            credits = get_credits_by_user_id(uid)
             if int(credits.get("ai", 0) or 0) <= 0:
                 st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
                 can_use = False
@@ -3778,6 +3778,36 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
         st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
 
+    def _as_text(x):
+        if x is None:
+            return ""
+        if isinstance(x, str):
+            return x
+        if isinstance(x, dict):
+            # common Adzuna shapes
+            return (
+                x.get("display_name")
+                or x.get("name")
+                or x.get("area")
+                or x.get("label")
+                or str(x)
+            )
+        return str(x)
+
+    def _normalize_jobs(jobs_raw):
+        """
+        Adzuna wrappers vary. Ensure we end up with: list[dict]
+        """
+        if jobs_raw is None:
+            return []
+        if isinstance(jobs_raw, dict):
+            # common wrappers
+            jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
+        if not isinstance(jobs_raw, list):
+            return []
+        # filter to dict items only
+        return [j for j in jobs_raw if isinstance(j, dict)]
+
     if search_clicked and can_use:
         query_clean = (keywords or "").strip()
         loc_clean = (location or "").strip()
@@ -3787,16 +3817,18 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
         else:
             try:
                 with st.spinner("Searching jobs..."):
-                    jobs = _cached_adzuna_search(query_clean, loc_clean, results=10)
+                    jobs_raw = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
-                # ✅ Spend 1 AI credit only if API returned (successful call)
+                jobs = _normalize_jobs(jobs_raw)
+
+                # ✅ Spend 1 AI credit only if API returned successfully (even if 0 results)
                 spent = try_spend(uid, source="job_search", ai=1)
                 if not spent:
                     st.warning("You don’t have enough AI credits to perform this search.")
                     st.stop()
 
-                # Store results
                 st.session_state["adzuna_results"] = jobs
+
                 if not jobs:
                     st.info("No results found. Try different keywords or a nearby location.")
 
@@ -3813,19 +3845,28 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
     # Results (each job collapsible)
     # -----------------------------
     jobs = st.session_state.get("adzuna_results") or []
+    jobs = _normalize_jobs(jobs)
+
     if jobs:
         st.divider()
-        st.caption("Showing up to 10 results.")
+        st.caption(f"Showing up to {min(len(jobs), 10)} results.")
 
         for idx, job in enumerate(jobs):
-            title = job.get("title") or "Untitled"
-            company = job.get("company") or "Unknown company"
-            loc = job.get("location") or "Unknown location"
-            created = job.get("created") or ""
-            url = job.get("url") or ""
+            title = _as_text(job.get("title")) or "Untitled"
+
+            # company can be dict or string depending on API
+            company_val = job.get("company")
+            company = _as_text(company_val) or "Unknown company"
+
+            # location can be dict (display_name) or string
+            loc_val = job.get("location") or job.get("candidate_required_location") or job.get("area")
+            loc = _as_text(loc_val) or "Unknown location"
+
+            created = _as_text(job.get("created") or job.get("created_at") or "")
+            url = _as_text(job.get("redirect_url") or job.get("url") or "")
             smin = job.get("salary_min")
             smax = job.get("salary_max")
-            desc = job.get("description") or ""
+            desc = _as_text(job.get("description") or "")
 
             with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
 
@@ -3842,6 +3883,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
                     with top[1]:
                         if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
+                            # NOTE: Keep job state names job_* so they never collide with cv_*
                             st.session_state["job_description"] = desc
                             st.session_state["_last_jd_fp"] = None
                             st.session_state.pop("job_summary_ai", None)
@@ -3852,6 +3894,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                                 "title": title,
                                 "company": company,
                                 "url": url,
+                                "location": loc,
                             }
 
                             st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
@@ -3859,6 +3902,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
                 st.markdown("**Preview description**")
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+
 
 
 
