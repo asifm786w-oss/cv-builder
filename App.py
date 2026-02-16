@@ -1962,6 +1962,20 @@ div[role="dialog"] .stButton button{
 )
 
 
+import re
+
+EMAIL_RE = re.compile(
+    r"^(?=.{3,254}$)[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
+    r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$"
+)
+
+def normalize_email(email: str) -> str:
+    return (email or "").strip().lower()
+
+def is_valid_email(email: str) -> bool:
+    email = normalize_email(email)
+    return bool(EMAIL_RE.match(email))
 
 
 # =========================
@@ -1987,23 +2001,27 @@ def auth_ui():
         if st.button("Sign in", key="auth_btn_login"):
             if not login_email or not login_password:
                 st.error("Please enter both email and password.")
+                st.stop()
+
+            login_email_n = normalize_email(login_email)
+            if not is_valid_email(login_email_n):
+                st.error("Please enter a valid email address.")
+                st.stop()
+
+            user = authenticate_user(login_email_n, login_password)
+            if user:
+                st.session_state["user"] = user
+
+                # ✅ FORCE consent gate for this user
+                st.session_state["accepted_policies"] = False
+                st.session_state["chk_policy_agree"] = False
+                st.session_state["policy_view"] = None
+
+                st.session_state["auth_modal_open"] = False
+                st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
+                st.rerun()
             else:
-                user = authenticate_user(login_email, login_password)
-                if user:
-                    st.session_state["user"] = user
-
-                    # ✅ FORCE consent gate for this user
-                    st.session_state["accepted_policies"] = False
-                    st.session_state["chk_policy_agree"] = False
-                    st.session_state["policy_view"] = None
-
-                    st.session_state["auth_modal_open"] = False
-                    st.success(
-                        f"Welcome back, {user.get('full_name') or user['email']}!"
-                    )
-                    st.rerun()
-                else:
-                    st.error("Invalid email or password.")
+                st.error("Invalid email or password.")
 
     # ---- REGISTER TAB ----
     with tab_register:
@@ -2031,19 +2049,22 @@ def auth_ui():
                 st.error("Passwords do not match.")
                 st.stop()
 
+            reg_email_n = normalize_email(reg_email)
+            if not is_valid_email(reg_email_n):
+                st.error("Please enter a valid email address (e.g. name@example.com).")
+                st.stop()
+
             referral_code = None
 
             if reg_referral_code.strip():
-                ref_user = get_user_by_referral_code(
-                    reg_referral_code.strip()
-                )
+                ref_user = get_user_by_referral_code(reg_referral_code.strip())
                 if not ref_user:
                     st.error("That referral code is not valid.")
                     st.stop()
                 referral_code = reg_referral_code.strip().upper()
 
             ok = create_user(
-                email=reg_email,
+                email=reg_email_n,
                 password=reg_password,
                 full_name=reg_name,
                 referred_by=referral_code,
@@ -2055,11 +2076,11 @@ def auth_ui():
 
             if referral_code:
                 apply_referral_bonus(
-                    new_user_email=reg_email,
+                    new_user_email=reg_email_n,
                     referral_code=referral_code,
                 )
 
-            user = authenticate_user(reg_email, reg_password)
+            user = authenticate_user(reg_email_n, reg_password)
             if user:
                 st.session_state["user"] = user
 
@@ -2073,8 +2094,6 @@ def auth_ui():
             else:
                 st.success("Account created. Please sign in.")
 
-
-
     # ---- FORGOT PASSWORD TAB ----
     with tab_forgot:
         st.write("If you've forgotten your password, you can reset it here.")
@@ -2085,36 +2104,42 @@ def auth_ui():
         if st.button("Send reset link", key="auth_btn_send_reset"):
             if not fp_email:
                 st.error("Please enter your email.")
-            else:
-                try:
-                    # ---- DEBUG START ----
-                    print("\n=== RESET EMAIL REQUESTED ===")
-                    print("fp_email:", fp_email)
+                st.stop()
 
-                    resend_key = os.getenv("RESEND_API_KEY", "")
-                    from_email = os.getenv("FROM_EMAIL", "")
-                    app_url = os.getenv("APP_URL", "")
+            fp_email_n = normalize_email(fp_email)
+            if not is_valid_email(fp_email_n):
+                st.error("Please enter a valid email address.")
+                st.stop()
 
-                    print("RESEND_API_KEY present:", bool(resend_key))
-                    print("RESEND_API_KEY length:", len(resend_key))
-                    print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
-                    print("FROM_EMAIL present:", bool(from_email))
-                    print("APP_URL present:", bool(app_url))
-                    # ---- DEBUG END ----
+            try:
+                # ---- DEBUG START ----
+                print("\n=== RESET EMAIL REQUESTED ===")
+                print("fp_email:", fp_email_n)
 
-                    token = create_password_reset_token(fp_email)
-                    print("token created:", bool(token))
+                resend_key = os.getenv("RESEND_API_KEY", "")
+                from_email = os.getenv("FROM_EMAIL", "")
+                app_url = os.getenv("APP_URL", "")
 
-                    if token:
-                        send_password_reset_email(fp_email, token)
-                        print("send_password_reset_email() finished without raising")
+                print("RESEND_API_KEY present:", bool(resend_key))
+                print("RESEND_API_KEY length:", len(resend_key))
+                print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
+                print("FROM_EMAIL present:", bool(from_email))
+                print("APP_URL present:", bool(app_url))
+                # ---- DEBUG END ----
 
-                    st.success("If this email is registered, a reset link has been sent.")
+                token = create_password_reset_token(fp_email_n)
+                print("token created:", bool(token))
 
-                except Exception as e:
-                    print("=== RESET EMAIL ERROR ===")
-                    traceback.print_exc()
-                    st.error(f"Error while sending reset email: {e}")
+                if token:
+                    send_password_reset_email(fp_email_n, token)
+                    print("send_password_reset_email() finished without raising")
+
+                st.success("If this email is registered, a reset link has been sent.")
+
+            except Exception as e:
+                print("=== RESET EMAIL ERROR ===")
+                traceback.print_exc()
+                st.error(f"Error while sending reset email: {e}")
 
         st.markdown("---")
         st.subheader("2. Set a new password using your reset token")
@@ -2138,6 +2163,7 @@ def auth_ui():
                     st.error(
                         "Invalid or expired reset token. Please request a new reset link."
                     )
+
 
 
 
