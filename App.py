@@ -639,6 +639,32 @@ def freeze_defaults():
         if k in st.session_state and st.session_state[k] is None:
             st.session_state[k] = ""
 
+def refresh_session_user_from_db():
+    u = st.session_state.get("user") or {}
+    email = (u.get("email") or "").strip().lower()
+    if not email:
+        return
+
+    db_user = get_user_by_email(email)   # must return dict or RealDict row
+    if not db_user:
+        return
+
+    # overwrite session user with latest DB truth
+    st.session_state["user"] = dict(db_user)
+
+
+def get_active_plan_by_user_id(user_id: int) -> str:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT plan
+            FROM subscriptions
+            WHERE user_id = %s AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
+        """, (user_id,))
+        row = cur.fetchone()
+        return (row[0] if row else "free")
+
 
 def backup_skills_state():
     """Keep the last non-empty skills text so reruns can't wipe it to defaults."""
@@ -2787,98 +2813,135 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
-    # ---------- Account ----------
-    st.markdown('<div class="sb-card">', unsafe_allow_html=True)
-    st.markdown("### 👤 Account")
+# =========================
+# SIDEBAR (full)
+# =========================
+with st.sidebar:
+    session_user = st.session_state.get("user")
+    sidebar_logged_in = _is_logged_in_user(session_user)
+    sidebar_role = (session_user or {}).get("role", "user")
 
-    if not sidebar_logged_in:
-        st.markdown("**Guest mode**")
+    render_mulyba_brand_header(sidebar_logged_in)
+
+    # Mode badge
+    if sidebar_logged_in:
         st.markdown(
-            '<div class="sb-muted">Sign in above to unlock downloads, AI tools, and saved history.</div>',
+            """
+            <div class="mode-badge mode-live">
+              <span class="dot"></span> Live mode
+            </div>
+            """,
             unsafe_allow_html=True,
         )
-        st.markdown("**Status:** ✅ Active")
-        st.markdown("**Policies accepted:** No")
     else:
-        full_name = (session_user or {}).get("full_name") or "Member"
-        email = (session_user or {}).get("email") or "—"
-        plan = ((session_user or {}).get("plan") or "free").strip().lower()
+        st.markdown(
+            """
+            <div class="mode-badge mode-guest">
+              <span class="dot"></span> Guest mode
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        # ✅ show premium properly
-        plan_label = "Pro" if plan == "pro" else ("Monthly" if plan == "monthly" else "Free")
-
-        st.markdown(f"**{full_name}**")
-        st.markdown(f'<div class="sb-muted">{email}</div>', unsafe_allow_html=True)
-        st.markdown(f"**Plan:** {plan_label}")
-
-        if sidebar_role in {"owner", "admin"}:
-            st.caption(f"Admin: {sidebar_role}")
-
-        is_banned = bool((session_user or {}).get("is_banned"))
-        st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
-
-        accepted = bool((session_user or {}).get("accepted_policies"))
-        st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
-
-        if st.button("Log out", key="sb_logout_btn"):
-            st.session_state["user"] = None
-            st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # ---------- Usage ----------
-    st.markdown('<div class="sb-card">', unsafe_allow_html=True)
-    st.markdown("### 📊 Usage")
-
-    if not sidebar_logged_in:
-        st.markdown("**CV Remaining:** 0")
-        st.progress(0)
-        st.markdown("**AI Remaining:** 0")
-        st.progress(0)
-        st.caption("Sign in to buy credits and unlock downloads + AI tools.")
-    else:
-        # Always refresh session user so plan updates after webhook + login
+    # ✅ IMPORTANT: refresh session user BEFORE rendering Account + Usage
+    if sidebar_logged_in:
         refresh_session_user_from_db()
-
         session_user = st.session_state.get("user") or {}
-        uid = session_user.get("id")
-        plan = (session_user.get("plan") or "free").strip().lower()
 
-        # Admin unlimited
-        if sidebar_role in {"owner", "admin"}:
-            st.markdown("**CV Generations:** ♾️ Unlimited")
-            st.markdown("**AI Tools:** ♾️ Unlimited")
-        else:
-            credits = {"cv": 0, "ai": 0}
-            if uid:
-                credits = get_credits_by_user_id(int(uid))  # ledger truth
+# ---------- Account ----------
+st.markdown('<div class="sb-card">', unsafe_allow_html=True)
+st.markdown("### 👤 Account")
 
-            cv_left = int(credits.get("cv", 0) or 0)
-            ai_left = int(credits.get("ai", 0) or 0)
+if not sidebar_logged_in:
+    st.markdown("**Guest mode**")
+    st.markdown(
+        '<div class="sb-muted">Sign in above to unlock downloads, AI tools, and saved history.</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("**Status:** ✅ Active")
+    st.markdown("**Policies accepted:** No")
+else:
+    # ✅ refresh session user BEFORE reading plan/full_name/etc
+    refresh_session_user_from_db()
+    session_user = st.session_state.get("user") or {}
 
-            used_cv_session = int(st.session_state.get("cv_generations", 0) or 0)
-            used_ai_session = int(
-                (st.session_state.get("summary_uses", 0) or 0)
-                + (st.session_state.get("cover_uses", 0) or 0)
-                + (st.session_state.get("bullets_uses", 0) or 0)
-                + (st.session_state.get("job_summary_uses", 0) or 0)
-                + (st.session_state.get("upload_parses", 0) or 0)
-            )
+    full_name = (session_user or {}).get("full_name") or "Member"
+    email = (session_user or {}).get("email") or "—"
+    plan = ((session_user or {}).get("plan") or "free").strip().lower()
 
-            cv_total_session = max(cv_left + used_cv_session, 1)
-            ai_total_session = max(ai_left + used_ai_session, 1)
+    plan_label = "Pro" if plan == "pro" else ("Monthly" if plan == "monthly" else "Free")
 
-            st.markdown(f"**Plan:** {plan}")
-            st.markdown(f"**CV Remaining:** {cv_left}")
-            st.progress(cv_left / cv_total_session)
+    st.markdown(f"**{full_name}**")
+    st.markdown(f'<div class="sb-muted">{email}</div>', unsafe_allow_html=True)
+    st.markdown(f"**Plan:** {plan_label}")
 
-            st.markdown(f"**AI Remaining:** {ai_left}")
-            st.progress(ai_left / ai_total_session)
-          
+    if sidebar_role in {"owner", "admin"}:
+        st.caption(f"Admin: {sidebar_role}")
 
-    st.markdown("</div>", unsafe_allow_html=True)
+    is_banned = bool((session_user or {}).get("is_banned"))
+    st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
 
+    accepted = bool((session_user or {}).get("accepted_policies"))
+    st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
 
+    if st.button("Log out", key="sb_logout_btn"):
+        st.session_state["user"] = None
+        st.rerun()
+
+st.markdown("</div>", unsafe_allow_html=True)
+
+# ---------- Usage ----------
+st.markdown('<div class="sb-card">', unsafe_allow_html=True)
+st.markdown("### 📊 Usage")
+
+if not sidebar_logged_in:
+    st.markdown("**CV Remaining:** 0")
+    st.progress(0)
+    st.markdown("**AI Remaining:** 0")
+    st.progress(0)
+    st.caption("Sign in to buy credits and unlock downloads + AI tools.")
+else:
+    # ✅ session_user already refreshed above, but keep safe if this block is used elsewhere
+    session_user = st.session_state.get("user") or {}
+
+    # Admin unlimited
+    if sidebar_role in {"owner", "admin"}:
+        st.markdown("**CV Generations:** ♾️ Unlimited")
+        st.markdown("**AI Tools:** ♾️ Unlimited")
+    else:
+        email = ((session_user or {}).get("email") or "").strip().lower()
+
+        # ✅ Robust UID: use session id if present, else compute from email
+        uid = (session_user or {}).get("id")
+        if not uid and email:
+            uid = get_user_id(email)
+
+        credits = {"cv": 0, "ai": 0}
+        if uid:
+            credits = get_credits_by_user_id(int(uid))  # ledger truth
+
+        cv_left = int(credits.get("cv", 0) or 0)
+        ai_left = int(credits.get("ai", 0) or 0)
+
+        used_cv_session = int(st.session_state.get("cv_generations", 0) or 0)
+        used_ai_session = int(
+            (st.session_state.get("summary_uses", 0) or 0)
+            + (st.session_state.get("cover_uses", 0) or 0)
+            + (st.session_state.get("bullets_uses", 0) or 0)
+            + (st.session_state.get("job_summary_uses", 0) or 0)
+            + (st.session_state.get("upload_parses", 0) or 0)
+        )
+
+        cv_total_session = max(cv_left + used_cv_session, 1)
+        ai_total_session = max(ai_left + used_ai_session, 1)
+
+        st.markdown(f"**CV Remaining:** {cv_left}")
+        st.progress(cv_left / cv_total_session)
+
+        st.markdown(f"**AI Remaining:** {ai_left}")
+        st.progress(ai_left / ai_total_session)
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 
 
