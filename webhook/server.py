@@ -14,10 +14,13 @@ PRICE_PRO = os.getenv("STRIPE_PRICE_PRO", "").strip()
 
 CREDIT_STACKING = os.getenv("CREDIT_STACKING", "false").lower() == "true"
 
+ALLOWED_PLANS = {"monthly", "pro"}
+
 
 def get_conn():
     if not DATABASE_URL:
         raise RuntimeError("Missing DATABASE_URL")
+    # Railway sometimes needs sslmode=require; if yours already works without it, keep it simple.
     return psycopg2.connect(DATABASE_URL)
 
 
@@ -77,9 +80,14 @@ def find_user_id_by_email(email: str) -> int | None:
         return int(row[0]) if row else None
 
 
-# ✅ NEW: keep users.plan in sync with Stripe subscription
 def set_user_plan(user_id: int, plan: str) -> None:
+    """
+    Keep users.plan in sync.
+    Only allow known values: free/monthly/pro.
+    """
     plan = (plan or "free").strip().lower()
+    if plan not in {"free", "monthly", "pro"}:
+        plan = "free"
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute("UPDATE users SET plan=%s WHERE id=%s", (plan, user_id))
@@ -164,7 +172,7 @@ def insert_credit_grant(
 
 def extract_price_id_from_invoice(invoice: dict) -> str:
     """
-    Supports your payload shape:
+    Supports payload shape:
       lines.data[*].pricing.price_details.price
     """
     lines = (invoice.get("lines") or {}).get("data") or []
@@ -211,12 +219,16 @@ def stripe_webhook():
     obj = (event.get("data") or {}).get("object") or {}
 
     # ------------------------------------------------------------
-    # 1) FIRST PAYMENT: checkout.session.completed (uses metadata.pack)
+    # A) FIRST PAYMENT: checkout.session.completed (metadata.pack)
     # ------------------------------------------------------------
     if typ == "checkout.session.completed":
         session = obj
         metadata = session.get("metadata") or {}
         pack = (metadata.get("pack") or "").strip().lower()
+
+        # validate pack
+        if pack not in ALLOWED_PLANS:
+            return jsonify({"status": "ignored", "reason": "invalid_pack", "pack": pack}), 200
 
         email = (
             (metadata.get("app_user_email") or "").strip().lower()
@@ -227,19 +239,15 @@ def stripe_webhook():
         customer_id = (session.get("customer") or "").strip() or None
         subscription_id = (session.get("subscription") or "").strip() or None
 
-        if not pack:
-            return jsonify({"status": "ignored", "reason": "missing_pack"}), 200
         if not email:
             return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
         user_id = find_user_id_by_email(email)
         if not user_id:
+            # don't auto-create because users.password_hash is NOT NULL in your schema
             return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
 
-        # ✅ NEW: update users.plan immediately so dashboard shows Monthly/Pro
-        set_user_plan(user_id, pack)
-
-        # Fetch subscription for period end + status
+        # Fetch subscription status/period_end (important for expiry + plan safety)
         status = "unknown"
         period_end = None
         cancel_at_period_end = False
@@ -260,6 +268,10 @@ def stripe_webhook():
                 cancel_at_period_end=cancel_at_period_end,
             )
 
+        # ✅ plan sync (treat trialing as premium too)
+        if status in ("active", "trialing") or not subscription_id:
+            set_user_plan(user_id, pack)
+
         cv_amt, ai_amt = credits_for_plan(pack)
         expires_at = None if CREDIT_STACKING else period_end
 
@@ -274,7 +286,7 @@ def stripe_webhook():
         return jsonify({"status": "ok", "granted": True, "inserted": inserted}), 200
 
     # ------------------------------------------------------------
-    # 2) RENEWALS: invoice.paid / invoice.payment_succeeded
+    # B) RENEWALS: invoice.paid / invoice.payment_succeeded
     # ------------------------------------------------------------
     if typ in ("invoice.paid", "invoice.payment_succeeded"):
         invoice = obj
@@ -285,7 +297,7 @@ def stripe_webhook():
         price_id = extract_price_id_from_invoice(invoice)
         plan = plan_from_price(price_id)
 
-        if not plan:
+        if plan not in ALLOWED_PLANS:
             return jsonify({"status": "ignored", "reason": "unknown_price", "price_id": price_id}), 200
 
         email = (invoice.get("customer_email") or "").strip().lower()
@@ -320,8 +332,8 @@ def stripe_webhook():
                 cancel_at_period_end=cancel_at_period_end,
             )
 
-        # ✅ NEW: keep plan synced on renewals too (only set if active)
-        if status == "active":
+        # ✅ keep plan synced on renewals
+        if status in ("active", "trialing") or not subscription_id:
             set_user_plan(user_id, plan)
 
         cv_amt, ai_amt = credits_for_plan(plan)
@@ -336,6 +348,60 @@ def stripe_webhook():
         )
 
         return jsonify({"status": "ok", "granted": True, "inserted": inserted}), 200
+
+    # ------------------------------------------------------------
+    # C) SUBSCRIPTION STATE CHANGES: customer.subscription.updated/deleted
+    #    This is what prevents "stuck on Pro forever" when canceled.
+    # ------------------------------------------------------------
+    if typ in ("customer.subscription.updated", "customer.subscription.deleted"):
+        sub = obj
+        subscription_id = (sub.get("id") or "").strip()
+        customer_id = (sub.get("customer") or "").strip() or None
+        status = (sub.get("status") or "unknown")
+        period_end = sub.get("current_period_end")
+        cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
+
+        # Determine plan from subscription items -> price id
+        plan = None
+        items = (((sub.get("items") or {}).get("data")) or [])
+        for it in items:
+            price = (it.get("price") or {})
+            pid = (price.get("id") or "").strip()
+            plan = plan_from_price(pid)
+            if plan:
+                break
+
+        # Need an email -> map customer -> email -> user
+        email = None
+        if customer_id:
+            cust = stripe.Customer.retrieve(customer_id)
+            email = (cust.get("email") or "").strip().lower()
+
+        if not email:
+            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
+
+        user_id = find_user_id_by_email(email)
+        if not user_id:
+            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
+
+        # Update subscriptions table (even if plan unknown, still store status)
+        upsert_subscription(
+            user_id=user_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            plan=plan or "free",
+            status=status,
+            period_end_unix=period_end,
+            cancel_at_period_end=cancel_at_period_end,
+        )
+
+        # Sync users.plan
+        if status in ("active", "trialing") and plan in ALLOWED_PLANS:
+            set_user_plan(user_id, plan)
+        else:
+            set_user_plan(user_id, "free")
+
+        return jsonify({"status": "ok"}), 200
 
     return jsonify({"status": "ok"}), 200
 
