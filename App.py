@@ -3112,13 +3112,14 @@ if uploaded_cv is not None and fill_clicked:
     # ✅ Apply parsed data (your existing function)
     _apply_parsed_cv_to_session(parsed)
 
-    # ✅ FORCE Personal details keys to match YOUR widgets
-    _safe_set("full_name", parsed.get("full_name") or parsed.get("name"))
-    _safe_set("email", parsed.get("email"))
-    _safe_set("phone", parsed.get("phone"))
-    _safe_set("location", parsed.get("location"))
-    _safe_set("title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
-    _safe_set("summary", parsed.get("summary") or parsed.get("professional_summary"))
+    # ✅ FORCE Personal details keys to match YOUR NEW cv_* widgets
+    _safe_set("cv_full_name", parsed.get("full_name") or parsed.get("name"))
+    _safe_set("cv_email", parsed.get("email"))
+    _safe_set("cv_phone", parsed.get("phone"))
+    _safe_set("cv_location", parsed.get("location"))
+    _safe_set("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
+    _safe_set("cv_summary", parsed.get("summary") or parsed.get("professional_summary"))
+
 
     # ✅ Flags so restore/default logic can’t wipe after rerun
     st.session_state["_cv_parsed"] = parsed
