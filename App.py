@@ -3914,17 +3914,17 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 # -------------------------
 st.header("5. Target Job (optional)")
 
+import hashlib
+
+def _fingerprint(text: str) -> str:
+    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
+
 job_description = st.text_area(
     "Paste the job description here",
     height=200,
     help="Paste the full job spec from LinkedIn, Indeed, etc.",
     key="job_description",
 )
-
-import hashlib
-
-def _fingerprint(text: str) -> str:
-    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
 
 jd_fp = _fingerprint(job_description)
 last_jd_fp = st.session_state.get("_last_jd_fp")
@@ -3947,13 +3947,16 @@ with col_jd1:
 with col_jd2:
     ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key="btn_cover")
 
-
 # --- AI job-description summary ---
 if job_summary_clicked:
     if not gate_premium("generate a job summary"):
         st.stop()
 
-    if not (full_name.strip() and email.strip()):
+    # Always read from session_state so we don't rely on local variables existing
+    full_name_ss = (st.session_state.get("full_name") or "").strip()
+    email_ss = (st.session_state.get("email") or "").strip()
+
+    if not (full_name_ss and email_ss):
         st.warning("Complete Section 1 (Full name + Email) first — these are used in outputs.")
         st.stop()
 
@@ -3989,20 +3992,25 @@ if job_summary_clicked:
         except Exception as e:
             st.error(f"AI error (job summary): {e}")
 
-
 # --- DISPLAY JOB SUMMARY ---
 job_summary_text = st.session_state.get("job_summary_ai", "")
 if job_summary_text:
     st.markdown("**AI job summary for this role (read-only):**")
     st.write(job_summary_text)
 
-
 # --- AI cover letter generation ---
 if ai_cover_letter_clicked:
     if not gate_premium("generate a cover letter"):
         st.stop()
 
-    if not (full_name.strip() and email.strip()):
+    # Always read from session_state so we don't rely on local variables existing
+    full_name_ss = (st.session_state.get("full_name") or "").strip()
+    title_ss = (st.session_state.get("title") or "").strip()
+    email_ss = (st.session_state.get("email") or "").strip()
+    phone_ss = (st.session_state.get("phone") or "").strip()
+    location_ss = (st.session_state.get("location") or "").strip()
+
+    if not (full_name_ss and email_ss):
         st.warning("Complete Section 1 (Full name + Email) first — added to cover letter.")
         st.stop()
 
@@ -4025,12 +4033,14 @@ if ai_cover_letter_clicked:
     with st.spinner("Generating cover letter..."):
         try:
             cover_input = {
-                "full_name": full_name,
-                "current_title": title,
+                "full_name": full_name_ss,
+                "current_title": title_ss,
                 "skills": skills,
                 "experiences": [exp.dict() for exp in experiences],
                 "education": st.session_state.get("education_items", []),
-                "location": location,
+                "location": location_ss,
+                "phone": phone_ss,
+                "email": email_ss,
             }
 
             jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description (AI input)")
@@ -4038,7 +4048,6 @@ if ai_cover_letter_clicked:
 
             cover_text = generate_cover_letter_ai(cover_input, jd_limited, job_summary)
             cleaned = clean_cover_letter_body(cover_text)
-
             final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
             st.session_state["cover_letter"] = final_letter
@@ -4054,9 +4063,14 @@ if ai_cover_letter_clicked:
         except Exception as e:
             st.error(f"AI error (cover letter): {e}")
 
-
 # --- Cover letter editor + downloads ---
 st.session_state.setdefault("cover_letter", "")
+
+# ✅ CRITICAL: define these from session_state so downloads never crash (phone/name/email scope)
+full_name = (st.session_state.get("full_name") or "").strip()
+email = (st.session_state.get("email") or "").strip()
+phone = (st.session_state.get("phone") or "").strip()
+location = (st.session_state.get("location") or "").strip()
 
 if st.session_state["cover_letter"]:
     st.subheader("✏️ Cover letter")
@@ -4104,6 +4118,7 @@ if st.session_state["cover_letter"]:
 
     except Exception as e:
         st.error(f"Error generating cover letter files: {e!r}")
+
 
 
 
