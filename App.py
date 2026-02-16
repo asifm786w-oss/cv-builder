@@ -4098,7 +4098,6 @@ generate_clicked = locked_action_button(
     action_label="generate and download your CV",
     key="btn_generate_cv",
 )
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
 
     # Pull CV fields ONLY from cv_* keys
     cv_full_name = get_cv_field("cv_full_name")
