@@ -159,6 +159,17 @@ def get_user_row_by_id(user_id: int) -> dict | None:
         row = cur.fetchone()
         return dict(row) if row else None
 
+def get_db_connection():
+    dsn = os.environ.get("DATABASE_URL")
+    if not dsn:
+        raise RuntimeError("DATABASE_URL is not set")
+
+    return psycopg2.connect(
+        dsn,
+        sslmode="require",
+        cursor_factory=psycopg2.extras.RealDictCursor,
+    )
+
 
 def refresh_session_user_from_db() -> None:
     """Refresh st.session_state['user'] from DB using the user id."""
@@ -1261,16 +1272,6 @@ def get_ai_credits(email: str) -> int:
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-def get_conn():
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is not set")
-
-    return psycopg2.connect(
-        dsn,
-        sslmode="require",
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    )
 
 def get_user_by_email(email: str) -> dict | None:
     email = (email or "").strip().lower()
