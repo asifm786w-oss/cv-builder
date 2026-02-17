@@ -473,46 +473,47 @@ def has_accepted_policies(email: str) -> bool:
 
 
 def mark_policies_accepted(email: str) -> None:
-    email_n = (email or "").strip().lower()
-    if not email_n:
-        raise ValueError("Missing email")
+    email = (email or "").strip().lower()
+    if not email:
+        raise RuntimeError("missing email")
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
             UPDATE users
-            SET accepted_policies = 1,
+            SET accepted_policies = TRUE,
                 accepted_policies_at = NOW()
             WHERE LOWER(email)=LOWER(%s)
             """,
-            (email_n,),
+            (email,),
         )
         conn.commit()
 
 
 
+
+
 def has_accepted_policies(email: str) -> bool:
-    email_n = (email or "").strip().lower()
-    if not email_n:
+    email = (email or "").strip().lower()
+    if not email:
         return False
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT COALESCE(accepted_policies, 0)
+            SELECT COALESCE(accepted_policies, FALSE)
             FROM users
             WHERE LOWER(email)=LOWER(%s)
             LIMIT 1
             """,
-            (email_n,),
+            (email,),
         )
         row = cur.fetchone()
+        if not row:
+            return False
+        return bool(row[0])
 
-    if not row:
-        return False
 
-    # accepted_policies is int-like (0/1)
-    return int(row[0] or 0) == 1
 
 
 def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
@@ -4454,8 +4455,6 @@ st.caption(
     "Subscriptions fund the platform and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
-
-
 
 
 # ==============================================
