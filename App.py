@@ -2082,36 +2082,45 @@ if show_policy_page():
     st.stop()
 
 
-def snapshot_form_state() -> None:
-    keys_to_save = [
-        "full_name", "title", "email", "phone", "location", "summary",
-        "template_label",
-        "skills", "experiences", "education_items", "references",
-        "job_description", "_last_jd_fp",
-        "job_summary_ai", "cover_letter", "cover_letter_box",
-        "selected_job",
-        "adzuna_keywords", "adzuna_location", "adzuna_results",
-        "cv_generations", "summary_uses", "cover_uses",
-        "bullets_uses", "job_summary_uses", "upload_parses",
-        "_last_cv_fingerprint", "_cv_parsed",
-        "_cv_autofill_enabled", "_just_autofilled_from_cv",
-        "_skip_restore_personal_once",
-    ]
+# =========================
+# FORM SNAPSHOT (policies nav)
+# =========================
 
+FORM_KEYS_TO_PRESERVE = [
+    # Section 1
+    "full_name", "title", "email", "phone", "location", "summary",
+
+    # CV upload / parsing
+    "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
+    "_last_cv_fingerprint", "cv_uploader",
+
+    # Education/experience/skills structures you use
+    "skills", "experiences", "education_items", "references",
+
+    # Target job / cover letter
+    "job_description", "_last_jd_fp", "job_summary_ai",
+    "cover_letter", "cover_letter_box", "selected_job",
+
+    # Template
+    "template_label",
+]
+
+def snapshot_form_state() -> None:
     snap = {}
-    for k in keys_to_save:
+    for k in FORM_KEYS_TO_PRESERVE:
         if k in st.session_state:
             snap[k] = st.session_state.get(k)
-
     st.session_state["_form_snapshot"] = snap
-
 
 def restore_form_state() -> None:
     snap = st.session_state.get("_form_snapshot") or {}
+    if not isinstance(snap, dict):
+        return
     for k, v in snap.items():
-        # only fill missing keys; avoids fighting Streamlit widgets
-        if k not in st.session_state:
+        # only restore if key missing/empty, don't clobber new edits
+        if k not in st.session_state or st.session_state.get(k) in (None, ""):
             st.session_state[k] = v
+
 
 
 
@@ -2313,10 +2322,11 @@ def auth_ui():
             if user:
                 st.session_state["user"] = user
 
-                # ✅ FORCE consent gate for this user
-                st.session_state["accepted_policies"] = False
+                # set from DB truth (user row returned by authenticate_user)
+                st.session_state["accepted_policies"] = bool(user.get("accepted_policies"))
                 st.session_state["chk_policy_agree"] = False
                 st.session_state["policy_view"] = None
+
 
                 st.session_state["auth_modal_open"] = False
                 st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
@@ -4474,3 +4484,4 @@ with fc4:
         snapshot_form_state()
         st.session_state["policy_view"] = "terms"
         st.rerun()
+		
