@@ -3,7 +3,7 @@ import sqlite3
 import hashlib
 import secrets
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 
 DB_PATH = "users.db"
 
@@ -31,6 +31,7 @@ def get_conn():
 
     # Production (Postgres)
     import psycopg2
+
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 
@@ -58,9 +59,10 @@ def _fetchall(cur):
 # -------------------------
 # Row mapper
 # -------------------------
-def _row_to_user(row) -> Dict:
+def _row_to_user(row) -> Dict[str, Any]:
     if row is None:
         return {}
+
     cols = [
         "id",
         "email",
@@ -96,13 +98,14 @@ def init_db():
     Initialise DB schema.
     Safe to call on every run.
     SQLite: also performs migrations.
-    Postgres: creates table if missing.
+    Postgres: creates table if missing + performs lightweight type migrations.
     """
     conn = get_conn()
     cur = conn.cursor()
 
     # --- Postgres ---
     if _is_postgres():
+        # Create with the CORRECT types for prod
         db_execute(
             cur,
             """
@@ -126,13 +129,68 @@ def init_db():
                 referral_code TEXT UNIQUE,
                 referred_by TEXT,
                 referrals_count INTEGER NOT NULL DEFAULT 0,
-                accepted_policies INTEGER NOT NULL DEFAULT 0,
-                accepted_policies_at TEXT,
+                accepted_policies BOOLEAN NOT NULL DEFAULT FALSE,
+                accepted_policies_at TIMESTAMPTZ,
                 job_summary_uses INTEGER NOT NULL DEFAULT 0
             );
             """,
         )
         conn.commit()
+
+        # ---- Lightweight migrations (don’t crash if already correct) ----
+        try:
+            # Ensure accepted_policies is boolean
+            db_execute(
+                cur,
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_name='users' AND column_name='accepted_policies'
+                """,
+            )
+            row = _fetchone(cur)
+            if row and row[0] != "boolean":
+                # Drop default first, then convert int->bool
+                db_execute(cur, "ALTER TABLE users ALTER COLUMN accepted_policies DROP DEFAULT")
+                db_execute(
+                    cur,
+                    """
+                    ALTER TABLE users
+                    ALTER COLUMN accepted_policies TYPE boolean
+                    USING (accepted_policies::int = 1)
+                    """,
+                )
+                db_execute(cur, "ALTER TABLE users ALTER COLUMN accepted_policies SET DEFAULT FALSE")
+                conn.commit()
+        except Exception:
+            conn.rollback()
+
+        try:
+            # Ensure accepted_policies_at is timestamptz (and clear empty strings)
+            db_execute(
+                cur,
+                """
+                SELECT data_type
+                FROM information_schema.columns
+                WHERE table_name='users' AND column_name='accepted_policies_at'
+                """,
+            )
+            row = _fetchone(cur)
+            if row and row[0] != "timestamp with time zone":
+                # if text exists, empty string needs to become NULL first
+                db_execute(cur, "UPDATE users SET accepted_policies_at = NULL WHERE accepted_policies_at = ''")
+                db_execute(
+                    cur,
+                    """
+                    ALTER TABLE users
+                    ALTER COLUMN accepted_policies_at TYPE timestamptz
+                    USING NULLIF(accepted_policies_at, '')::timestamptz
+                    """,
+                )
+                conn.commit()
+        except Exception:
+            conn.rollback()
+
         conn.close()
         return
 
@@ -232,7 +290,6 @@ def create_user(
     """
     Create a new user. Returns False if email already exists.
     First user in the DB is automatically made admin/owner.
-    Optionally store who referred them (by email).
     """
     email = email.strip().lower()
     if referred_by:
@@ -241,13 +298,11 @@ def create_user(
     conn = get_conn()
     cur = conn.cursor()
 
-    # Is this email already registered?
     db_execute(cur, "SELECT id FROM users WHERE email = ?", (email,))
     if _fetchone(cur):
         conn.close()
         return False
 
-    # Count how many users exist to decide admin/owner flags
     db_execute(cur, "SELECT COUNT(*) FROM users")
     total = _fetchone(cur)[0]
     is_admin = 1 if total == 0 else 0
@@ -255,6 +310,10 @@ def create_user(
 
     now = datetime.utcnow().isoformat()
     pwd_hash = hash_password(password)
+
+    # IMPORTANT: accepted_policies must match backend type
+    accepted_policies_value = False if _is_postgres() else 0
+    accepted_policies_at_value = None
 
     db_execute(
         cur,
@@ -264,7 +323,19 @@ def create_user(
          referred_by, referrals_count, accepted_policies, accepted_policies_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (email, pwd_hash, full_name, "free", is_admin, role, now, referred_by, 0, 0, None),
+        (
+            email,
+            pwd_hash,
+            full_name,
+            "free",
+            is_admin,
+            role,
+            now,
+            referred_by,
+            0,
+            accepted_policies_value,
+            accepted_policies_at_value,
+        ),
     )
 
     conn.commit()
@@ -272,7 +343,7 @@ def create_user(
     return True
 
 
-def _select_user_by_where(where_sql: str, params: tuple) -> Optional[Dict]:
+def _select_user_by_where(where_sql: str, params: tuple) -> Optional[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
 
@@ -302,7 +373,7 @@ def _select_user_by_where(where_sql: str, params: tuple) -> Optional[Dict]:
     return user
 
 
-def authenticate_user(email: str, password: str) -> Optional[Dict]:
+def authenticate_user(email: str, password: str) -> Optional[Dict[str, Any]]:
     email = email.strip().lower()
     pwd_hash = hash_password(password)
 
@@ -317,30 +388,9 @@ def authenticate_user(email: str, password: str) -> Optional[Dict]:
     return user
 
 
-def get_user_by_email(email: str) -> Optional[Dict]:
+def get_user_by_email(email: str) -> Optional[Dict[str, Any]]:
     email = email.strip().lower()
     return _select_user_by_where("WHERE email = ?", (email,))
-
-
-# -------------------------
-# Role & banning helpers
-# -------------------------
-def set_role(email: str, role: str) -> None:
-    email = email.strip().lower()
-    conn = get_conn()
-    cur = conn.cursor()
-    db_execute(cur, "UPDATE users SET role = ? WHERE email = ?", (role, email))
-    conn.commit()
-    conn.close()
-
-
-def set_banned(email: str, banned: bool) -> None:
-    email = email.strip().lower()
-    conn = get_conn()
-    cur = conn.cursor()
-    db_execute(cur, "UPDATE users SET is_banned = ? WHERE email = ?", (1 if banned else 0, email))
-    conn.commit()
-    conn.close()
 
 
 # -------------------------
@@ -385,7 +435,7 @@ def set_plan(email: str, plan: str) -> None:
     conn.close()
 
 
-def get_all_users() -> List[Dict]:
+def get_all_users() -> List[Dict[str, Any]]:
     conn = get_conn()
     cur = conn.cursor()
 
@@ -447,7 +497,7 @@ def create_password_reset_token(email: str) -> Optional[str]:
     return token
 
 
-def get_user_by_reset_token(token: str) -> Optional[Dict]:
+def get_user_by_reset_token(token: str) -> Optional[Dict[str, Any]]:
     token = (token or "").strip()
     if not token:
         return None
@@ -491,24 +541,6 @@ def get_user_by_reset_token(token: str) -> Optional[Dict]:
 
     user.pop("password_hash", None)
     return user
-
-
-def clear_reset_token(email: str) -> None:
-    email = email.strip().lower()
-    conn = get_conn()
-    cur = conn.cursor()
-    db_execute(
-        cur,
-        """
-        UPDATE users
-        SET reset_token = NULL,
-            reset_token_created_at = NULL
-        WHERE email = ?
-        """,
-        (email,),
-    )
-    conn.commit()
-    conn.close()
 
 
 def reset_password_with_token(token: str, new_password: str) -> bool:
@@ -575,7 +607,7 @@ def ensure_referral_code(email: str) -> str:
     return code
 
 
-def get_user_by_referral_code(code: str) -> Optional[Dict]:
+def get_user_by_referral_code(code: str) -> Optional[Dict[str, Any]]:
     code = (code or "").strip()
     if not code:
         return None
@@ -609,76 +641,8 @@ def get_user_by_referral_code(code: str) -> Optional[Dict]:
     return user
 
 
-def apply_referral_bonus(referrer_email: str, max_referrals: int = 10) -> None:
-    email = referrer_email.strip().lower()
-    conn = get_conn()
-    cur = conn.cursor()
-
-    db_execute(cur, "SELECT referrals_count FROM users WHERE email = ?", (email,))
-    row = _fetchone(cur)
-    if not row:
-        conn.close()
-        return
-
-    current = row[0] or 0
-    if current >= max_referrals:
-        conn.close()
-        return
-
-    new_count = current + 1
-    db_execute(cur, "UPDATE users SET referrals_count = ? WHERE email = ?", (new_count, email))
-    conn.commit()
-    conn.close()
-
-
-from psycopg2.extras import RealDictCursor
-from datetime import datetime, timezone
-
 # -------------------------
-# Policies consent helpers (Postgres)
-# -------------------------
-from psycopg2.extras import RealDictCursor
-
-def has_accepted_policies(email: str) -> bool:
-    email = (email or "").strip().lower()
-    if not email:
-        return False
-
-    conn = get_conn()
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    accepted_policies,
-                    accepted_policies_at
-                FROM users
-                WHERE email = %s
-                """,
-                (email,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return False
-
-            ap = row.get("accepted_policies")
-
-            # Handles: boolean True/False OR int 1/0 OR None
-            accepted_flag = False
-            if isinstance(ap, bool):
-                accepted_flag = ap
-            elif ap is None:
-                accepted_flag = False
-            else:
-                # int / str-ish
-                accepted_flag = str(ap).strip() in {"1", "true", "t", "yes", "y"}
-
-            return accepted_flag or (row.get("accepted_policies_at") is not None)
-    finally:
-        conn.close()
-
-# -------------------------
-# Policies consent helpers
+# Policy acceptance helpers
 # -------------------------
 def has_accepted_policies(email: str) -> bool:
     email = (email or "").strip().lower()
@@ -688,13 +652,13 @@ def has_accepted_policies(email: str) -> bool:
     conn = get_conn()
     cur = conn.cursor()
     try:
-        # Use db_execute so '?' becomes %s on Postgres automatically
         db_execute(
             cur,
             """
-            SELECT COALESCE(accepted_policies, 0)
+            SELECT accepted_policies, accepted_policies_at
             FROM users
             WHERE email = ?
+            LIMIT 1
             """,
             (email,),
         )
@@ -702,8 +666,20 @@ def has_accepted_policies(email: str) -> bool:
         if not row:
             return False
 
-        # row[0] can be 0/1, True/False depending on driver – normalize
-        return int(row[0] or 0) == 1
+        accepted_policies, accepted_at = row
+
+        # Normalize SQLite (0/1) + Postgres (True/False)
+        if isinstance(accepted_policies, bool):
+            accepted_flag = accepted_policies
+        elif accepted_policies is None:
+            accepted_flag = False
+        else:
+            accepted_flag = str(accepted_policies).lower() in {"1", "true", "t", "yes", "y"}
+
+        # accepted_at may be text (sqlite) or datetime (pg)
+        accepted_at_flag = accepted_at is not None and str(accepted_at).strip() != ""
+
+        return bool(accepted_flag or accepted_at_flag)
     finally:
         conn.close()
 
@@ -716,22 +692,35 @@ def mark_policies_accepted(email: str) -> None:
     conn = get_conn()
     cur = conn.cursor()
     try:
-        db_execute(
-            cur,
-            """
-            UPDATE users
-            SET
-                accepted_policies = 1,
-                accepted_policies_at = COALESCE(accepted_policies_at, ?)
-            WHERE email = ?
-            """,
-            (datetime.utcnow().isoformat(), email),
-        )
+        if _is_postgres():
+            # Postgres: boolean + timestamptz
+            db_execute(
+                cur,
+                """
+                UPDATE users
+                SET
+                    accepted_policies = TRUE,
+                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
+                WHERE email = ?
+                """,
+                (email,),
+            )
+        else:
+            # SQLite: int + text timestamp
+            db_execute(
+                cur,
+                """
+                UPDATE users
+                SET
+                    accepted_policies = 1,
+                    accepted_policies_at = COALESCE(accepted_policies_at, ?)
+                WHERE email = ?
+                """,
+                (datetime.utcnow().isoformat(), email),
+            )
         conn.commit()
     finally:
         conn.close()
-
-
 
 
 # -------------------------
