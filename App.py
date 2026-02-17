@@ -191,18 +191,54 @@ def get_conn():
     return get_db_connection()
 
 def refresh_session_user_from_db() -> None:
-    """Refresh st.session_state['user'] from DB using the user id."""
+    """
+    Refresh st.session_state['user'] from DB.
+    Priority: user.id -> email fallback.
+    Preserves session-only keys like role/referral_code/etc.
+    """
     u = st.session_state.get("user") or {}
+
+    # session-only keys you don't want overwritten by DB row
+    keep_keys = (
+        "role",
+        "referral_code",
+        "referrals_count",
+        "starter_credits_granted",
+        "referral_bonus_applied",
+    )
+
     uid = u.get("id")
-    if not uid:
+    email = (u.get("email") or "").strip().lower()
+
+    db_u = None
+
+    # 1) Prefer by id
+    if uid:
+        try:
+            db_u = get_user_row_by_id(int(uid))  # should return dict-like row
+        except Exception:
+            db_u = None
+
+    # 2) Fallback by email (covers "id missing in session" cases)
+    if not db_u and email:
+        db_u = get_user_by_email(email)  # should return dict-like row
+
+    if not db_u:
         return
-    db_u = get_user_row_by_id(int(uid))
-    if db_u:
-        # keep anything you store only in session (optional)
-        for k in ("role",):
-            if k in u and k not in db_u:
-                db_u[k] = u[k]
-        st.session_state["user"] = db_u
+
+    # Ensure plain dict
+    db_u = dict(db_u)
+
+    # Normalize plan
+    db_u["plan"] = (db_u.get("plan") or "free").strip().lower()
+
+    # Preserve session-only keys
+    for k in keep_keys:
+        if k in u and k not in db_u:
+            db_u[k] = u[k]
+
+    st.session_state["user"] = db_u
+
 
 
 
@@ -639,18 +675,6 @@ def freeze_defaults():
         if k in st.session_state and st.session_state[k] is None:
             st.session_state[k] = ""
 
-def refresh_session_user_from_db():
-    u = st.session_state.get("user") or {}
-    email = (u.get("email") or "").strip().lower()
-    if not email:
-        return
-
-    db_user = get_user_by_email(email)   # must return dict or RealDict row
-    if not db_user:
-        return
-
-    # overwrite session user with latest DB truth
-    st.session_state["user"] = dict(db_user)
 
 
 def get_active_plan_by_user_id(user_id: int) -> str:
