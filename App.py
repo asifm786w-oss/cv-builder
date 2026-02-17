@@ -11,7 +11,7 @@ import stripe
 import psycopg2.extras
 import datetime
 
-
+from auth import apply_referral_bonus
 from datetime import datetime, timezone
 from psycopg2.extras import RealDictCursor
 from openai import OpenAI

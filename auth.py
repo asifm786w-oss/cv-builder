@@ -55,6 +55,245 @@ def _fetchone(cur):
 def _fetchall(cur):
     return cur.fetchall()
 
+def _col_exists(cur, table: str, col: str) -> bool:
+    if _is_postgres():
+        db_execute(
+            cur,
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = ? AND column_name = ?
+            """,
+            (table, col),
+        )
+        return bool(_fetchone(cur))
+    else:
+        db_execute(cur, f"PRAGMA table_info({table})")
+        cols = {r[1] for r in _fetchall(cur)}
+        return col in cols
+
+
+def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
+    """
+    Pays ONLY the referrer (+5 CV, +5 AI) when a new user signs up with a referral code.
+    Marks the new user referral_bonus_applied=TRUE to prevent double pay (if column exists).
+    Also sets referred_by on the new user.
+    Works for SQLite + Postgres.
+
+    NOTE: This implementation updates users.cv_credits / users.ai_credits if those columns exist.
+    If you've fully moved to the ledger, we should swap this to insert into credit_grants instead.
+    """
+    BONUS_CV = 5
+    BONUS_AI = 5
+    REFERRAL_CAP = 10
+
+    email = (new_user_email or "").strip().lower()
+    code = (referral_code or "").strip().upper()
+
+    if not email or not code:
+        return False
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    try:
+        # Detect optional columns safely
+        has_bonus_flag = _col_exists(cur, "users", "referral_bonus_applied")
+        has_cv_credits = _col_exists(cur, "users", "cv_credits")
+        has_ai_credits = _col_exists(cur, "users", "ai_credits")
+
+        # Start transaction
+        # (SQLite autocommit off by default; Postgres uses transaction)
+        # 1) Lock / fetch new user
+        if _is_postgres():
+            db_execute(
+                cur,
+                """
+                SELECT id, COALESCE(referred_by, ''), COALESCE(referral_bonus_applied, FALSE)
+                FROM users
+                WHERE lower(email) = ?
+                FOR UPDATE
+                """,
+                (email,),
+            )
+        else:
+            # SQLite: no FOR UPDATE; still okay for single-threaded app
+            if has_bonus_flag:
+                db_execute(
+                    cur,
+                    """
+                    SELECT id, COALESCE(referred_by, ''), COALESCE(referral_bonus_applied, 0)
+                    FROM users
+                    WHERE lower(email) = ?
+                    """,
+                    (email,),
+                )
+            else:
+                db_execute(
+                    cur,
+                    """
+                    SELECT id, COALESCE(referred_by, '')
+                    FROM users
+                    WHERE lower(email) = ?
+                    """,
+                    (email,),
+                )
+
+        nu = _fetchone(cur)
+        if not nu:
+            conn.rollback()
+            return False
+
+        if has_bonus_flag:
+            new_user_id, existing_referred_by, already_applied = nu[0], nu[1], bool(nu[2])
+            if already_applied:
+                conn.commit()
+                return True
+        else:
+            new_user_id, existing_referred_by = nu[0], nu[1]
+
+        # 2) Lock / fetch referrer by referral_code
+        if _is_postgres():
+            db_execute(
+                cur,
+                """
+                SELECT id, COALESCE(referrals_count, 0)
+                FROM users
+                WHERE referral_code = ?
+                FOR UPDATE
+                """,
+                (code,),
+            )
+        else:
+            db_execute(
+                cur,
+                """
+                SELECT id, COALESCE(referrals_count, 0)
+                FROM users
+                WHERE referral_code = ?
+                """,
+                (code,),
+            )
+
+        ref = _fetchone(cur)
+        if not ref:
+            conn.rollback()
+            return False
+
+        ref_id, ref_cnt = int(ref[0]), int(ref[1] or 0)
+
+        # 3) Cap enforcement
+        if ref_cnt >= REFERRAL_CAP:
+            # Still mark applied so we don't reprocess forever (if possible)
+            if has_bonus_flag:
+                if _is_postgres():
+                    db_execute(
+                        cur,
+                        """
+                        UPDATE users
+                        SET referral_bonus_applied = TRUE,
+                            referred_by = COALESCE(NULLIF(referred_by, ''), ?)
+                        WHERE id = ?
+                        """,
+                        (code, new_user_id),
+                    )
+                else:
+                    db_execute(
+                        cur,
+                        """
+                        UPDATE users
+                        SET referral_bonus_applied = 1,
+                            referred_by = COALESCE(NULLIF(referred_by, ''), ?)
+                        WHERE id = ?
+                        """,
+                        (code, new_user_id),
+                    )
+            else:
+                db_execute(
+                    cur,
+                    """
+                    UPDATE users
+                    SET referred_by = COALESCE(NULLIF(referred_by, ''), ?)
+                    WHERE id = ?
+                    """,
+                    (code, new_user_id),
+                )
+            conn.commit()
+            return False
+
+        # 4) Pay referrer (+ credits if columns exist) and increment referrals_count
+        if has_cv_credits and has_ai_credits:
+            db_execute(
+                cur,
+                """
+                UPDATE users
+                SET cv_credits = COALESCE(cv_credits, 0) + ?,
+                    ai_credits = COALESCE(ai_credits, 0) + ?,
+                    referrals_count = COALESCE(referrals_count, 0) + 1
+                WHERE id = ?
+                """,
+                (BONUS_CV, BONUS_AI, ref_id),
+            )
+        else:
+            # At least track referrals_count even if legacy credit columns are gone
+            db_execute(
+                cur,
+                """
+                UPDATE users
+                SET referrals_count = COALESCE(referrals_count, 0) + 1
+                WHERE id = ?
+                """,
+                (ref_id,),
+            )
+
+        # 5) Mark new user as processed + store referred_by
+        if has_bonus_flag:
+            if _is_postgres():
+                db_execute(
+                    cur,
+                    """
+                    UPDATE users
+                    SET referral_bonus_applied = TRUE,
+                        referred_by = COALESCE(NULLIF(referred_by, ''), ?)
+                    WHERE id = ?
+                    """,
+                    (code, new_user_id),
+                )
+            else:
+                db_execute(
+                    cur,
+                    """
+                    UPDATE users
+                    SET referral_bonus_applied = 1,
+                        referred_by = COALESCE(NULLIF(referred_by, ''), ?)
+                    WHERE id = ?
+                    """,
+                    (code, new_user_id),
+                )
+        else:
+            db_execute(
+                cur,
+                """
+                UPDATE users
+                SET referred_by = COALESCE(NULLIF(referred_by, ''), ?)
+                WHERE id = ?
+                """,
+                (code, new_user_id),
+            )
+
+        conn.commit()
+        return True
+
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print("apply_referral_bonus error:", repr(e))
+        return False
+    finally:
+        conn.close()
+
 
 # -------------------------
 # Row mapper
