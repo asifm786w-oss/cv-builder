@@ -481,13 +481,14 @@ def mark_policies_accepted(email: str) -> None:
         cur.execute(
             """
             UPDATE users
-            SET accepted_policies = TRUE,
+            SET accepted_policies = 1,
                 accepted_policies_at = NOW()
-            WHERE LOWER(email) = LOWER(%s)
+            WHERE LOWER(email)=LOWER(%s)
             """,
             (email_n,),
         )
         conn.commit()
+
 
 
 def has_accepted_policies(email: str) -> bool:
@@ -497,14 +498,21 @@ def has_accepted_policies(email: str) -> bool:
 
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT COALESCE(accepted_policies, FALSE) FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1",
+            """
+            SELECT COALESCE(accepted_policies, 0)
+            FROM users
+            WHERE LOWER(email)=LOWER(%s)
+            LIMIT 1
+            """,
             (email_n,),
         )
         row = cur.fetchone()
-        return bool(row[0]) if row else False
 
+    if not row:
+        return False
 
-
+    # accepted_policies is int-like (0/1)
+    return int(row[0] or 0) == 1
 
 
 def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
@@ -2118,7 +2126,69 @@ def auth_ui():
             else:
                 st.success("Account created. Please sign in.")
 
+    # ---- FORGOT PASSWORD TAB ----
+    with tab_forgot:
+        st.write("If you've forgotten your password, you can reset it here.")
 
+        st.subheader("1. Request a reset link")
+        fp_email = st.text_input("Email used for your account", key="auth_fp_email")
+
+        if st.button("Send reset link", key="auth_btn_send_reset"):
+            if not fp_email:
+                st.error("Please enter your email.")
+            else:
+                try:
+                    # ---- DEBUG START ----
+                    print("\n=== RESET EMAIL REQUESTED ===")
+                    print("fp_email:", fp_email)
+
+                    resend_key = os.getenv("RESEND_API_KEY", "")
+                    from_email = os.getenv("FROM_EMAIL", "")
+                    app_url = os.getenv("APP_URL", "")
+
+                    print("RESEND_API_KEY present:", bool(resend_key))
+                    print("RESEND_API_KEY length:", len(resend_key))
+                    print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
+                    print("FROM_EMAIL present:", bool(from_email))
+                    print("APP_URL present:", bool(app_url))
+                    # ---- DEBUG END ----
+
+                    token = create_password_reset_token(fp_email)
+                    print("token created:", bool(token))
+
+                    if token:
+                        send_password_reset_email(fp_email, token)
+                        print("send_password_reset_email() finished without raising")
+
+                    st.success("If this email is registered, a reset link has been sent.")
+
+                except Exception as e:
+                    print("=== RESET EMAIL ERROR ===")
+                    traceback.print_exc()
+                    st.error(f"Error while sending reset email: {e}")
+
+        st.markdown("---")
+        st.subheader("2. Set a new password using your reset token")
+
+        fp_token = st.text_input("Reset token (from the email)", key="auth_fp_token")
+        fp_new_pwd = st.text_input("New password", type="password", key="auth_fp_new_pwd")
+        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="auth_fp_new_pwd2")
+
+        if st.button("Set new password", key="auth_btn_do_reset"):
+            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
+                st.error("Please fill in all fields.")
+            elif fp_new_pwd != fp_new_pwd2:
+                st.error("Passwords do not match.")
+            else:
+                ok = reset_password_with_token(fp_token, fp_new_pwd)
+                if ok:
+                    st.success(
+                        "Password reset successfully. You can now sign in with your new password."
+                    )
+                else:
+                    st.error(
+                        "Invalid or expired reset token. Please request a new reset link."
+                    )    
 # =========================
 # POLICY PAGE VIEW
 # =========================
