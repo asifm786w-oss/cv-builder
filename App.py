@@ -162,11 +162,27 @@ def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
 
 
+import psycopg2.extras
+
 def get_user_row_by_id(user_id: int) -> dict | None:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM users WHERE id = %s LIMIT 1", (user_id,))
-        row = cur.fetchone()
-        return dict(row) if row else None
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM users WHERE id = %s LIMIT 1", (user_id,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
+
+def get_user_by_email(email: str) -> dict | None:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
+            row = cur.fetchone()
+            return dict(row) if row else None
+
 
 def get_db_connection():
     dsn = os.environ.get("DATABASE_URL")
@@ -179,13 +195,6 @@ def get_db_connection():
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
 
-def get_user_by_email(email: str):
-    email = (email or "").strip().lower()
-    if not email:
-        return None
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
-        return cur.fetchone()
 
 def get_conn():
     return get_db_connection()
