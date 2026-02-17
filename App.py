@@ -2082,7 +2082,7 @@ if show_policy_page():
 
 
 # =========================
-# FORM SNAPSHOT (policies nav)
+# FORM SNAPSHOT / RESTORE
 # =========================
 
 FORM_KEYS_TO_PRESERVE = [
@@ -2111,17 +2111,26 @@ def snapshot_form_state() -> None:
             snap[k] = st.session_state.get(k)
     st.session_state["_form_snapshot"] = snap
 
+
 def restore_form_state() -> None:
     snap = st.session_state.get("_form_snapshot") or {}
-    if not isinstance(snap, dict):
+    if not isinstance(snap, dict) or not snap:
         return
+
+    # IMPORTANT: only restore keys that currently are missing/empty
+    # so we don't overwrite new edits.
     for k, v in snap.items():
-        # only restore if key missing/empty, don't clobber new edits
         if k not in st.session_state or st.session_state.get(k) in (None, ""):
             st.session_state[k] = v
 
 
 
+# =========================
+# RESTORE SNAPSHOT ON RETURN
+# =========================
+if st.session_state.get("_just_returned_from_policy"):
+    restore_form_state()
+    st.session_state["_just_returned_from_policy"] = False
 
 
 
@@ -4368,13 +4377,6 @@ if generate_clicked:
     except Exception as e:
         st.error(f"CV generation failed: {e}")
         st.stop()
-
-
-
-
-
-
-
 
 
 # -------------------------
