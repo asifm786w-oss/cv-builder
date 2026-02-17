@@ -2322,14 +2322,17 @@ def auth_ui():
             if user:
                 st.session_state["user"] = user
 
-                # set from DB truth (user row returned by authenticate_user)
-                st.session_state["accepted_policies"] = bool(user.get("accepted_policies"))
+                # set from DB truth
+                st.session_state["accepted_policies"] = bool(
+                    user.get("accepted_policies")
+                )
                 st.session_state["chk_policy_agree"] = False
                 st.session_state["policy_view"] = None
 
-
                 st.session_state["auth_modal_open"] = False
-                st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
+                st.success(
+                    f"Welcome back, {user.get('full_name') or user['email']}!"
+                )
                 st.rerun()
             else:
                 st.error("Invalid email or password.")
@@ -2338,8 +2341,12 @@ def auth_ui():
     with tab_register:
         reg_name = st.text_input("Full name", key="auth_reg_name")
         reg_email = st.text_input("Email", key="auth_reg_email")
-        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
-        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
+        reg_password = st.text_input(
+            "Password", type="password", key="auth_reg_password"
+        )
+        reg_password2 = st.text_input(
+            "Confirm password", type="password", key="auth_reg_password2"
+        )
 
         reg_referral_code = st.text_input(
             "Referral code (optional)",
@@ -2358,13 +2365,16 @@ def auth_ui():
 
             reg_email_n = normalize_email(reg_email)
             if not is_valid_email(reg_email_n):
-                st.error("Please enter a valid email address (e.g. name@example.com).")
+                st.error(
+                    "Please enter a valid email address (e.g. name@example.com)."
+                )
                 st.stop()
 
             referral_code = None
-
             if reg_referral_code.strip():
-                ref_user = get_user_by_referral_code(reg_referral_code.strip())
+                ref_user = get_user_by_referral_code(
+                    reg_referral_code.strip()
+                )
                 if not ref_user:
                     st.error("That referral code is not valid.")
                     st.stop()
@@ -2381,14 +2391,26 @@ def auth_ui():
                 st.error("That email is already registered.")
                 st.stop()
 
-            # ✅ Apply referral bonus AFTER user row exists, BEFORE login (ledger-based)
+            # 🔑 NEW: grant starter credits (ledger-based, idempotent)
+            new_user = get_user_by_email(reg_email_n)
+            if new_user:
+                grant_starter_credits(new_user["id"])
+
+            # ✅ Apply referral bonus AFTER user exists
             if referral_code:
                 try:
                     applied = apply_referral_bonus(
                         new_user_email=reg_email_n,
                         referral_code=referral_code,
                     )
-                    print("apply_referral_bonus:", applied, "new_user:", reg_email_n, "code:", referral_code)
+                    print(
+                        "apply_referral_bonus:",
+                        applied,
+                        "new_user:",
+                        reg_email_n,
+                        "code:",
+                        referral_code,
+                    )
                 except Exception as e:
                     print("apply_referral_bonus error:", repr(e))
 
@@ -2396,7 +2418,7 @@ def auth_ui():
             if user:
                 st.session_state["user"] = user
 
-                # ✅ FORCE consent gate for this user
+                # FORCE consent gate
                 st.session_state["accepted_policies"] = False
                 st.session_state["chk_policy_agree"] = False
                 st.session_state["policy_view"] = None
@@ -2405,14 +2427,6 @@ def auth_ui():
                 st.rerun()
             else:
                 st.success("Account created. Please sign in.")
-                
-				
-               # 🔑 NEW: grant starter credits
-               new_user = get_user_by_email(reg_email_n)
-               if new_user:
-                   grant_starter_credits(new_user["id"])
-
-
 
     # ---- FORGOT PASSWORD TAB ----
     with tab_forgot:
