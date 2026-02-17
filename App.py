@@ -162,91 +162,54 @@ def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
 
 
-import psycopg2.extras
-
-def get_user_row_by_id(user_id: int) -> dict | None:
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM users WHERE id = %s LIMIT 1", (user_id,))
-            row = cur.fetchone()
-            return dict(row) if row else None
-
-
 def get_user_by_email(email: str) -> dict | None:
     email = (email or "").strip().lower()
     if not email:
         return None
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1",
+            (email,),
+        )
+        return cur.fetchone()
 
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
-            row = cur.fetchone()
-            return dict(row) if row else None
 
+def get_user_row_by_id(user_id: int) -> dict | None:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT * FROM users WHERE id = %s LIMIT 1", (user_id,))
+        return cur.fetchone()
+
+
+
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 def get_db_connection():
-    dsn = os.environ.get("DATABASE_URL")
-    if not dsn:
-        raise RuntimeError("DATABASE_URL is not set")
-
     return psycopg2.connect(
-        dsn,
+        DATABASE_URL,
         sslmode="require",
         cursor_factory=psycopg2.extras.RealDictCursor,
     )
-
 
 def get_conn():
     return get_db_connection()
 
 def refresh_session_user_from_db() -> None:
-    """
-    Refresh st.session_state['user'] from DB.
-    Priority: user.id -> email fallback.
-    Preserves session-only keys like role/referral_code/etc.
-    """
     u = st.session_state.get("user") or {}
-
-    # session-only keys you don't want overwritten by DB row
-    keep_keys = (
-        "role",
-        "referral_code",
-        "referrals_count",
-        "starter_credits_granted",
-        "referral_bonus_applied",
-    )
-
     uid = u.get("id")
-    email = (u.get("email") or "").strip().lower()
+    if not uid:
+        return
 
-    db_u = None
-
-    # 1) Prefer by id
-    if uid:
-        try:
-            db_u = get_user_row_by_id(int(uid))  # should return dict-like row
-        except Exception:
-            db_u = None
-
-    # 2) Fallback by email (covers "id missing in session" cases)
-    if not db_u and email:
-        db_u = get_user_by_email(email)  # should return dict-like row
-
+    db_u = get_user_row_by_id(int(uid))
     if not db_u:
         return
 
-    # Ensure plain dict
-    db_u = dict(db_u)
-
-    # Normalize plan
-    db_u["plan"] = (db_u.get("plan") or "free").strip().lower()
-
-    # Preserve session-only keys
-    for k in keep_keys:
+    # preserve session-only keys
+    for k in ("role",):
         if k in u and k not in db_u:
             db_u[k] = u[k]
 
-    st.session_state["user"] = db_u
+    st.session_state["user"] = dict(db_u)
+
 
 
 
