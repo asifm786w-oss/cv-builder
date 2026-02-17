@@ -518,6 +518,19 @@ def migrate_user_credits_to_ledger_once(email: str) -> None:
 
         conn.commit()
 
+# ---- session state defaults (MUST be early) ----
+DEFAULT_SESSION_KEYS = {
+    "user": None,
+    "accepted_policies": False,
+    "policy_view": None,
+    "chk_policy_agree": False,
+    "_form_snapshot": {},
+    "_just_returned_from_policy": False,
+}
+
+for k, v in DEFAULT_SESSION_KEYS.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 
 
@@ -1993,24 +2006,17 @@ FORM_KEYS_TO_PRESERVE = [
     "template_label",
 ]
 
-def snapshot_form_state() -> None:
-    snap = {}
-    for k in FORM_KEYS_TO_PRESERVE:
-        if k in st.session_state:
-            snap[k] = st.session_state.get(k)
-    st.session_state["_form_snapshot"] = snap
+def snapshot_form_state():
+    st.session_state["_form_snapshot"] = {
+        k: v for k, v in st.session_state.items()
+        if not k.startswith("_")
+    }
 
-
-def restore_form_state() -> None:
-    snap = st.session_state.get("_form_snapshot") or {}
-    if not isinstance(snap, dict) or not snap:
-        return
-
-    # IMPORTANT: only restore keys that currently are missing/empty
-    # so we don't overwrite new edits.
+def restore_form_state():
+    snap = st.session_state.get("_form_snapshot", {})
     for k, v in snap.items():
-        if k not in st.session_state or st.session_state.get(k) in (None, ""):
-            st.session_state[k] = v
+        st.session_state[k] = v
+
 
 
 
@@ -2038,9 +2044,12 @@ def show_consent_gate() -> None:
     # Always re-check DB as source of truth
     try:
         accepted_in_db = has_accepted_policies(email)  # already returns bool
-    except Exception as e:
-        st.error(f"Policy check failed. Please refresh and try again. ({repr(e)})")
+    except Exception:
+        import traceback
+        st.error("Policy check failed. See details below.")
+        st.code(traceback.format_exc())
         st.stop()
+
 
     # Keep session in sync (prevents weird skips)
     st.session_state["accepted_policies"] = bool(accepted_in_db)
