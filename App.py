@@ -162,6 +162,9 @@ def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
 
 
+
+
+
 def get_user_by_email(email: str) -> dict | None:
     email = (email or "").strip().lower()
     if not email:
@@ -469,23 +472,36 @@ def has_accepted_policies(email: str) -> bool:
             return row.get("accepted_policies_at") is not None
 
 
-def mark_policies_accepted(user_id: int) -> bool:
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE users
-                SET accepted_policies = TRUE,
-                    accepted_policies_at = NOW()
-                WHERE id = %s
-                """,
-                (user_id,),
-            )
-            return True
-    except Exception as e:
-        print("mark_policies_accepted error:", e)
+def mark_policies_accepted(email: str) -> None:
+    email_n = (email or "").strip().lower()
+    if not email_n:
+        raise ValueError("Missing email")
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE users
+            SET accepted_policies = TRUE,
+                accepted_policies_at = NOW()
+            WHERE LOWER(email) = LOWER(%s)
+            """,
+            (email_n,),
+        )
+        conn.commit()
+
+
+def has_accepted_policies(email: str) -> bool:
+    email_n = (email or "").strip().lower()
+    if not email_n:
         return False
 
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(accepted_policies, FALSE) FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1",
+            (email_n,),
+        )
+        row = cur.fetchone()
+        return bool(row[0]) if row else False
 
 
 
@@ -2113,8 +2129,13 @@ verify_postgres_connection()
 
 st.session_state.setdefault("user", None)
 st.session_state.setdefault("accepted_policies", False)
-st.session_state.setdefault("policy_view", None)  # None | cookies | privacy | terms | accessibility
+st.session_state.setdefault("policy_view", None)
 st.session_state.setdefault("guest_started_builder", False)
+
+# ✅ If we are viewing a policy page, render ONLY that and stop
+if show_policy_page():
+    st.stop()
+
 
 
 
@@ -2131,6 +2152,38 @@ def _read_policy_file(rel_path: str) -> str:
     except Exception:
         pass
     return ""
+
+def snapshot_form_state() -> None:
+    keys_to_save = [
+        "full_name", "title", "email", "phone", "location", "summary",
+        "template_label",
+        "skills", "experiences", "education_items", "references",
+        "job_description", "_last_jd_fp",
+        "job_summary_ai", "cover_letter", "cover_letter_box",
+        "selected_job",
+        "adzuna_keywords", "adzuna_location", "adzuna_results",
+        "cv_generations", "summary_uses", "cover_uses",
+        "bullets_uses", "job_summary_uses", "upload_parses",
+        "_last_cv_fingerprint", "_cv_parsed",
+        "_cv_autofill_enabled", "_just_autofilled_from_cv",
+        "_skip_restore_personal_once",
+    ]
+
+    snap = {}
+    for k in keys_to_save:
+        if k in st.session_state:
+            snap[k] = st.session_state.get(k)
+
+    st.session_state["_form_snapshot"] = snap
+
+
+def restore_form_state() -> None:
+    snap = st.session_state.get("_form_snapshot") or {}
+    for k, v in snap.items():
+        # only fill missing keys; avoids fighting Streamlit widgets
+        if k not in st.session_state:
+            st.session_state[k] = v
+
 
 # =========================
 # POLICY PAGE VIEW
@@ -3022,82 +3075,6 @@ Please ensure your details are reviewed before downloading.
 st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
-
-# ============================================================
-# POLICY SNAPSHOT / RESTORE (prevents fields vanishing on policy nav)
-# ============================================================
-
-FORM_KEYS_TO_SNAPSHOT = [
-    # Section 1
-    "full_name", "title", "email", "phone", "location", "summary",
-
-    # Skills / Experience / Education
-    "skills_text", "num_experiences", "parsed_num_experiences", "num_education",
-
-    # Target Job / Outputs
-    "job_description", "job_summary_ai", "cover_letter", "cover_letter_box",
-
-    # Any other things you KNOW you want preserved:
-    "template_label", "references",
-]
-
-def snapshot_form_state():
-    """
-    Save a snapshot of form inputs so navigating to policies doesn't wipe them.
-    Includes both legacy keys + cv_* keys (safe).
-    """
-    keys_to_save = [
-        # --- Section 1 (current widgets) ---
-        "full_name",
-        "title",
-        "email",
-        "phone",
-        "location",
-        "summary",
-
-        # --- cv_* mirror keys (if you use them anywhere) ---
-        "cv_full_name",
-        "cv_title",
-        "cv_email",
-        "cv_phone",
-        "cv_location",
-        "cv_summary",
-
-        # --- Anything else you KNOW should persist ---
-        "template_label",
-        "job_description",
-        "adzuna_keywords",
-        "adzuna_location",
-        "selected_job",
-        "adzuna_results",
-        "cover_letter",
-        "cover_letter_box",
-        "job_summary_ai",
-        "education_items",
-        # add more keys if needed
-    ]
-
-    snap = {}
-    for k in keys_to_save:
-        if k in st.session_state:
-            snap[k] = st.session_state[k]
-
-    st.session_state["_form_snapshot"] = snap
-    st.session_state["_has_form_snapshot"] = True
-
-def restore_form_state() -> None:
-    snap = st.session_state.get("_form_snapshot") or {}
-    for k, v in snap.items():
-        # Only restore if key is missing OR currently empty/None
-        cur = st.session_state.get(k, None)
-        if cur is None or (isinstance(cur, str) and not cur.strip()):
-            st.session_state[k] = v
-
-
-
-# ============================================================
-# CV Upload + AI Autofill (ONE block only)
-# ============================================================
 
 # ============================================================
 # CV Upload + AI Autofill (ONE block only)
