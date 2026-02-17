@@ -472,6 +472,31 @@ def has_accepted_policies(email: str) -> bool:
             return row.get("accepted_policies_at") is not None
 
 
+def has_accepted_policies(email: str) -> bool:
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT COALESCE(accepted_policies, FALSE)
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+            """,
+            (email,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+
+        # Works whether cursor returns tuple or dict-like row
+        if isinstance(row, dict):
+            return bool(list(row.values())[0])
+        return bool(row[0])
+
+
 def mark_policies_accepted(email: str) -> None:
     email = (email or "").strip().lower()
     if not email:
@@ -483,35 +508,12 @@ def mark_policies_accepted(email: str) -> None:
             UPDATE users
             SET accepted_policies = TRUE,
                 accepted_policies_at = NOW()
-            WHERE LOWER(email)=LOWER(%s)
+            WHERE LOWER(email) = LOWER(%s)
             """,
             (email,),
         )
         conn.commit()
 
-
-
-
-
-def has_accepted_policies(email: str) -> bool:
-    email = (email or "").strip().lower()
-    if not email:
-        return False
-
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT COALESCE(accepted_policies, FALSE)
-            FROM users
-            WHERE LOWER(email)=LOWER(%s)
-            LIMIT 1
-            """,
-            (email,),
-        )
-        row = cur.fetchone()
-        if not row:
-            return False
-        return bool(row[0])
 
 
 
@@ -2141,13 +2143,13 @@ def show_consent_gate() -> None:
 
     # Always re-check DB as source of truth
     try:
-        accepted_in_db = bool(has_accepted_policies(email))
+        accepted_in_db = has_accepted_policies(email)  # already returns bool
     except Exception as e:
-        st.error(f"Policy check failed. Please refresh and try again. ({e})")
+        st.error(f"Policy check failed. Please refresh and try again. ({repr(e)})")
         st.stop()
 
     # Keep session in sync (prevents weird skips)
-    st.session_state["accepted_policies"] = accepted_in_db
+    st.session_state["accepted_policies"] = bool(accepted_in_db)
 
     if accepted_in_db:
         return
@@ -2204,21 +2206,22 @@ def show_consent_gate() -> None:
         try:
             mark_policies_accepted(email)
         except Exception as e:
-            st.error(f"Could not save your acceptance. Please try again. ({e})")
+            st.error(f"Could not save your acceptance. Please try again. ({repr(e)})")
             st.stop()
 
         # Re-check DB after write (authoritative)
         try:
-            st.session_state["accepted_policies"] = bool(has_accepted_policies(email))
-        except Exception:
+            st.session_state["accepted_policies"] = has_accepted_policies(email)
+        except Exception as e:
             # If DB read fails after write, still block to be safe
-            st.error("Saved acceptance, but could not verify. Please refresh.")
+            st.error(f"Saved acceptance, but could not verify. Please refresh. ({repr(e)})")
             st.stop()
 
         st.rerun()
 
     st.info("Please accept to continue using the site.")
     st.stop()
+
 
 
 
