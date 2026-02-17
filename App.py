@@ -186,12 +186,7 @@ def get_user_row_by_id(user_id: int) -> dict | None:
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-def get_db_connection():
-    return psycopg2.connect(
-        DATABASE_URL,
-        sslmode="require",
-        cursor_factory=psycopg2.extras.RealDictCursor,
-    )
+
 
 def get_conn():
     return get_db_connection()
@@ -331,37 +326,28 @@ if not APP_URL:
 # POLICIES: DB HELPERS (psycopg2) - accepted_policies is INTEGER 0/1
 # =========================
 
+
+from db import fetchone, execute
+
+
 def has_accepted_policies(email: str) -> bool:
     email = (email or "").strip().lower()
     if not email:
         return False
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT accepted_policies, accepted_policies_at
-                FROM users
-                WHERE LOWER(email) = LOWER(%s)
-                LIMIT 1
-                """,
-                (email,),
-            )
-            row = cur.fetchone()
-
+    row = fetchone(
+        """
+        SELECT accepted_policies, accepted_policies_at
+        FROM users
+        WHERE LOWER(email) = LOWER(%s)
+        LIMIT 1
+        """,
+        (email,),
+    )
     if not row:
         return False
 
-    accepted = row.get("accepted_policies")
-    accepted_at = row.get("accepted_policies_at")
-
-    # accepted_policies is BOOLEAN in Postgres
-    if isinstance(accepted, bool):
-        accepted_flag = accepted
-    else:
-        accepted_flag = False
-
-    return bool(accepted_flag or accepted_at)
+    return bool(row.get("accepted_policies") or row.get("accepted_policies_at"))
 
 
 def mark_policies_accepted(email: str) -> None:
@@ -369,18 +355,16 @@ def mark_policies_accepted(email: str) -> None:
     if not email:
         return
 
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE users
-                SET accepted_policies = TRUE,
-                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
-                WHERE LOWER(email) = LOWER(%s)
-                """,
-                (email,),
-            )
-        conn.commit()
+    execute(
+        """
+        UPDATE users
+        SET accepted_policies = TRUE,
+            accepted_policies_at = COALESCE(accepted_policies_at, NOW())
+        WHERE LOWER(email) = LOWER(%s)
+        """,
+        (email,),
+    )
+
 
 
 

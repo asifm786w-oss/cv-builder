@@ -936,41 +936,28 @@ def grant_starter_credits(user_id: int) -> bool:
 # -------------------------
 # Policy acceptance helpers
 # -------------------------
+
+from db import fetchone, execute
+
+
 def has_accepted_policies(email: str) -> bool:
     email = (email or "").strip().lower()
     if not email:
         return False
 
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        db_execute(
-            cur,
-            """
-            SELECT accepted_policies, accepted_policies_at
-            FROM users
-            WHERE LOWER(email) = LOWER(?)
-            LIMIT 1
-            """,
-            (email,),
-        )
-        row = _fetchone(cur)
-        if not row:
-            return False
+    row = fetchone(
+        """
+        SELECT accepted_policies, accepted_policies_at
+        FROM users
+        WHERE LOWER(email) = LOWER(%s)
+        LIMIT 1
+        """,
+        (email,),
+    )
+    if not row:
+        return False
 
-        accepted_policies, accepted_at = row
-
-        # accepted_policies can be: bool (pg), int (sqlite), or str
-        if isinstance(accepted_policies, bool):
-            accepted_flag = accepted_policies
-        elif accepted_policies is None:
-            accepted_flag = False
-        else:
-            accepted_flag = str(accepted_policies).strip().lower() in {"1", "true", "t", "yes", "y"}
-
-        return bool(accepted_flag or accepted_at)
-    finally:
-        conn.close()
+    return bool(row.get("accepted_policies") or row.get("accepted_policies_at"))
 
 
 def mark_policies_accepted(email: str) -> None:
@@ -978,37 +965,16 @@ def mark_policies_accepted(email: str) -> None:
     if not email:
         return
 
-    now_iso = datetime.now(timezone.utc).isoformat()
+    execute(
+        """
+        UPDATE users
+        SET accepted_policies = TRUE,
+            accepted_policies_at = COALESCE(accepted_policies_at, NOW())
+        WHERE LOWER(email) = LOWER(%s)
+        """,
+        (email,),
+    )
 
-    conn = get_conn()
-    cur = conn.cursor()
-    try:
-        if _is_postgres():
-            db_execute(
-                cur,
-                """
-                UPDATE users
-                SET accepted_policies = TRUE,
-                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
-                WHERE LOWER(email) = LOWER(?)
-                """,
-                (email,),
-            )
-        else:
-            db_execute(
-                cur,
-                """
-                UPDATE users
-                SET accepted_policies = 1,
-                    accepted_policies_at = COALESCE(accepted_policies_at, ?)
-                WHERE LOWER(email) = LOWER(?)
-                """,
-                (now_iso, email),
-            )
-
-        conn.commit()
-    finally:
-        conn.close()
 
 
 # -------------------------
