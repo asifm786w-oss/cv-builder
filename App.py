@@ -179,7 +179,115 @@ def get_user_row_by_id(user_id: int) -> dict | None:
         cur.execute("SELECT * FROM users WHERE id = %s LIMIT 1", (user_id,))
         return cur.fetchone()
 
+def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
+    """
+    Ledger-based referral bonus:
+    - Grants ONLY the referrer (+BONUS_PER_REFERRAL_CV, +BONUS_PER_REFERRAL_AI) into credit_grants
+    - Marks new user referral_bonus_applied=TRUE so it runs once
+    - Stores referred_by on the new user
+    - Optionally increments referrals_count (cosmetic)
+    Requires UNIQUE(source) on credit_grants.source
+    """
+    email = (new_user_email or "").strip().lower()
+    code = (referral_code or "").strip().upper()
 
+    if not email or not code:
+        return False
+
+    conn = get_conn()  # psycopg2 connection
+
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                # 1) Lock NEW USER row
+                cur.execute(
+                    """
+                    SELECT id, COALESCE(referral_bonus_applied, FALSE) AS applied
+                    FROM users
+                    WHERE LOWER(email) = %s
+                    FOR UPDATE
+                    """,
+                    (email,),
+                )
+                nu = cur.fetchone()
+                if not nu:
+                    return False
+
+                new_user_id, already_applied = int(nu[0]), bool(nu[1])
+                if already_applied:
+                    return True
+
+                # 2) Lock REFERRER row by referral_code
+                cur.execute(
+                    """
+                    SELECT id, COALESCE(referrals_count, 0) AS cnt
+                    FROM users
+                    WHERE referral_code = %s
+                    FOR UPDATE
+                    """,
+                    (code,),
+                )
+                ref = cur.fetchone()
+                if not ref:
+                    return False
+
+                ref_id, ref_cnt = int(ref[0]), int(ref[1] or 0)
+
+                # 3) Cap enforcement (optional)
+                if ref_cnt >= REFERRAL_CAP:
+                    # Mark as processed so you don't keep reprocessing
+                    cur.execute(
+                        """
+                        UPDATE users
+                        SET referral_bonus_applied = TRUE,
+                            referred_by = COALESCE(referred_by, %s)
+                        WHERE id = %s
+                        """,
+                        (code, new_user_id),
+                    )
+                    return False
+
+                # 4) PAY REFERRER via LEDGER (idempotent by unique source)
+                source = f"referral_bonus:{new_user_id}"
+                cur.execute(
+                    """
+                    INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+                    VALUES (%s, %s, %s, %s, NULL)
+                    ON CONFLICT (source) DO NOTHING
+                    """,
+                    (ref_id, source, BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI),
+                )
+
+                # If you want referrals_count to remain accurate/cosmetic, update it only
+                # when the ledger insert actually happened.
+                inserted = (cur.rowcount == 1)
+
+                if inserted:
+                    cur.execute(
+                        """
+                        UPDATE users
+                        SET referrals_count = COALESCE(referrals_count, 0) + 1
+                        WHERE id = %s
+                        """,
+                        (ref_id,),
+                    )
+
+                # 5) Mark referral processed on NEW USER
+                cur.execute(
+                    """
+                    UPDATE users
+                    SET referral_bonus_applied = TRUE,
+                        referred_by = COALESCE(referred_by, %s)
+                    WHERE id = %s
+                    """,
+                    (code, new_user_id),
+                )
+
+        return True
+
+    except Exception as e:
+        print("apply_referral_bonus error:", e)
+        return False
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
@@ -309,100 +417,8 @@ def try_spend(user_id: int, source: str, cv: int = 0, ai: int = 0) -> bool:
 
 
 
-def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
-    """
-    Pays ONLY the referrer (+5 CV, +5 AI) when a new user signs up with a referral code.
-    Marks the new user referral_bonus_applied=TRUE to prevent double pay.
-    Uses your actual DB columns: cv_credits / ai_credits / referrals_count.
-    psycopg2 version.
-    """
-    email = (new_user_email or "").strip().lower()
-    code = (referral_code or "").strip().upper()  # codes usually stored uppercase
 
-    if not email or not code:
-        return False
 
-    conn = get_conn()  # <-- MUST return a psycopg2 connection
-
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                # 1) Lock NEW USER row
-                cur.execute(
-                    """
-                    SELECT id, COALESCE(referral_bonus_applied, FALSE) AS applied
-                    FROM users
-                    WHERE lower(email) = %s
-                    FOR UPDATE
-                    """,
-                    (email,),
-                )
-                nu = cur.fetchone()
-                if not nu:
-                    return False
-
-                new_user_id, already_applied = nu[0], bool(nu[1])
-                if already_applied:
-                    return True
-
-                # 2) Lock REFERRER row by referral_code
-                cur.execute(
-                    """
-                    SELECT id, COALESCE(referrals_count, 0) AS cnt
-                    FROM users
-                    WHERE referral_code = %s
-                    FOR UPDATE
-                    """,
-                    (code,),
-                )
-                ref = cur.fetchone()
-                if not ref:
-                    return False
-
-                ref_id, ref_cnt = ref[0], int(ref[1] or 0)
-
-                # 3) Cap enforcement
-                if ref_cnt >= REFERRAL_CAP:
-                    # Still mark as applied so you don't keep reprocessing
-                    cur.execute(
-                        """
-                        UPDATE users
-                        SET referral_bonus_applied = TRUE,
-                            referred_by = COALESCE(referred_by, %s)
-                        WHERE id = %s
-                        """,
-                        (code, new_user_id),
-                    )
-                    return False
-
-                # 4) Pay ONLY the referrer (YOUR REAL CREDIT COLUMNS)
-                cur.execute(
-                    """
-                    UPDATE users
-                    SET cv_credits = COALESCE(cv_credits, 0) + %s,
-                        ai_credits = COALESCE(ai_credits, 0) + %s,
-                        referrals_count = COALESCE(referrals_count, 0) + 1
-                    WHERE id = %s
-                    """,
-                    (BONUS_PER_REFERRAL_CV, BONUS_PER_REFERRAL_AI, ref_id),
-                )
-
-                # 5) Mark referral processed on NEW USER
-                cur.execute(
-                    """
-                    UPDATE users
-                    SET referral_bonus_applied = TRUE,
-                        referred_by = COALESCE(referred_by, %s)
-                    WHERE id = %s
-                    """,
-                    (code, new_user_id),
-                )
-
-        return True
-
-    except Exception as e:
-        print("apply_referral_bonus error:", e)
-        return False
 
 
 
@@ -2023,12 +2039,8 @@ def auth_ui():
     with tab_register:
         reg_name = st.text_input("Full name", key="auth_reg_name")
         reg_email = st.text_input("Email", key="auth_reg_email")
-        reg_password = st.text_input(
-            "Password", type="password", key="auth_reg_password"
-        )
-        reg_password2 = st.text_input(
-            "Confirm password", type="password", key="auth_reg_password2"
-        )
+        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
+        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
 
         reg_referral_code = st.text_input(
             "Referral code (optional)",
@@ -2070,11 +2082,16 @@ def auth_ui():
                 st.error("That email is already registered.")
                 st.stop()
 
+            # ✅ Apply referral bonus AFTER user row exists, BEFORE login (ledger-based)
             if referral_code:
-                apply_referral_bonus(
-                    new_user_email=reg_email_n,
-                    referral_code=referral_code,
-                )
+                try:
+                    applied = apply_referral_bonus(
+                        new_user_email=reg_email_n,
+                        referral_code=referral_code,
+                    )
+                    print("apply_referral_bonus:", applied, "new_user:", reg_email_n, "code:", referral_code)
+                except Exception as e:
+                    print("apply_referral_bonus error:", repr(e))
 
             user = authenticate_user(reg_email_n, reg_password)
             if user:
@@ -2089,76 +2106,6 @@ def auth_ui():
                 st.rerun()
             else:
                 st.success("Account created. Please sign in.")
-
-    # ---- FORGOT PASSWORD TAB ----
-    with tab_forgot:
-        st.write("If you've forgotten your password, you can reset it here.")
-
-        st.subheader("1. Request a reset link")
-        fp_email = st.text_input("Email used for your account", key="auth_fp_email")
-
-        if st.button("Send reset link", key="auth_btn_send_reset"):
-            if not fp_email:
-                st.error("Please enter your email.")
-                st.stop()
-
-            fp_email_n = normalize_email(fp_email)
-            if not is_valid_email(fp_email_n):
-                st.error("Please enter a valid email address.")
-                st.stop()
-
-            try:
-                # ---- DEBUG START ----
-                print("\n=== RESET EMAIL REQUESTED ===")
-                print("fp_email:", fp_email_n)
-
-                resend_key = os.getenv("RESEND_API_KEY", "")
-                from_email = os.getenv("FROM_EMAIL", "")
-                app_url = os.getenv("APP_URL", "")
-
-                print("RESEND_API_KEY present:", bool(resend_key))
-                print("RESEND_API_KEY length:", len(resend_key))
-                print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
-                print("FROM_EMAIL present:", bool(from_email))
-                print("APP_URL present:", bool(app_url))
-                # ---- DEBUG END ----
-
-                token = create_password_reset_token(fp_email_n)
-                print("token created:", bool(token))
-
-                if token:
-                    send_password_reset_email(fp_email_n, token)
-                    print("send_password_reset_email() finished without raising")
-
-                st.success("If this email is registered, a reset link has been sent.")
-
-            except Exception as e:
-                print("=== RESET EMAIL ERROR ===")
-                traceback.print_exc()
-                st.error(f"Error while sending reset email: {e}")
-
-        st.markdown("---")
-        st.subheader("2. Set a new password using your reset token")
-
-        fp_token = st.text_input("Reset token (from the email)", key="auth_fp_token")
-        fp_new_pwd = st.text_input("New password", type="password", key="auth_fp_new_pwd")
-        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="auth_fp_new_pwd2")
-
-        if st.button("Set new password", key="auth_btn_do_reset"):
-            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
-                st.error("Please fill in all fields.")
-            elif fp_new_pwd != fp_new_pwd2:
-                st.error("Passwords do not match.")
-            else:
-                ok = reset_password_with_token(fp_token, fp_new_pwd)
-                if ok:
-                    st.success(
-                        "Password reset successfully. You can now sign in with your new password."
-                    )
-                else:
-                    st.error(
-                        "Invalid or expired reset token. Please request a new reset link."
-                    )
 
 
 
