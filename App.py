@@ -2292,7 +2292,7 @@ def auth_ui():
             # 🔑 NEW: grant starter credits (ledger-based, idempotent)
             new_user = get_user_by_email(reg_email_n)
             if new_user:
-                grant_starter_credits(new_user["id"])
+                grant_starter_credits(int(new_user["id"]))
 
             # ✅ Apply referral bonus AFTER user exists
             if referral_code:
