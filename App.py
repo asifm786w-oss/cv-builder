@@ -332,78 +332,55 @@ if not APP_URL:
 # =========================
 
 def has_accepted_policies(email: str) -> bool:
-    """
-    True if the user accepted policies.
-    Uses accepted_policies (0/1) first; falls back to accepted_policies_at.
-    Never throws for missing users.
-    """
     email = (email or "").strip().lower()
     if not email:
         return False
 
     with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
-                    COALESCE(accepted_policies, 0) AS accepted_policies,
-                    accepted_policies_at
+                SELECT accepted_policies, accepted_policies_at
                 FROM users
-                WHERE email = %s
+                WHERE LOWER(email) = LOWER(%s)
+                LIMIT 1
                 """,
                 (email,),
             )
             row = cur.fetchone()
-            if not row:
-                return False
 
-            # accepted_policies is stored as 0/1 integer
-            if int(row.get("accepted_policies") or 0) == 1:
-                return True
+    if not row:
+        return False
 
-            return row.get("accepted_policies_at") is not None
+    accepted = row.get("accepted_policies")
+    accepted_at = row.get("accepted_policies_at")
+
+    # accepted_policies is BOOLEAN in Postgres
+    if isinstance(accepted, bool):
+        accepted_flag = accepted
+    else:
+        accepted_flag = False
+
+    return bool(accepted_flag or accepted_at)
 
 
-def has_accepted_policies(email: str) -> bool:
+def mark_policies_accepted(email: str) -> None:
     email = (email or "").strip().lower()
     if not email:
-        return False
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT COALESCE(accepted_policies, FALSE)
-            FROM users
-            WHERE LOWER(email)=LOWER(%s)
-            LIMIT 1
-            """,
-            (email,),
-        )
-        row = cur.fetchone()
-        return bool(row[0]) if row else False
+        return
 
-
-        # Works whether cursor returns tuple or dict-like row
-        if isinstance(row, dict):
-            return bool(list(row.values())[0])
-        return bool(row[0])
-
-
-def has_accepted_policies(email: str) -> bool:
-    email = (email or "").strip().lower()
-    if not email:
-        return False
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT COALESCE(accepted_policies, FALSE)
-            FROM users
-            WHERE LOWER(email)=LOWER(%s)
-            LIMIT 1
-            """,
-            (email,),
-        )
-        row = cur.fetchone()
-        return bool(row[0]) if row else False
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE users
+                SET accepted_policies = TRUE,
+                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
+                WHERE LOWER(email) = LOWER(%s)
+                """,
+                (email,),
+            )
+        conn.commit()
 
 
 
