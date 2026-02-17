@@ -2119,72 +2119,6 @@ def auth_ui():
                 st.success("Account created. Please sign in.")
 
 
-
-
-# =========================
-# INIT (run once, early)
-# =========================
-init_db()
-verify_postgres_connection()
-
-st.session_state.setdefault("user", None)
-st.session_state.setdefault("accepted_policies", False)
-st.session_state.setdefault("policy_view", None)
-st.session_state.setdefault("guest_started_builder", False)
-
-# ✅ If we are viewing a policy page, render ONLY that and stop
-if show_policy_page():
-    st.stop()
-
-
-
-
-# =========================
-# POLICY FILE READER
-# =========================
-def _read_policy_file(rel_path: str) -> str:
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        fp = os.path.join(here, rel_path)
-        if os.path.exists(fp):
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
-    except Exception:
-        pass
-    return ""
-
-def snapshot_form_state() -> None:
-    keys_to_save = [
-        "full_name", "title", "email", "phone", "location", "summary",
-        "template_label",
-        "skills", "experiences", "education_items", "references",
-        "job_description", "_last_jd_fp",
-        "job_summary_ai", "cover_letter", "cover_letter_box",
-        "selected_job",
-        "adzuna_keywords", "adzuna_location", "adzuna_results",
-        "cv_generations", "summary_uses", "cover_uses",
-        "bullets_uses", "job_summary_uses", "upload_parses",
-        "_last_cv_fingerprint", "_cv_parsed",
-        "_cv_autofill_enabled", "_just_autofilled_from_cv",
-        "_skip_restore_personal_once",
-    ]
-
-    snap = {}
-    for k in keys_to_save:
-        if k in st.session_state:
-            snap[k] = st.session_state.get(k)
-
-    st.session_state["_form_snapshot"] = snap
-
-
-def restore_form_state() -> None:
-    snap = st.session_state.get("_form_snapshot") or {}
-    for k, v in snap.items():
-        # only fill missing keys; avoids fighting Streamlit widgets
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-
 # =========================
 # POLICY PAGE VIEW
 # =========================
@@ -2228,6 +2162,70 @@ def show_policy_page() -> bool:
         st.rerun()
 
     return True
+
+# =========================
+# POLICY FILE READER
+# =========================
+def _read_policy_file(rel_path: str) -> str:
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        fp = os.path.join(here, rel_path)
+        if os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+# =========================
+# INIT (run once, early)
+# =========================
+init_db()
+verify_postgres_connection()
+
+st.session_state.setdefault("user", None)
+st.session_state.setdefault("accepted_policies", False)
+st.session_state.setdefault("policy_view", None)
+st.session_state.setdefault("guest_started_builder", False)
+
+# ✅ If we are viewing a policy page, render ONLY that and stop
+if show_policy_page():
+    st.stop()
+
+
+def snapshot_form_state() -> None:
+    keys_to_save = [
+        "full_name", "title", "email", "phone", "location", "summary",
+        "template_label",
+        "skills", "experiences", "education_items", "references",
+        "job_description", "_last_jd_fp",
+        "job_summary_ai", "cover_letter", "cover_letter_box",
+        "selected_job",
+        "adzuna_keywords", "adzuna_location", "adzuna_results",
+        "cv_generations", "summary_uses", "cover_uses",
+        "bullets_uses", "job_summary_uses", "upload_parses",
+        "_last_cv_fingerprint", "_cv_parsed",
+        "_cv_autofill_enabled", "_just_autofilled_from_cv",
+        "_skip_restore_personal_once",
+    ]
+
+    snap = {}
+    for k in keys_to_save:
+        if k in st.session_state:
+            snap[k] = st.session_state.get(k)
+
+    st.session_state["_form_snapshot"] = snap
+
+
+def restore_form_state() -> None:
+    snap = st.session_state.get("_form_snapshot") or {}
+    for k, v in snap.items():
+        # only fill missing keys; avoids fighting Streamlit widgets
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+
 
 
 # =========================
