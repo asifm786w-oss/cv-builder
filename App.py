@@ -476,20 +476,19 @@ def has_accepted_policies(email: str) -> bool:
     email = (email or "").strip().lower()
     if not email:
         return False
-
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
             SELECT COALESCE(accepted_policies, FALSE)
             FROM users
-            WHERE LOWER(email) = LOWER(%s)
+            WHERE LOWER(email)=LOWER(%s)
             LIMIT 1
             """,
             (email,),
         )
         row = cur.fetchone()
-        if not row:
-            return False
+        return bool(row[0]) if row else False
+
 
         # Works whether cursor returns tuple or dict-like row
         if isinstance(row, dict):
@@ -497,24 +496,22 @@ def has_accepted_policies(email: str) -> bool:
         return bool(row[0])
 
 
-def mark_policies_accepted(email: str) -> None:
+def has_accepted_policies(email: str) -> bool:
     email = (email or "").strip().lower()
     if not email:
-        raise RuntimeError("missing email")
-
+        return False
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            UPDATE users
-            SET accepted_policies = TRUE,
-                accepted_policies_at = NOW()
-            WHERE LOWER(email) = LOWER(%s)
+            SELECT COALESCE(accepted_policies, FALSE)
+            FROM users
+            WHERE LOWER(email)=LOWER(%s)
+            LIMIT 1
             """,
             (email,),
         )
-        conn.commit()
-
-
+        row = cur.fetchone()
+        return bool(row[0]) if row else False
 
 
 
