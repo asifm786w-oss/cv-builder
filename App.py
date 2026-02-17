@@ -950,31 +950,27 @@ def get_user_credits(email: str) -> dict:
 
 
 
-def grant_starter_credits_once(user_id: int) -> None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            # Only grant once
-            cur.execute(
-                "SELECT COALESCE(starter_credits_granted, FALSE) FROM users WHERE id=%s",
-                (user_id,),
-            )
-            already = cur.fetchone()
-            if already and already[0]:
-                return
+def grant_starter_credits(user_id: int) -> None:
+    """
+    Grants starter credits once per user.
+    Safe due to UNIQUE(source).
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+            VALUES (%s, %s, %s, %s, NULL)
+            ON CONFLICT (source) DO NOTHING
+            """,
+            (
+                user_id,
+                f"starter_grant:{user_id}",
+                5,
+                5,
+            ),
+        )
+        conn.commit()
 
-            # Grant starter credits via ledger
-            cur.execute(
-                """
-                INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at, created_at)
-                VALUES (%s, 'starter', 5, 5, NULL, NOW())
-                """,
-                (user_id,),
-            )
-            cur.execute(
-                "UPDATE users SET starter_credits_granted=TRUE WHERE id=%s",
-                (user_id,),
-            )
-            conn.commit()
 
 from psycopg2.extras import RealDictCursor
 
@@ -2409,6 +2405,14 @@ def auth_ui():
                 st.rerun()
             else:
                 st.success("Account created. Please sign in.")
+                
+				
+               # 🔑 NEW: grant starter credits
+               new_user = get_user_by_email(reg_email_n)
+               if new_user:
+                   grant_starter_credits(new_user["id"])
+
+
 
     # ---- FORGOT PASSWORD TAB ----
     with tab_forgot:
