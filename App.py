@@ -2008,187 +2008,6 @@ def is_valid_email(email: str) -> bool:
     email = normalize_email(email)
     return bool(EMAIL_RE.match(email))
 
-
-# =========================
-# AUTH UI
-# =========================
-def auth_ui():
-    """Login / register / password reset UI."""
-    import os
-    import traceback
-    import streamlit as st
-
-    tab_login, tab_register, tab_forgot = st.tabs(
-        ["Sign in", "Create account", "Forgot password"]
-    )
-
-    # ---- LOGIN TAB ----
-    with tab_login:
-        login_email = st.text_input("Email", key="auth_login_email")
-        login_password = st.text_input(
-            "Password", type="password", key="auth_login_password"
-        )
-
-        if st.button("Sign in", key="auth_btn_login"):
-            if not login_email or not login_password:
-                st.error("Please enter both email and password.")
-                st.stop()
-
-            login_email_n = normalize_email(login_email)
-            if not is_valid_email(login_email_n):
-                st.error("Please enter a valid email address.")
-                st.stop()
-
-            user = authenticate_user(login_email_n, login_password)
-            if user:
-                st.session_state["user"] = user
-
-                # ✅ FORCE consent gate for this user
-                st.session_state["accepted_policies"] = False
-                st.session_state["chk_policy_agree"] = False
-                st.session_state["policy_view"] = None
-
-                st.session_state["auth_modal_open"] = False
-                st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
-                st.rerun()
-            else:
-                st.error("Invalid email or password.")
-
-    # ---- REGISTER TAB ----
-    with tab_register:
-        reg_name = st.text_input("Full name", key="auth_reg_name")
-        reg_email = st.text_input("Email", key="auth_reg_email")
-        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
-        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
-
-        reg_referral_code = st.text_input(
-            "Referral code (optional)",
-            key="auth_reg_referral_code",
-            help="If a friend invited you, paste their referral code here.",
-        )
-
-        if st.button("Create account", key="auth_btn_register"):
-            if not reg_email or not reg_password or not reg_password2:
-                st.error("Please fill in all required fields.")
-                st.stop()
-
-            if reg_password != reg_password2:
-                st.error("Passwords do not match.")
-                st.stop()
-
-            reg_email_n = normalize_email(reg_email)
-            if not is_valid_email(reg_email_n):
-                st.error("Please enter a valid email address (e.g. name@example.com).")
-                st.stop()
-
-            referral_code = None
-
-            if reg_referral_code.strip():
-                ref_user = get_user_by_referral_code(reg_referral_code.strip())
-                if not ref_user:
-                    st.error("That referral code is not valid.")
-                    st.stop()
-                referral_code = reg_referral_code.strip().upper()
-
-            ok = create_user(
-                email=reg_email_n,
-                password=reg_password,
-                full_name=reg_name,
-                referred_by=referral_code,
-            )
-
-            if not ok:
-                st.error("That email is already registered.")
-                st.stop()
-
-            # ✅ Apply referral bonus AFTER user row exists, BEFORE login (ledger-based)
-            if referral_code:
-                try:
-                    applied = apply_referral_bonus(
-                        new_user_email=reg_email_n,
-                        referral_code=referral_code,
-                    )
-                    print("apply_referral_bonus:", applied, "new_user:", reg_email_n, "code:", referral_code)
-                except Exception as e:
-                    print("apply_referral_bonus error:", repr(e))
-
-            user = authenticate_user(reg_email_n, reg_password)
-            if user:
-                st.session_state["user"] = user
-
-                # ✅ FORCE consent gate for this user
-                st.session_state["accepted_policies"] = False
-                st.session_state["chk_policy_agree"] = False
-                st.session_state["policy_view"] = None
-
-                st.session_state["auth_modal_open"] = False
-                st.rerun()
-            else:
-                st.success("Account created. Please sign in.")
-
-    # ---- FORGOT PASSWORD TAB ----
-    with tab_forgot:
-        st.write("If you've forgotten your password, you can reset it here.")
-
-        st.subheader("1. Request a reset link")
-        fp_email = st.text_input("Email used for your account", key="auth_fp_email")
-
-        if st.button("Send reset link", key="auth_btn_send_reset"):
-            if not fp_email:
-                st.error("Please enter your email.")
-            else:
-                try:
-                    # ---- DEBUG START ----
-                    print("\n=== RESET EMAIL REQUESTED ===")
-                    print("fp_email:", fp_email)
-
-                    resend_key = os.getenv("RESEND_API_KEY", "")
-                    from_email = os.getenv("FROM_EMAIL", "")
-                    app_url = os.getenv("APP_URL", "")
-
-                    print("RESEND_API_KEY present:", bool(resend_key))
-                    print("RESEND_API_KEY length:", len(resend_key))
-                    print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
-                    print("FROM_EMAIL present:", bool(from_email))
-                    print("APP_URL present:", bool(app_url))
-                    # ---- DEBUG END ----
-
-                    token = create_password_reset_token(fp_email)
-                    print("token created:", bool(token))
-
-                    if token:
-                        send_password_reset_email(fp_email, token)
-                        print("send_password_reset_email() finished without raising")
-
-                    st.success("If this email is registered, a reset link has been sent.")
-
-                except Exception as e:
-                    print("=== RESET EMAIL ERROR ===")
-                    traceback.print_exc()
-                    st.error(f"Error while sending reset email: {e}")
-
-        st.markdown("---")
-        st.subheader("2. Set a new password using your reset token")
-
-        fp_token = st.text_input("Reset token (from the email)", key="auth_fp_token")
-        fp_new_pwd = st.text_input("New password", type="password", key="auth_fp_new_pwd")
-        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="auth_fp_new_pwd2")
-
-        if st.button("Set new password", key="auth_btn_do_reset"):
-            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
-                st.error("Please fill in all fields.")
-            elif fp_new_pwd != fp_new_pwd2:
-                st.error("Passwords do not match.")
-            else:
-                ok = reset_password_with_token(fp_token, fp_new_pwd)
-                if ok:
-                    st.success(
-                        "Password reset successfully. You can now sign in with your new password."
-                    )
-                else:
-                    st.error(
-                        "Invalid or expired reset token. Please request a new reset link."
-                    )    
 # =========================
 # POLICY PAGE VIEW
 # =========================
@@ -2460,6 +2279,187 @@ def _auth_dialog() -> None:
 def render_auth_modal_if_open() -> None:
     if st.session_state.get("auth_modal_open", False):
         _auth_dialog()
+# =========================
+# AUTH UI
+# =========================
+def auth_ui():
+    """Login / register / password reset UI."""
+    import os
+    import traceback
+    import streamlit as st
+
+    tab_login, tab_register, tab_forgot = st.tabs(
+        ["Sign in", "Create account", "Forgot password"]
+    )
+
+    # ---- LOGIN TAB ----
+    with tab_login:
+        login_email = st.text_input("Email", key="auth_login_email")
+        login_password = st.text_input(
+            "Password", type="password", key="auth_login_password"
+        )
+
+        if st.button("Sign in", key="auth_btn_login"):
+            if not login_email or not login_password:
+                st.error("Please enter both email and password.")
+                st.stop()
+
+            login_email_n = normalize_email(login_email)
+            if not is_valid_email(login_email_n):
+                st.error("Please enter a valid email address.")
+                st.stop()
+
+            user = authenticate_user(login_email_n, login_password)
+            if user:
+                st.session_state["user"] = user
+
+                # ✅ FORCE consent gate for this user
+                st.session_state["accepted_policies"] = False
+                st.session_state["chk_policy_agree"] = False
+                st.session_state["policy_view"] = None
+
+                st.session_state["auth_modal_open"] = False
+                st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
+                st.rerun()
+            else:
+                st.error("Invalid email or password.")
+
+    # ---- REGISTER TAB ----
+    with tab_register:
+        reg_name = st.text_input("Full name", key="auth_reg_name")
+        reg_email = st.text_input("Email", key="auth_reg_email")
+        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
+        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
+
+        reg_referral_code = st.text_input(
+            "Referral code (optional)",
+            key="auth_reg_referral_code",
+            help="If a friend invited you, paste their referral code here.",
+        )
+
+        if st.button("Create account", key="auth_btn_register"):
+            if not reg_email or not reg_password or not reg_password2:
+                st.error("Please fill in all required fields.")
+                st.stop()
+
+            if reg_password != reg_password2:
+                st.error("Passwords do not match.")
+                st.stop()
+
+            reg_email_n = normalize_email(reg_email)
+            if not is_valid_email(reg_email_n):
+                st.error("Please enter a valid email address (e.g. name@example.com).")
+                st.stop()
+
+            referral_code = None
+
+            if reg_referral_code.strip():
+                ref_user = get_user_by_referral_code(reg_referral_code.strip())
+                if not ref_user:
+                    st.error("That referral code is not valid.")
+                    st.stop()
+                referral_code = reg_referral_code.strip().upper()
+
+            ok = create_user(
+                email=reg_email_n,
+                password=reg_password,
+                full_name=reg_name,
+                referred_by=referral_code,
+            )
+
+            if not ok:
+                st.error("That email is already registered.")
+                st.stop()
+
+            # ✅ Apply referral bonus AFTER user row exists, BEFORE login (ledger-based)
+            if referral_code:
+                try:
+                    applied = apply_referral_bonus(
+                        new_user_email=reg_email_n,
+                        referral_code=referral_code,
+                    )
+                    print("apply_referral_bonus:", applied, "new_user:", reg_email_n, "code:", referral_code)
+                except Exception as e:
+                    print("apply_referral_bonus error:", repr(e))
+
+            user = authenticate_user(reg_email_n, reg_password)
+            if user:
+                st.session_state["user"] = user
+
+                # ✅ FORCE consent gate for this user
+                st.session_state["accepted_policies"] = False
+                st.session_state["chk_policy_agree"] = False
+                st.session_state["policy_view"] = None
+
+                st.session_state["auth_modal_open"] = False
+                st.rerun()
+            else:
+                st.success("Account created. Please sign in.")
+
+    # ---- FORGOT PASSWORD TAB ----
+    with tab_forgot:
+        st.write("If you've forgotten your password, you can reset it here.")
+
+        st.subheader("1. Request a reset link")
+        fp_email = st.text_input("Email used for your account", key="auth_fp_email")
+
+        if st.button("Send reset link", key="auth_btn_send_reset"):
+            if not fp_email:
+                st.error("Please enter your email.")
+            else:
+                try:
+                    # ---- DEBUG START ----
+                    print("\n=== RESET EMAIL REQUESTED ===")
+                    print("fp_email:", fp_email)
+
+                    resend_key = os.getenv("RESEND_API_KEY", "")
+                    from_email = os.getenv("FROM_EMAIL", "")
+                    app_url = os.getenv("APP_URL", "")
+
+                    print("RESEND_API_KEY present:", bool(resend_key))
+                    print("RESEND_API_KEY length:", len(resend_key))
+                    print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
+                    print("FROM_EMAIL present:", bool(from_email))
+                    print("APP_URL present:", bool(app_url))
+                    # ---- DEBUG END ----
+
+                    token = create_password_reset_token(fp_email)
+                    print("token created:", bool(token))
+
+                    if token:
+                        send_password_reset_email(fp_email, token)
+                        print("send_password_reset_email() finished without raising")
+
+                    st.success("If this email is registered, a reset link has been sent.")
+
+                except Exception as e:
+                    print("=== RESET EMAIL ERROR ===")
+                    traceback.print_exc()
+                    st.error(f"Error while sending reset email: {e}")
+
+        st.markdown("---")
+        st.subheader("2. Set a new password using your reset token")
+
+        fp_token = st.text_input("Reset token (from the email)", key="auth_fp_token")
+        fp_new_pwd = st.text_input("New password", type="password", key="auth_fp_new_pwd")
+        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="auth_fp_new_pwd2")
+
+        if st.button("Set new password", key="auth_btn_do_reset"):
+            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
+                st.error("Please fill in all fields.")
+            elif fp_new_pwd != fp_new_pwd2:
+                st.error("Passwords do not match.")
+            else:
+                ok = reset_password_with_token(fp_token, fp_new_pwd)
+                if ok:
+                    st.success(
+                        "Password reset successfully. You can now sign in with your new password."
+                    )
+                else:
+                    st.error(
+                        "Invalid or expired reset token. Please request a new reset link."
+                    )    
+
 
 # =========================
 # PUBLIC HOME (guest header)
