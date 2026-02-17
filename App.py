@@ -469,28 +469,23 @@ def has_accepted_policies(email: str) -> bool:
             return row.get("accepted_policies_at") is not None
 
 
-def mark_policies_accepted(email: str) -> None:
-    """
-    Mark policies accepted in DB.
-    Sets accepted_policies=1 and stamps accepted_policies_at once.
-    """
-    email = (email or "").strip().lower()
-    if not email:
-        return
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
+def mark_policies_accepted(user_id: int) -> bool:
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE users
-                SET
-                    accepted_policies = 1,
-                    accepted_policies_at = COALESCE(accepted_policies_at, NOW())
-                WHERE email = %s
+                SET accepted_policies = TRUE,
+                    accepted_policies_at = NOW()
+                WHERE id = %s
                 """,
-                (email,),
+                (user_id,),
             )
-        conn.commit()
+            return True
+    except Exception as e:
+        print("mark_policies_accepted error:", e)
+        return False
+
 
 
 
