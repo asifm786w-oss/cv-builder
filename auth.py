@@ -55,6 +55,99 @@ def _fetchone(cur):
 def _fetchall(cur):
     return cur.fetchall()
 
+def _col_exists(cur, table: str, col: str) -> bool:
+    if _is_postgres():
+        db_execute(
+            cur,
+            """
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_name = ? AND column_name = ?
+            """,
+            (table, col),
+        )
+        return bool(_fetchone(cur))
+    else:
+        db_execute(cur, f"PRAGMA table_info({table})")
+        cols = {r[1] for r in _fetchall(cur)}
+        return col in cols
+
+
+def apply_referral_bonus(new_user_email: str, referral_code: str) -> bool:
+    """
+    Pays ONLY the referrer (+5 CV, +5 AI) when a new user signs up with a referral code.
+    Ledger-based: inserts into credit_grants using unique source 'referral_bonus:<new_user_id>'.
+    """
+    email = (new_user_email or "").strip().lower()
+    code = (referral_code or "").strip().upper()
+    if not email or not code:
+        return False
+
+    conn = get_conn()
+    cur = conn.cursor()
+    try:
+        # referee
+        db_execute(cur, "SELECT id, referred_by FROM users WHERE lower(email)=? LIMIT 1", (email,))
+        r = _fetchone(cur)
+        if not r:
+            return False
+        referee_id, referred_by = r[0], r[1]
+
+        # referrer
+        db_execute(cur, "SELECT id, referrals_count FROM users WHERE referral_code=? LIMIT 1", (code,))
+        rr = _fetchone(cur)
+        if not rr:
+            return False
+        referrer_id, ref_cnt = int(rr[0]), int(rr[1] or 0)
+
+        # constants
+        cap = globals().get("REFERRAL_CAP", 10)
+        bonus_cv = globals().get("BONUS_PER_REFERRAL_CV", 5)
+        bonus_ai = globals().get("BONUS_PER_REFERRAL_AI", 5)
+
+        # always set referee.referred_by once
+        if not referred_by:
+            db_execute(cur, "UPDATE users SET referred_by=? WHERE id=?", (code, referee_id))
+
+        if ref_cnt >= cap:
+            conn.commit()
+            return False
+
+        # ledger grant (idempotent)
+        db_execute(
+            cur,
+            """
+            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+            VALUES (?, ?, ?, ?, NULL)
+            ON CONFLICT (source) DO NOTHING
+            """,
+            (referrer_id, f"referral_bonus:{referee_id}", bonus_cv, bonus_ai),
+        )
+
+        # if grant exists, bump count
+        db_execute(cur, "SELECT 1 FROM credit_grants WHERE source=? LIMIT 1", (f"referral_bonus:{referee_id}",))
+        if _fetchone(cur):
+            db_execute(
+                cur,
+                "UPDATE users SET referrals_count = COALESCE(referrals_count,0) + 1 WHERE id=?",
+                (referrer_id,),
+            )
+
+        conn.commit()
+        return True
+
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        print("apply_referral_bonus error:", repr(e))
+        return False
+    finally:
+        conn.close()
+
+
+
 
 # -------------------------
 # Row mapper
