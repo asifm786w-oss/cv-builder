@@ -2259,6 +2259,19 @@ def _auth_dialog() -> None:
     with c2:
         if st.button("Close", key=f"auth_modal_close_{st.session_state['auth_modal_epoch']}"):
             close_auth_modal()
+def set_logged_in_user(user: dict) -> None:
+    if not (isinstance(user, dict) and user.get("email")):
+        return
+
+    st.session_state["user"] = user
+
+    # set from DB truth
+    st.session_state["accepted_policies"] = bool(user.get("accepted_policies"))
+    st.session_state["chk_policy_agree"] = False
+    st.session_state["policy_view"] = None
+
+    st.session_state["auth_modal_open"] = False
+    st.rerun()
 
 def render_auth_modal_if_open() -> None:
     if st.session_state.get("auth_modal_open", False):
@@ -2295,22 +2308,13 @@ def auth_ui():
 
             user = authenticate_user(login_email_n, login_password)
             if user:
-                st.session_state["user"] = user
-
-                # set from DB truth
-                st.session_state["accepted_policies"] = bool(
-                    user.get("accepted_policies")
-                )
-                st.session_state["chk_policy_agree"] = False
-                st.session_state["policy_view"] = None
-
-                st.session_state["auth_modal_open"] = False
                 st.success(
                     f"Welcome back, {user.get('full_name') or user['email']}!"
                 )
-                st.rerun()
+                set_logged_in_user(user)
             else:
                 st.error("Invalid email or password.")
+
 
     # ---- REGISTER TAB ----
     with tab_register:
@@ -2347,9 +2351,7 @@ def auth_ui():
 
             referral_code = None
             if reg_referral_code.strip():
-                ref_user = get_user_by_referral_code(
-                    reg_referral_code.strip()
-                )
+                ref_user = get_user_by_referral_code(reg_referral_code.strip())
                 if not ref_user:
                     st.error("That referral code is not valid.")
                     st.stop()
@@ -2361,14 +2363,13 @@ def auth_ui():
                 full_name=reg_name,
                 referred_by=referral_code,
             )
-
             if not ok:
                 st.error("That email is already registered.")
                 st.stop()
 
-            # 🔑 NEW: grant starter credits (ledger-based, idempotent)
+            # 🔑 grant starter credits (ledger-based, idempotent)
             new_user = get_user_by_email(reg_email_n)
-            if new_user:
+            if new_user and new_user.get("id") is not None:
                 grant_starter_credits(int(new_user["id"]))
 
             # ✅ Apply referral bonus AFTER user exists
@@ -2391,17 +2392,16 @@ def auth_ui():
 
             user = authenticate_user(reg_email_n, reg_password)
             if user:
-                st.session_state["user"] = user
-
-                # FORCE consent gate
+                # FORCE consent gate for brand new accounts (session only)
                 st.session_state["accepted_policies"] = False
                 st.session_state["chk_policy_agree"] = False
                 st.session_state["policy_view"] = None
 
-                st.session_state["auth_modal_open"] = False
-                st.rerun()
+                st.success("Account created. Please accept policies to continue.")
+                set_logged_in_user(user)
             else:
                 st.success("Account created. Please sign in.")
+
 
     # ---- FORGOT PASSWORD TAB ----
     with tab_forgot:
@@ -2758,9 +2758,7 @@ if email:
         st.stop()
     st.session_state["user_id"] = uid
 
-st.session_state["user"] = user
-sync_session_plan_and_credits()
-st.rerun()
+
 
 
 
