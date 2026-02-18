@@ -553,6 +553,21 @@ def restore_skills_state():
     # If nothing to restore, leave it empty (don't invent defaults)
     st.session_state["skills_text"] = ""
 
+def get_user_id_by_email(email: str) -> int | None:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+
+    row = fetchone(
+        """
+        SELECT id
+        FROM users
+        WHERE LOWER(email) = LOWER(%s)
+        LIMIT 1
+        """,
+        (email,),
+    )
+    return int(row["id"]) if row and row.get("id") is not None else None
 
 
 def normalize_skills_state():
@@ -664,54 +679,17 @@ def get_credits_by_user_id(user_id: int) -> dict:
     return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
 
 
-def get_user_credits(user_id: int) -> dict:
-    """
-    Ledger truth.
-    Returns remaining credits for a user based on grants - spends.
-    """
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(
-                """
-                SELECT
-                    GREATEST(
-                        COALESCE((
-                            SELECT SUM(cv_amount)
-                            FROM credit_grants
-                            WHERE user_id = %s
-                              AND (expires_at IS NULL OR expires_at > NOW())
-                        ), 0)
-                        -
-                        COALESCE((
-                            SELECT SUM(cv_amount)
-                            FROM credit_spends
-                            WHERE user_id = %s
-                        ), 0),
-                    0
-                    ) AS cv,
-                    GREATEST(
-                        COALESCE((
-                            SELECT SUM(ai_amount)
-                            FROM credit_grants
-                            WHERE user_id = %s
-                              AND (expires_at IS NULL OR expires_at > NOW())
-                        ), 0)
-                        -
-                        COALESCE((
-                            SELECT SUM(ai_amount)
-                            FROM credit_spends
-                            WHERE user_id = %s
-                        ), 0),
-                    0
-                    ) AS ai
-                """,
-                (user_id, user_id, user_id, user_id),
-            )
-            row = cur.fetchone() or {}
-            return {
-                "cv": int(row.get("cv", 0)),
-                "ai": int(row.get("ai", 0)),
-            }
+def get_user_credits(email: str) -> dict:
+    email = (email or "").strip().lower()
+    if not email:
+        return {"cv": 0, "ai": 0}
+
+    uid = get_user_id_by_email(email)
+    if not uid:
+        return {"cv": 0, "ai": 0}
+
+    return get_credits_by_user_id(int(uid))
+
 
 
 
@@ -2113,17 +2091,98 @@ def render_auth_modal_if_open() -> None:
     if st.session_state.get("auth_modal_open", False):
         _auth_dialog()
 
-def _auth_dialog():
-    auth_ui()
+def _auth_dialog() -> None:
+    if not st.session_state.get("auth_modal_open", False):
+        return
 
-    c1, c2 = st.columns([1, 1])
-    with c2:
-        if st.button("Close", key=f"auth_modal_close_{st.session_state['auth_modal_epoch']}"):
-            close_auth_modal()
+    @st.dialog("Welcome back 👋", width="large")
+    def _dlg():
+        st.markdown(
+            """
+            <div style="
+                padding: 6px 0 14px 0;
+                opacity: 0.9;
+                font-size: 14px;
+            ">
+                Sign in to unlock the tools. Create a modern CV, generate tailored cover letters,
+                and use AI improvements. Your data stays private to your account.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    # ✅ only stop the app if the modal is still open
-    if st.session_state.get("auth_modal_open", False):
-        st.stop()
+        left, right = st.columns([3, 1], gap="large")
+
+        with left:
+            auth_ui()
+
+            c1, c2 = st.columns([1, 1])
+            with c2:
+                if st.button(
+                    "Close",
+                    key=f"auth_modal_close_{st.session_state.get('auth_modal_epoch', 0)}",
+                    use_container_width=True,
+                ):
+                    close_auth_modal()
+                    st.rerun()
+
+        with right:
+            st.markdown(
+                """
+                <div style="
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 14px;
+                    padding: 14px;
+                    background: rgba(255,255,255,0.04);
+                    margin-bottom: 12px;
+                ">
+                    <div style="font-weight:800; margin-bottom:8px;">What you get</div>
+                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                        • Modern CV builder (UK-friendly)<br/>
+                        • AI improvements (summary, bullets)<br/>
+                        • Cover letters tailored to job ads<br/>
+                        • PDF + Word downloads
+                    </div>
+                    <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">Fast</span>
+                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">Clean</span>
+                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">ATS-friendly</span>
+                    </div>
+                </div>
+
+                <div style="
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 14px;
+                    padding: 14px;
+                    background: rgba(255,255,255,0.04);
+                    margin-bottom: 12px;
+                ">
+                    <div style="font-weight:800; margin-bottom:8px;">How it works</div>
+                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                        1) Fill your details<br/>
+                        2) Improve wording with AI<br/>
+                        3) Generate & download PDF + Word
+                    </div>
+                </div>
+
+                <div style="
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 14px;
+                    padding: 14px;
+                    background: rgba(255,255,255,0.04);
+                ">
+                    <div style="font-weight:800; margin-bottom:8px;">Upgrade when ready</div>
+                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                        Guests can build. Sign in only when you want downloads + saved history.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    _dlg()
+    st.stop()
+
 
 
 # =========================
