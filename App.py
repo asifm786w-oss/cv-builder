@@ -206,32 +206,32 @@ def refresh_session_user_from_db() -> None:
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-def get_conn():
-    return get_db_connection()
-
 
 def get_credits_by_user_id(user_id: int) -> dict:
-    with get_conn() as conn, conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT
-              GREATEST(
-                COALESCE((SELECT SUM(cv_amount) FROM credit_grants
-                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
-                -
-                COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
-              0) AS cv,
-              GREATEST(
-                COALESCE((SELECT SUM(ai_amount) FROM credit_grants
-                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
-                -
-                COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
-              0) AS ai
-            """,
-            (user_id, user_id, user_id, user_id),
-        )
-        row = cur.fetchone() or {}
-        return {"cv": int(row["cv"]), "ai": int(row["ai"])}
+    row = fetchone(
+        """
+        SELECT
+          GREATEST(
+            COALESCE((SELECT SUM(cv_amount) FROM credit_grants
+                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+            -
+            COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
+          0) AS cv,
+          GREATEST(
+            COALESCE((SELECT SUM(ai_amount) FROM credit_grants
+                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+            -
+            COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
+          0) AS ai
+        """,
+        (user_id, user_id, user_id, user_id),
+    )
+
+    return {
+        "cv": int(row["cv"]) if row else 0,
+        "ai": int(row["ai"]) if row else 0,
+    }
+
 
 def improve_skills(skills_text: str) -> str:
     """
