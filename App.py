@@ -722,44 +722,39 @@ def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
 
     with get_conn() as conn:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+            cur.execute("SELECT id FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
             row = cur.fetchone()
             if not row:
                 return False
+
             uid = int(row["id"])
 
-        return spend_credits(
-            conn,
-            uid,
-            source,              # ← positional (IMPORTANT)
-            ai_amount=int(amount)
-        )
+        return spend_credits(conn, uid, source=source, ai_amount=int(amount))
 
 
 
 
 
-def spend_credits(user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
-    user_id = int(user_id)
+
+def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
     cv_amount = int(cv_amount or 0)
     ai_amount = int(ai_amount or 0)
+    user_id = int(user_id)
 
-    # transaction: must use a single connection
-    with get_conn() as conn:
-        cur = conn.cursor()
-        try:
-            # lock user row
-            cur.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user_id,))
             if not cur.fetchone():
                 conn.rollback()
                 return False
 
             bal = get_credits_by_user_id(user_id)
 
-            if cv_amount and bal["cv"] < cv_amount:
+            if cv_amount > 0 and int(bal.get("cv", 0)) < cv_amount:
                 conn.rollback()
                 return False
-            if ai_amount and bal["ai"] < ai_amount:
+
+            if ai_amount > 0 and int(bal.get("ai", 0)) < ai_amount:
                 conn.rollback()
                 return False
 
@@ -771,11 +766,12 @@ def spend_credits(user_id: int, source: str, cv_amount: int = 0, ai_amount: int 
                 (user_id, source, cv_amount, ai_amount),
             )
 
-            conn.commit()
-            return True
-        except Exception:
-            conn.rollback()
-            raise
+        conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
 
 
 
