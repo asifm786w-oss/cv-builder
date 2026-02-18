@@ -720,12 +720,22 @@ def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
     if not email:
         return False
 
-    uid = get_user_id_by_email(email)
-    if not uid:
-        return False
-
     with get_conn() as conn:
-        return spend_credits(conn, int(uid), source=source, ai_amount=int(amount))
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE email=%s", (email,))
+            row = cur.fetchone()
+            if not row:
+                return False
+            uid = int(row["id"])
+
+        return spend_credits(
+            conn,
+            uid,
+            source,              # ← positional (IMPORTANT)
+            ai_amount=int(amount)
+        )
+
+
 
 
 
