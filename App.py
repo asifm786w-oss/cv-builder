@@ -2112,6 +2112,20 @@ def set_logged_in_user(user: dict) -> None:
 def render_auth_modal_if_open() -> None:
     if st.session_state.get("auth_modal_open", False):
         _auth_dialog()
+
+def _auth_dialog():
+    auth_ui()
+
+    c1, c2 = st.columns([1, 1])
+    with c2:
+        if st.button("Close", key=f"auth_modal_close_{st.session_state['auth_modal_epoch']}"):
+            close_auth_modal()
+
+    # ✅ only stop the app if the modal is still open
+    if st.session_state.get("auth_modal_open", False):
+        st.stop()
+
+
 # =========================
 # AUTH UI
 # =========================
@@ -2128,9 +2142,7 @@ def auth_ui():
     # ---- LOGIN TAB ----
     with tab_login:
         login_email = st.text_input("Email", key="auth_login_email")
-        login_password = st.text_input(
-            "Password", type="password", key="auth_login_password"
-        )
+        login_password = st.text_input("Password", type="password", key="auth_login_password")
 
         if st.button("Sign in", key="auth_btn_login"):
             if not login_email or not login_password:
@@ -2144,21 +2156,10 @@ def auth_ui():
 
             user = authenticate_user(login_email_n, login_password)
             if user:
-                # ✅ SINGLE SOURCE OF TRUTH FOR LOGIN
-                st.session_state["user"] = user
-
-                # optional but recommended if you use it elsewhere
-                st.session_state["accepted_policies"] = bool(
-                    user.get("accepted_policies")
-                )
-
-                st.success(
-                    f"Welcome back, {user.get('full_name') or user['email']}!"
-                )
-                st.rerun()
+                st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
+                set_logged_in_user(user)  # ✅ closes modal + reruns
             else:
                 st.error("Invalid email or password.")
-
 
 
     # ---- REGISTER TAB ----
