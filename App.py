@@ -669,45 +669,48 @@ def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
     st.session_state["education_items"] = cleaned
 
 
-def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
-    """
-    Spend credits atomically using the SAME connection.
-    Do NOT use `with conn:` here (caller may already be using it).
-    """
+def get_user_credits_ledger(user_id: int) -> dict:
+    row = fetchone(
+        """
+        SELECT
+          GREATEST(
+            COALESCE((SELECT SUM(cv_amount) FROM credit_grants
+                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+            -
+            COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
+          0) AS cv,
+          GREATEST(
+            COALESCE((SELECT SUM(ai_amount) FROM credit_grants
+                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+            -
+            COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
+          0) AS ai
+        """,
+        (user_id, user_id, user_id, user_id),
+    )
+    return {"cv": int(row["cv"]) if row else 0, "ai": int(row["ai"]) if row else 0}
+
+
+def spend_credits(user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
     cv_amount = int(cv_amount or 0)
     ai_amount = int(ai_amount or 0)
+    if cv_amount < 0 or ai_amount < 0:
+        return False
 
-    try:
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-            cur.execute("SELECT id FROM users WHERE id = %s FOR UPDATE", (user_id,))
-            if not cur.fetchone():
-                conn.rollback()
-                return False
+    bal = get_user_credits_ledger(user_id)
+    if cv_amount and bal["cv"] < cv_amount:
+        return False
+    if ai_amount and bal["ai"] < ai_amount:
+        return False
 
-            bal = get_user_credits_ledger(conn, user_id)
-
-            if cv_amount > 0 and bal["cv"] < cv_amount:
-                conn.rollback()
-                return False
-            if ai_amount > 0 and bal["ai"] < ai_amount:
-                conn.rollback()
-                return False
-
-            cur.execute(
-                """
-                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (user_id, source, cv_amount, ai_amount),
-            )
-
-        conn.commit()
-        return True
-
-    except Exception:
-        conn.rollback()
-        raise
-
+    execute(
+        """
+        INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (user_id, source, cv_amount, ai_amount),
+    )
+    return True
 
 
 
@@ -732,43 +735,21 @@ def grant_starter_credits(user_id: int) -> None:
         )
         conn.commit()
 
-
-from psycopg2.extras import RealDictCursor
-
 def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
-    """
-    Spends AI credits from ledger. Returns True if spent, False if insufficient.
-    Safe to call from any UI block.
-    """
     email = (email or "").strip().lower()
     if not email:
         return False
 
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id FROM users WHERE email=%s", (email,))
-            row = cur.fetchone()
-            if not row:
-                return False
-            uid = int(row["id"])
-
-        return spend_credits(conn, uid, source=source, ai_amount=int(amount))
-
-
-def spend_ai(email: str, source: str, amount: int = 1) -> bool:
-    email = (email or "").strip().lower()
-    if not email:
+    row = fetchone(
+        "SELECT id FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1",
+        (email,),
+    )
+    if not row:
         return False
 
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id FROM users WHERE email=%s", (email,))
-            row = cur.fetchone()
-            if not row:
-                return False
-            uid = int(row["id"])
+    uid = int(row["id"])
+    return spend_credits(uid, source=source, ai_amount=int(amount))
 
-        return spend_credits(conn, uid, source=source, ai_amount=amount)
 
 def _clear_education_persistence_for_new_cv():
     """
