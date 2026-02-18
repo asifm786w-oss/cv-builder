@@ -16,12 +16,12 @@ def is_postgres() -> bool:
 
 def _sqlite_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # dict-like rows
+    conn.row_factory = sqlite3.Row
     return conn
 
 
 def _pg_conn():
-    db_url = (os.getenv("DATABASE_URL") or "").strip()
+    db_url = os.getenv("DATABASE_URL", "").strip()
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 
@@ -34,7 +34,8 @@ def _pg_conn():
 
 def get_db_connection():
     """
-    Legacy compatibility. Keep this name so old code doesn't break.
+    Backwards-compatible name. Do not remove.
+    Returns dict-like rows in BOTH sqlite and postgres.
     """
     return _pg_conn() if is_postgres() else _sqlite_conn()
 
@@ -42,8 +43,9 @@ def get_db_connection():
 @contextmanager
 def get_conn():
     """
-    Unified connection context manager.
-    Use:  with get_conn() as conn:
+    Preferred API. Always use:
+        with get_conn() as conn:
+            cur = conn.cursor()
     """
     conn = get_db_connection()
     try:
@@ -53,10 +55,7 @@ def get_conn():
 
 
 def _adapt_sql(sql: str) -> str:
-    """
-    Standardize your whole app on writing SQL with %s placeholders.
-    For SQLite, we auto-convert %s -> ?
-    """
+    # Write SQL using %s everywhere.
     return sql if is_postgres() else sql.replace("%s", "?")
 
 
@@ -79,49 +78,9 @@ def fetchall(sql: str, params: Sequence[Any] = ()) -> list[Mapping[str, Any]]:
 
 
 def execute(sql: str, params: Sequence[Any] = ()) -> int:
-    """
-    Executes a write query and commits. Returns rowcount.
-    """
     sql = _adapt_sql(sql)
     with get_conn() as conn:
         cur = conn.cursor()
         cur.execute(sql, params)
         conn.commit()
         return int(getattr(cur, "rowcount", 0) or 0)
-
-
-def scalar(sql: str, params: Sequence[Any] = (), default: Any = None) -> Any:
-    """
-    Returns the first column of the first row, or default.
-    """
-    sql = _adapt_sql(sql)
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(sql, params)
-        row = cur.fetchone()
-        if not row:
-            return default
-        # sqlite Row + pg RealDict both support indexing by 0 here
-        try:
-            return row[0]
-        except Exception:
-            # fallback if row is dict-like
-            return list(row.values())[0] if hasattr(row, "values") else default
-
-
-@contextmanager
-def tx():
-    """
-    Transaction helper.
-    Use:
-        with tx() as conn:
-            conn.cursor().execute(...)
-    Commits on success, rollbacks on exception.
-    """
-    with get_conn() as conn:
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
