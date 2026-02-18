@@ -13,7 +13,7 @@ import datetime
 from db import get_conn
 
 
-from datetime import datetime, timezone
+from db import fetchone, fetchall, execute
 from psycopg2.extras import RealDictCursor
 from openai import OpenAI
 from adzuna_client import search_jobs
@@ -149,51 +149,42 @@ COOLDOWN_SECONDS = 5
 
 
 
-def get_user_id(email: str) -> int | None:
-    u = get_user_by_email(email)
-    return int(u["id"]) if u and u.get("id") is not None else None
-
-def init_db() -> None:
-    """
-    Single source of truth: schema is owned by auth.init_db()
-    (which uses db.py underneath).
-    """
-    from auth import init_db as auth_init_db
-
-    auth_init_db()
-
-
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
-
-
-
 
 
 def get_user_by_email(email: str) -> dict | None:
     email = (email or "").strip().lower()
     if not email:
         return None
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "SELECT * FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1",
-            (email,),
-        )
-        return cur.fetchone()
+
+    return fetchone(
+        """
+        SELECT *
+        FROM users
+        WHERE LOWER(email) = LOWER(%s)
+        LIMIT 1
+        """,
+        (email,),
+    )
 
 
 def get_user_row_by_id(user_id: int) -> dict | None:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT * FROM users WHERE id = %s LIMIT 1", (user_id,))
-        return cur.fetchone()
+    return fetchone(
+        """
+        SELECT *
+        FROM users
+        WHERE id = %s
+        LIMIT 1
+        """,
+        (int(user_id),),
+    )
 
 
-DATABASE_URL = os.environ["DATABASE_URL"]
+def get_user_id(email: str) -> int | None:
+    u = get_user_by_email(email)
+    return int(u["id"]) if u and u.get("id") is not None else None
 
-
-
-def get_conn():
-    return get_db_connection()
 
 def refresh_session_user_from_db() -> None:
     u = st.session_state.get("user") or {}
@@ -205,7 +196,6 @@ def refresh_session_user_from_db() -> None:
     if not db_u:
         return
 
-    # preserve session-only keys
     for k in ("role",):
         if k in u and k not in db_u:
             db_u[k] = u[k]
@@ -214,6 +204,10 @@ def refresh_session_user_from_db() -> None:
 
 
 
+DATABASE_URL = os.environ["DATABASE_URL"]
+
+def get_conn():
+    return get_db_connection()
 
 
 def get_credits_by_user_id(user_id: int) -> dict:
@@ -1351,39 +1345,48 @@ def format_dt(ts) -> str:
     return ts.strftime("%d %b %Y")
 
 
-session_user = st.session_state.get("user") or {}
-email = session_user.get("email")
+def sync_session_plan_and_credits() -> None:
+    session_user = st.session_state.get("user") or {}
+    email = (session_user.get("email") or "").strip().lower()
+    if not email:
+        return
 
-if email:
-    uid = get_user_id(email)
-    if uid:
-        credits = get_user_credits(email)
-        sub = get_active_subscription_for_user(uid)
+    # Optional: keep session user aligned with DB
+    try:
+        refresh_session_user_from_db()
+    except Exception:
+        pass
 
-        now_utc = datetime.now(timezone.utc)
+    session_user = st.session_state.get("user") or {}
+    uid = session_user.get("id") or get_user_id(email)
+    if not uid:
+        return
 
-        # machine-safe plan value (DO NOT put formatted strings in here)
-        plan_code = (session_user.get("plan") or "free").strip().lower()
-        plan_display = plan_code
+    credits = get_user_credits(email)  # must return {"cv": int, "ai": int}
+    sub = get_active_subscription_for_user(int(uid))  # can return None
 
-        if sub:
-            period_end = _as_utc_dt(sub.get("current_period_end"))
-            sub_plan = (sub.get("plan") or plan_code or "free").strip().lower()
+    now_utc = datetime.now(timezone.utc)
 
-            if period_end and period_end > now_utc:
-                plan_code = sub_plan
-                plan_display = f"{sub_plan} (active until {format_dt(period_end)})"
-            else:
-                plan_display = plan_code
+    plan_code = (session_user.get("plan") or "free").strip().lower()
+    plan_display = plan_code
 
-        st.session_state["user"]["plan"] = plan_code
-        st.session_state["user"]["plan_display"] = plan_display
+    if sub:
+        period_end = _as_utc_dt(sub.get("current_period_end"))
+        sub_plan = (sub.get("plan") or plan_code or "free").strip().lower()
 
-        cv_left = int(credits.get("cv", 0) or 0)
-        ai_left = int(credits.get("ai", 0) or 0)
+        if period_end and period_end > now_utc:
+            plan_code = sub_plan
+            plan_display = f"{sub_plan} (active until {format_dt(period_end)})"
+        else:
+            plan_display = plan_code
 
-session_user = st.session_state.get("user") or {}
-email = session_user.get("email")
+    st.session_state["user"]["plan"] = plan_code
+    st.session_state["user"]["plan_display"] = plan_display
+
+    # ✅ persist credits into session so sidebar/UI doesn’t show 0
+    st.session_state["user"]["cv_remaining"] = int(credits.get("cv", 0) or 0)
+    st.session_state["user"]["ai_remaining"] = int(credits.get("ai", 0) or 0)
+
 
 # -------------------------
 # GLOBAL THEME + LAYOUT CSS
@@ -2755,6 +2758,9 @@ if email:
         st.stop()
     st.session_state["user_id"] = uid
 
+st.session_state["user"] = user
+sync_session_plan_and_credits()
+st.rerun()
 
 
 
