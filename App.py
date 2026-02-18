@@ -201,9 +201,7 @@ def refresh_session_user_from_db() -> None:
             db_u[k] = u[k]
 
     st.session_state["user"] = dict(db_u)
-
-
-    }
+  
 
 
 def improve_skills(skills_text: str) -> str:
