@@ -2440,6 +2440,21 @@ def show_paywall(feature_label: str) -> None:
     )
 
 
+def get_user_credits_by_email(email: str) -> dict:
+    email = (email or "").strip().lower()
+    if not email:
+        return {"cv": 0, "ai": 0}
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
+            row = cur.fetchone()
+            if not row:
+                return {"cv": 0, "ai": 0}
+
+            uid = int(row["id"])
+
+        return get_credits_by_user_id(uid)
 
 
 
@@ -2525,7 +2540,7 @@ def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
         return True
 
     email = (u.get("email") or "").strip().lower()
-    credits = get_user_credits(email)
+    credits = get_user_credits_by_email(email)
 
     if counter_key in CV_USAGE_KEYS:
         bucket = "cv"
