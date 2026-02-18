@@ -2,7 +2,10 @@
 import os
 import sqlite3
 from contextlib import contextmanager
-from typing import Any, Iterable, Mapping, Optional, Sequence, Union
+from typing import Any, Mapping, Optional, Sequence
+
+import psycopg2
+import psycopg2.extras
 
 DB_PATH = "users.db"
 
@@ -13,19 +16,15 @@ def is_postgres() -> bool:
 
 def _sqlite_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row  # ✅ dict-like rows
+    conn.row_factory = sqlite3.Row  # dict-like rows
     return conn
 
 
 def _pg_conn():
-    import psycopg2
-    import psycopg2.extras
-
     db_url = (os.getenv("DATABASE_URL") or "").strip()
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-    # ✅ dict rows always
     return psycopg2.connect(
         db_url,
         sslmode="require",
@@ -33,68 +32,96 @@ def _pg_conn():
     )
 
 
-def _adapt_sql(sql: str) -> str:
+def get_db_connection():
     """
-    Standardize on ONE placeholder style in your app:
-    - Write queries using %s
-    - If sqlite, convert %s -> ?
+    Legacy compatibility. Keep this name so old code doesn't break.
     """
-    if not is_postgres():
-        return sql.replace("%s", "?")
-    return sql
+    return _pg_conn() if is_postgres() else _sqlite_conn()
 
 
 @contextmanager
 def get_conn():
     """
     Unified connection context manager.
-    - sqlite: autocommit by commit() call
-    - postgres: same
+    Use:  with get_conn() as conn:
     """
-    conn = _pg_conn() if is_postgres() else _sqlite_conn()
+    conn = get_db_connection()
     try:
         yield conn
     finally:
         conn.close()
 
 
+def _adapt_sql(sql: str) -> str:
+    """
+    Standardize your whole app on writing SQL with %s placeholders.
+    For SQLite, we auto-convert %s -> ?
+    """
+    return sql if is_postgres() else sql.replace("%s", "?")
+
+
 def fetchone(sql: str, params: Sequence[Any] = ()) -> Optional[Mapping[str, Any]]:
-    sql2 = _adapt_sql(sql)
+    sql = _adapt_sql(sql)
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute(sql2, params)
+        cur.execute(sql, params)
         row = cur.fetchone()
-        if not row:
-            return None
-
-        # sqlite Row -> dict
-        if not is_postgres():
-            return dict(row)
-
-        # postgres RealDictCursor already dict
-        return row
+        return dict(row) if row else None
 
 
 def fetchall(sql: str, params: Sequence[Any] = ()) -> list[Mapping[str, Any]]:
-    sql2 = _adapt_sql(sql)
+    sql = _adapt_sql(sql)
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute(sql2, params)
+        cur.execute(sql, params)
         rows = cur.fetchall() or []
-
-        if not is_postgres():
-            return [dict(r) for r in rows]
-
-        return rows
+        return [dict(r) for r in rows]
 
 
 def execute(sql: str, params: Sequence[Any] = ()) -> int:
     """
-    Returns rowcount.
+    Executes a write query and commits. Returns rowcount.
     """
-    sql2 = _adapt_sql(sql)
+    sql = _adapt_sql(sql)
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute(sql2, params)
+        cur.execute(sql, params)
         conn.commit()
-        return getattr(cur, "rowcount", 0)
+        return int(getattr(cur, "rowcount", 0) or 0)
+
+
+def scalar(sql: str, params: Sequence[Any] = (), default: Any = None) -> Any:
+    """
+    Returns the first column of the first row, or default.
+    """
+    sql = _adapt_sql(sql)
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(sql, params)
+        row = cur.fetchone()
+        if not row:
+            return default
+        # sqlite Row + pg RealDict both support indexing by 0 here
+        try:
+            return row[0]
+        except Exception:
+            # fallback if row is dict-like
+            return list(row.values())[0] if hasattr(row, "values") else default
+
+
+@contextmanager
+def tx():
+    """
+    Transaction helper.
+    Use:
+        with tx() as conn:
+            conn.cursor().execute(...)
+    Commits on success, rollbacks on exception.
+    """
+    with get_conn() as conn:
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise

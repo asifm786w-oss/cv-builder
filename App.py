@@ -153,12 +153,15 @@ def get_user_id(email: str) -> int | None:
     u = get_user_by_email(email)
     return int(u["id"]) if u and u.get("id") is not None else None
 
-def init_db():
-    conn = get_db_connection()
-    try:
-        ensure_credit_tables(conn)
-    finally:
-        conn.close()
+def init_db() -> None:
+    """
+    Single source of truth: schema is owned by auth.init_db()
+    (which uses db.py underneath).
+    """
+    from auth import init_db as auth_init_db
+
+    auth_init_db()
+
 
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
@@ -277,37 +280,6 @@ def set_cv_defaults_from_existing(full_name=None, title=None, email=None, phone=
     for k, v in defaults.items():
         if (st.session_state.get(k) is None or st.session_state.get(k) == "") and v:
             st.session_state[k] = v
-
-
-def try_spend(user_id: int, source: str, cv: int = 0, ai: int = 0) -> bool:
-    cv = int(cv or 0)
-    ai = int(ai or 0)
-
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
-            if not cur.fetchone():
-                return False
-
-            bal = get_credits_by_user_id(user_id)
-
-            if cv > 0 and bal["cv"] < cv:
-                return False
-            if ai > 0 and bal["ai"] < ai:
-                return False
-
-            cur.execute(
-                """
-                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (user_id, source, cv, ai),
-            )
-        conn.commit()
-        return True
-
-
-
 
 
 
@@ -744,75 +716,6 @@ def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount
 
 
 
-def get_user_credits_ledger(conn, user_id: int) -> dict:
-    """
-    credits = SUM(grants not expired) - SUM(spends)
-    Uses the SAME connection (do not open a new conn here).
-    """
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT
-                GREATEST(
-                    COALESCE((
-                        SELECT SUM(cv_amount)
-                        FROM credit_grants
-                        WHERE user_id = %s
-                          AND (expires_at IS NULL OR expires_at > NOW())
-                    ), 0)
-                    -
-                    COALESCE((
-                        SELECT SUM(cv_amount)
-                        FROM credit_spends
-                        WHERE user_id = %s
-                    ), 0),
-                0) AS cv,
-
-                GREATEST(
-                    COALESCE((
-                        SELECT SUM(ai_amount)
-                        FROM credit_grants
-                        WHERE user_id = %s
-                          AND (expires_at IS NULL OR expires_at > NOW())
-                    ), 0)
-                    -
-                    COALESCE((
-                        SELECT SUM(ai_amount)
-                        FROM credit_spends
-                        WHERE user_id = %s
-                    ), 0),
-                0) AS ai
-            """,
-            (user_id, user_id, user_id, user_id),
-        )
-        row = cur.fetchone() or {}
-        return {
-            "cv": int(row.get("cv", 0) or 0),
-            "ai": int(row.get("ai", 0) or 0),
-        }
-
-
-def get_user_credits(email: str) -> dict:
-    """
-    Public: call this everywhere in the app.
-    Looks up user_id by email then returns ledger credits.
-    Does NOT create users.
-    """
-    email = (email or "").strip().lower()
-    if not email:
-        return {"cv": 0, "ai": 0}
-
-    with get_conn() as conn:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT id FROM users WHERE email = %s", (email,))
-            u = cur.fetchone()
-            if not u:
-                return {"cv": 0, "ai": 0}
-
-            user_id = int(u["id"])
-            return get_user_credits_ledger(conn, user_id)
-
-
 
 def grant_starter_credits(user_id: int) -> None:
     """
@@ -1196,105 +1099,108 @@ def locked_action_button(
     return True
 
 
-def increment_usage(email: str, counter_key: str, cost: int = 1) -> None:
-    cost = int(cost)
-
-    # Decide which credit bucket to burn
-    if counter_key in CV_USAGE_KEYS:
-        bucket_col = "cv_credits"
-    else:
-        bucket_col = "ai_credits"
-
-    with get_conn() as conn:
-        cur = conn.cursor()
-
-        # Increment usage counter AND decrement credits atomically
-        cur.execute(
-            f"""
-            UPDATE users
-            SET
-                {counter_key} = COALESCE({counter_key}, 0) + %s,
-                {bucket_col} = GREATEST(COALESCE({bucket_col}, 0) - %s, 0)
-            WHERE email = %s
-            """,
-            (cost, cost, email),
-        )
-
-        conn.commit()
+# ------------------------------------------------------------
+# Ledger-only usage counters (no credits decrement here)
+# ------------------------------------------------------------
+from db import fetchone, execute
 
 
+def increment_usage_counter(email: str, counter_key: str, amount: int = 1) -> None:
+    email = (email or "").strip().lower()
+    amount = int(amount or 1)
+
+    if counter_key not in {
+        "upload_parses",
+        "summary_uses",
+        "cover_uses",
+        "bullets_uses",
+        "cv_generations",
+        "job_summary_uses",
+    }:
+        return
+
+    execute(
+        f"""
+        UPDATE users
+        SET {counter_key} = COALESCE({counter_key}, 0) + %s
+        WHERE LOWER(email) = LOWER(%s)
+        """,
+        (amount, email),
+    )
 
 
-
-def get_ai_credits(email: str) -> int:
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT COALESCE(ai_credits, 0) FROM users WHERE email=%s", (email,))
-        row = cur.fetchone()
-        return int(row[0]) if row else 0
-
-# =========================
-# 2) DB HELPERS (psycopg2)
-# Put this in your db.py (or near your existing DB helpers)
-# =========================
-
-
-
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-
-
-
+# ------------------------------------------------------------
+# Stripe event idempotency + ledger grants (NO raw cursors)
+# ------------------------------------------------------------
 def has_stripe_event(stripe_event_id: str) -> bool:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute("SELECT 1 FROM stripe_events WHERE stripe_event_id=%s", (stripe_event_id,))
-        return cur.fetchone() is not None
+    stripe_event_id = (stripe_event_id or "").strip()
+    if not stripe_event_id:
+        return False
 
-def record_stripe_event(stripe_event_id: str, typ: str) -> None:
-    with get_conn() as conn, conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO stripe_events (stripe_event_id, type) VALUES (%s, %s) ON CONFLICT DO NOTHING",
-            (stripe_event_id, typ),
-        )
+    row = fetchone(
+        "SELECT 1 AS ok FROM stripe_events WHERE event_id = %s LIMIT 1",
+        (stripe_event_id,),
+    )
+    return bool(row)
+
+
+def record_stripe_event(stripe_event_id: str) -> None:
+    stripe_event_id = (stripe_event_id or "").strip()
+    if not stripe_event_id:
+        return
+
+    execute(
+        """
+        INSERT INTO stripe_events (event_id)
+        VALUES (%s)
+        ON CONFLICT (event_id) DO NOTHING
+        """,
+        (stripe_event_id,),
+    )
+
 
 def create_credit_grant(
     user_id: int,
     cv_amount: int = 0,
     ai_amount: int = 0,
     source: str = "manual",
-    expires_in_days: int | None = 60,
-    stripe_event_id: str | None = None,
-):
+    expires_in_days: int | None = None,
+) -> bool:
+    """
+    Ledger grant. Idempotency should be handled by UNIQUE(source).
+    Returns True if inserted, False if duplicate.
+    """
+    user_id = int(user_id)
     cv_amount = int(cv_amount or 0)
     ai_amount = int(ai_amount or 0)
+    source = (source or "").strip()
+    if not source:
+        raise ValueError("Missing source for credit grant")
 
-    expires_sql = None
-    if expires_in_days is not None:
-        expires_sql = f"now() + interval '{int(expires_in_days)} days'"
+    if expires_in_days is None:
+        row = fetchone(
+            """
+            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+            VALUES (%s, %s, %s, %s, NULL)
+            ON CONFLICT (source) DO NOTHING
+            RETURNING id
+            """,
+            (user_id, source, cv_amount, ai_amount),
+        )
+    else:
+        days = int(expires_in_days)
+        row = fetchone(
+            """
+            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+            VALUES (%s, %s, %s, %s, NOW() + (%s || ' days')::interval)
+            ON CONFLICT (source) DO NOTHING
+            RETURNING id
+            """,
+            (user_id, source, cv_amount, ai_amount, days),
+        )
 
-    with get_conn() as conn, conn.cursor() as cur:
-        # optional idempotency: don’t double grant for same stripe event
-        if stripe_event_id:
-            cur.execute("SELECT 1 FROM credit_grants WHERE stripe_event_id=%s", (stripe_event_id,))
-            if cur.fetchone():
-                return
+    return bool(row)
 
-        if expires_sql:
-            cur.execute(
-                f"""
-                INSERT INTO credit_grants (user_id, source, stripe_event_id, cv_amount, ai_amount, expires_at)
-                VALUES (%s, %s, %s, %s, %s, {expires_sql})
-                """,
-                (user_id, source, stripe_event_id, cv_amount, ai_amount),
-            )
-        else:
-            cur.execute(
-                """
-                INSERT INTO credit_grants (user_id, source, stripe_event_id, cv_amount, ai_amount, expires_at)
-                VALUES (%s, %s, %s, %s, %s, NULL)
-                """,
-                (user_id, source, stripe_event_id, cv_amount, ai_amount),
-            )
 
 # =========================
 # CREDITS LEDGER (grants/spends) + SUBSCRIPTIONS + REPAIRS
@@ -1989,6 +1895,203 @@ if st.session_state.get("_just_returned_from_policy"):
     restore_form_state()
     st.session_state["_just_returned_from_policy"] = False
 
+# =========================
+# PAYWALL + QUOTA HELPERS (LEDGER)
+# =========================
+
+def show_paywall(feature_label: str) -> None:
+    st.markdown(
+        f"""
+        <div style="
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin: 10px 0 6px 0;
+            background: rgba(59,130,246,0.12);
+            border: 1px solid rgba(59,130,246,0.35);
+        ">
+            <div style="font-weight:800; margin-bottom:6px;">
+                Limit reached for {feature_label}.
+            </div>
+            <div style="font-size: 13px; opacity:0.85; margin-bottom: 10px;">
+                Upgrade your plan or use referrals to unlock more usage.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def get_user_credits(email: str) -> dict:
+    """
+    Ledger truth:
+      remaining = SUM(grants where not expired) - SUM(spends)
+    Returns: {"cv": int, "ai": int}
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return {"cv": 0, "ai": 0}
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+            """,
+            (email,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"cv": 0, "ai": 0}
+
+        # psycopg2 RealDictCursor vs tuple safety
+        user_id = row["id"] if isinstance(row, dict) else row[0]
+
+        cur.execute(
+            """
+            SELECT
+              GREATEST(
+                COALESCE(
+                  (SELECT SUM(cv_amount)
+                   FROM credit_grants
+                   WHERE user_id = %s
+                     AND (expires_at IS NULL OR expires_at > NOW())
+                  ), 0
+                )
+                -
+                COALESCE(
+                  (SELECT SUM(cv_amount)
+                   FROM credit_spends
+                   WHERE user_id = %s
+                  ), 0
+                ),
+              0) AS cv_remaining,
+              GREATEST(
+                COALESCE(
+                  (SELECT SUM(ai_amount)
+                   FROM credit_grants
+                   WHERE user_id = %s
+                     AND (expires_at IS NULL OR expires_at > NOW())
+                  ), 0
+                )
+                -
+                COALESCE(
+                  (SELECT SUM(ai_amount)
+                   FROM credit_spends
+                   WHERE user_id = %s
+                  ), 0
+                ),
+              0) AS ai_remaining
+            """,
+            (user_id, user_id, user_id, user_id),
+        )
+        r = cur.fetchone()
+
+        cv_left = r["cv_remaining"] if isinstance(r, dict) else r[0]
+        ai_left = r["ai_remaining"] if isinstance(r, dict) else r[1]
+
+        return {"cv": int(cv_left or 0), "ai": int(ai_left or 0)}
+
+
+def try_spend(user_id: int, source: str, cv: int = 0, ai: int = 0) -> bool:
+    """
+    Atomic spend: only inserts a spend row if user has enough remaining credits.
+    """
+    user_id = int(user_id)
+    cv = int(cv or 0)
+    ai = int(ai or 0)
+
+    if cv < 0 or ai < 0:
+        raise ValueError("Spend must be >= 0")
+
+    if cv == 0 and ai == 0:
+        return True
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # Lockless but consistent enough for most apps; if you want strict,
+        # you can SELECT ... FOR UPDATE on users row first.
+        cur.execute(
+            """
+            WITH remaining AS (
+              SELECT
+                GREATEST(
+                  COALESCE(
+                    (SELECT SUM(cv_amount)
+                     FROM credit_grants
+                     WHERE user_id = %s
+                       AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0
+                  )
+                  -
+                  COALESCE(
+                    (SELECT SUM(cv_amount)
+                     FROM credit_spends
+                     WHERE user_id = %s
+                    ), 0
+                  ),
+                0) AS cv_remaining,
+                GREATEST(
+                  COALESCE(
+                    (SELECT SUM(ai_amount)
+                     FROM credit_grants
+                     WHERE user_id = %s
+                       AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0
+                  )
+                  -
+                  COALESCE(
+                    (SELECT SUM(ai_amount)
+                     FROM credit_spends
+                     WHERE user_id = %s
+                    ), 0
+                  ),
+                0) AS ai_remaining
+            )
+            INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
+            SELECT %s, %s, %s, %s
+            FROM remaining
+            WHERE cv_remaining >= %s AND ai_remaining >= %s
+            RETURNING id
+            """,
+            (user_id, user_id, user_id, user_id, user_id, source, cv, ai, cv, ai),
+        )
+        inserted = cur.fetchone()
+        conn.commit()
+        return bool(inserted)
+
+
+def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
+    u = st.session_state.get("user") or {}
+
+    # 🔒 Block guests
+    if not (isinstance(u, dict) and u.get("email")):
+        st.warning(f"Sign in to use {feature_label}.")
+        return False
+
+    # 👑 Owner / admin unlimited
+    if u.get("role") in {"owner", "admin"}:
+        return True
+
+    email = (u.get("email") or "").strip().lower()
+    credits = get_user_credits(email)
+
+    if counter_key in CV_USAGE_KEYS:
+        bucket = "cv"
+    else:
+        bucket = "ai"
+
+    required = int(cost or 1)
+    remaining = int(credits.get(bucket, 0) or 0)
+
+    if remaining < required:
+        show_paywall(feature_label)
+        return False
+
+    return True
 
 
 # =========================
@@ -2393,8 +2496,9 @@ def render_public_home() -> None:
 
 
 # =========================
-# PAYWALL + QUOTA HELPERS
+# PAYWALL + QUOTA HELPERS (LEDGER)
 # =========================
+
 def show_paywall(feature_label: str) -> None:
     st.markdown(
         f"""
@@ -2416,10 +2520,154 @@ def show_paywall(feature_label: str) -> None:
         unsafe_allow_html=True,
     )
 
+
+def get_user_credits(email: str) -> dict:
+    """
+    Ledger truth:
+      remaining = SUM(grants where not expired) - SUM(spends)
+    Returns: {"cv": int, "ai": int}
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return {"cv": 0, "ai": 0}
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT id
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+            LIMIT 1
+            """,
+            (email,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return {"cv": 0, "ai": 0}
+
+        # psycopg2 RealDictCursor vs tuple safety
+        user_id = row["id"] if isinstance(row, dict) else row[0]
+
+        cur.execute(
+            """
+            SELECT
+              GREATEST(
+                COALESCE(
+                  (SELECT SUM(cv_amount)
+                   FROM credit_grants
+                   WHERE user_id = %s
+                     AND (expires_at IS NULL OR expires_at > NOW())
+                  ), 0
+                )
+                -
+                COALESCE(
+                  (SELECT SUM(cv_amount)
+                   FROM credit_spends
+                   WHERE user_id = %s
+                  ), 0
+                ),
+              0) AS cv_remaining,
+              GREATEST(
+                COALESCE(
+                  (SELECT SUM(ai_amount)
+                   FROM credit_grants
+                   WHERE user_id = %s
+                     AND (expires_at IS NULL OR expires_at > NOW())
+                  ), 0
+                )
+                -
+                COALESCE(
+                  (SELECT SUM(ai_amount)
+                   FROM credit_spends
+                   WHERE user_id = %s
+                  ), 0
+                ),
+              0) AS ai_remaining
+            """,
+            (user_id, user_id, user_id, user_id),
+        )
+        r = cur.fetchone()
+
+        cv_left = r["cv_remaining"] if isinstance(r, dict) else r[0]
+        ai_left = r["ai_remaining"] if isinstance(r, dict) else r[1]
+
+        return {"cv": int(cv_left or 0), "ai": int(ai_left or 0)}
+
+
+def try_spend(user_id: int, source: str, cv: int = 0, ai: int = 0) -> bool:
+    """
+    Atomic spend: only inserts a spend row if user has enough remaining credits.
+    """
+    user_id = int(user_id)
+    cv = int(cv or 0)
+    ai = int(ai or 0)
+
+    if cv < 0 or ai < 0:
+        raise ValueError("Spend must be >= 0")
+
+    if cv == 0 and ai == 0:
+        return True
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # Lockless but consistent enough for most apps; if you want strict,
+        # you can SELECT ... FOR UPDATE on users row first.
+        cur.execute(
+            """
+            WITH remaining AS (
+              SELECT
+                GREATEST(
+                  COALESCE(
+                    (SELECT SUM(cv_amount)
+                     FROM credit_grants
+                     WHERE user_id = %s
+                       AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0
+                  )
+                  -
+                  COALESCE(
+                    (SELECT SUM(cv_amount)
+                     FROM credit_spends
+                     WHERE user_id = %s
+                    ), 0
+                  ),
+                0) AS cv_remaining,
+                GREATEST(
+                  COALESCE(
+                    (SELECT SUM(ai_amount)
+                     FROM credit_grants
+                     WHERE user_id = %s
+                       AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0
+                  )
+                  -
+                  COALESCE(
+                    (SELECT SUM(ai_amount)
+                     FROM credit_spends
+                     WHERE user_id = %s
+                    ), 0
+                  ),
+                0) AS ai_remaining
+            )
+            INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
+            SELECT %s, %s, %s, %s
+            FROM remaining
+            WHERE cv_remaining >= %s AND ai_remaining >= %s
+            RETURNING id
+            """,
+            (user_id, user_id, user_id, user_id, user_id, source, cv, ai, cv, ai),
+        )
+        inserted = cur.fetchone()
+        conn.commit()
+        return bool(inserted)
+
+
 def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
     u = st.session_state.get("user") or {}
 
-    # 🔒 Block guests (cost-control requirement)
+    # 🔒 Block guests
     if not (isinstance(u, dict) and u.get("email")):
         st.warning(f"Sign in to use {feature_label}.")
         return False
@@ -2428,19 +2676,16 @@ def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
     if u.get("role") in {"owner", "admin"}:
         return True
 
-    email = u.get("email")
-
-    # 🔎 Fetch remaining credits
+    email = (u.get("email") or "").strip().lower()
     credits = get_user_credits(email)
 
-    # Decide which bucket this feature uses
     if counter_key in CV_USAGE_KEYS:
         bucket = "cv"
     else:
         bucket = "ai"
 
-    required = int(cost)
-    remaining = int(credits.get(bucket, 0))
+    required = int(cost or 1)
+    remaining = int(credits.get(bucket, 0) or 0)
 
     if remaining < required:
         show_paywall(feature_label)
@@ -2448,57 +2693,6 @@ def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
 
     return True
 
-def decrement_user_credits(email: str, cv_delta: int = 0, ai_delta: int = 0) -> dict:
-    cv_delta = int(cv_delta or 0)
-    ai_delta = int(ai_delta or 0)
-
-    if cv_delta < 0 or ai_delta < 0:
-        raise ValueError("Deltas must be >= 0")
-
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE users
-            SET
-                cv_credits = cv_credits - %s,
-                ai_credits = ai_credits - %s
-            WHERE email = %s
-              AND cv_credits >= %s
-              AND ai_credits >= %s
-            RETURNING cv_credits, ai_credits
-            """,
-            (cv_delta, ai_delta, email, cv_delta, ai_delta),
-        )
-        row = cur.fetchone()
-        conn.commit()
-
-    if not row:
-        return {"cv": 0, "ai": 0}
-
-    return {"cv": int(row[0]), "ai": int(row[1])}
-
-
-
-def decrement_ai_credit(email: str, amount: int = 1) -> bool:
-    """
-    Atomic decrement. Returns True if decremented, False if insufficient credits.
-    """
-    with get_conn() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            UPDATE users
-            SET ai_credits = GREATEST(COALESCE(ai_credits, 0) - %s, 0)
-            WHERE email = %s
-              AND COALESCE(ai_credits, 0) >= %s
-            RETURNING ai_credits
-            """,
-            (amount, email, amount),
-        )
-        row = cur.fetchone()
-        conn.commit()
-        return bool(row)
 
 
 
