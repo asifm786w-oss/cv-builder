@@ -112,11 +112,6 @@ st.markdown(
 )
 
 
-
-
-
-
-
 # -------------------------
 # GLOBAL PLAN + REFERRAL CONFIG
 # -------------------------
@@ -249,8 +244,6 @@ def set_cv_defaults_from_existing(full_name=None, title=None, email=None, phone=
 
 
 
-
-
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")  # set in Railway (sk_test_... or sk_live_...)
 
 PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY")  # price_...
@@ -304,6 +297,100 @@ def mark_policies_accepted(email: str) -> None:
         (email,),
     )
 
+def render_policy_pills(context: str) -> None:
+    policies = st.session_state.get("policies_index") or []
+    if not policies:
+        return
+
+    cols = st.columns(len(policies))
+    for idx, p in enumerate(policies):
+        with cols[idx]:
+            if st.button(p["title"], key=f"{context}_policy_pill_{p['slug']}"):
+                st.session_state[f"{context}_policy_open"] = True
+                st.session_state[f"{context}_policy_view"] = p["slug"]
+                st.session_state[f"{context}_policy_agree"] = False
+                st.rerun()
+
+def close_policy_modal(context: str) -> None:
+    st.session_state[f"{context}_policy_open"] = False
+    st.session_state[f"{context}_policy_view"] = None
+    st.session_state[f"{context}_policy_agree"] = False
+
+def ensure_policies_loaded() -> None:
+    if st.session_state.get("_policies_loaded"):
+        return
+
+    base = os.path.join(os.path.dirname(__file__), "policies")
+    mapping = {
+        "accessibility": ("Accessibility", "accessibility.md"),
+        "cookies": ("Cookie Policy", "cookie_policy.md"),
+        "privacy": ("Privacy Policy", "privacy_policy.md"),
+        "terms": ("Terms of Use", "terms_of_use.md"),
+    }
+
+    policies = {}
+    for slug, (title, filename) in mapping.items():
+        path = os.path.join(base, filename)
+        body = ""
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    body = f.read()
+        except Exception:
+            body = ""
+        policies[slug] = {"title": title, "body": body}
+
+    st.session_state["_policies_loaded"] = True
+    st.session_state["_policies"] = policies
+
+
+def render_policy_modal(scope: str, email: str | None = None) -> None:
+    open_key = f"{scope}_policy_open"
+    slug_key = f"{scope}_policy_slug"
+
+    st.session_state.setdefault(open_key, False)
+    st.session_state.setdefault(slug_key, None)
+
+    if not st.session_state.get(open_key):
+        return
+
+    ensure_policies_loaded()
+    slug = st.session_state.get(slug_key) or "privacy"
+    pol = (st.session_state.get("_policies") or {}).get(slug) or {}
+    title = pol.get("title") or "Policy"
+    body = pol.get("body") or ""
+
+    @st.dialog(title)
+    def _dlg():
+        if body.strip():
+            st.markdown(body)
+        else:
+            st.info("Policy content not found in this deployment.")
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("Close", key=f"{scope}_policy_close"):
+                st.session_state[open_key] = False
+                st.session_state[slug_key] = None
+                st.rerun()
+        with c2:
+            if st.button("Accept", key=f"{scope}_policy_accept"):
+                if email:
+                    try:
+                        mark_policies_accepted(email)
+                    except Exception:
+                        pass
+                    st.session_state["accepted_policies"] = True
+                    u = st.session_state.get("user") or {}
+                    if isinstance(u, dict):
+                        u["accepted_policies"] = True
+                        st.session_state["user"] = u
+
+                st.session_state[open_key] = False
+                st.session_state[slug_key] = None
+                st.rerun()
+
+    _dlg()
 
 
 
@@ -473,6 +560,50 @@ def restore_form_state_if_needed():
 
     # one-time restore
     st.session_state["_has_form_snapshot"] = False
+
+import os
+
+def _title_from_md(text: str, fallback: str) -> str:
+    text = (text or "").strip()
+    if not text:
+        return fallback
+    first = text.splitlines()[0].strip()
+    if first.startswith("#"):
+        return first.lstrip("#").strip() or fallback
+    return fallback
+
+def load_policies_index() -> list[dict]:
+    base_dir = os.path.join(os.path.dirname(__file__), "policies")
+    items: list[dict] = []
+
+    if not os.path.isdir(base_dir):
+        return items
+
+    for name in sorted(os.listdir(base_dir)):
+        if not name.lower().endswith(".md"):
+            continue
+
+        path = os.path.join(base_dir, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                body = f.read()
+        except Exception:
+            continue
+
+        slug = os.path.splitext(name)[0]
+        title = _title_from_md(body, slug.replace("_", " ").title())
+
+        items.append(
+            {
+                "slug": slug,
+                "title": title,
+                "body": body,
+                "path": path,
+            }
+        )
+
+    return items
+
 
 
 
@@ -1798,123 +1929,7 @@ def is_valid_email(email: str) -> bool:
     email = normalize_email(email)
     return bool(EMAIL_RE.match(email))
 
-# =========================
-# POLICY PAGE VIEW
-# =========================
-def show_policy_page() -> bool:
-    view = st.session_state.get("policy_view")
-    if not view:
-        return False
 
-    title_map = {
-        "accessibility": "Accessibility",
-        "cookies": "Cookie Policy",
-        "privacy": "Privacy Policy",
-        "terms": "Terms of Use",
-    }
-
-    file_map = {
-        "accessibility": "policies/accessibility.md",
-        "cookies": "policies/cookie_policy.md",
-        "privacy": "policies/privacy_policy.md",
-        "terms": "policies/terms_of_use.md",
-    }
-
-    st.title(title_map.get(view, "Policy"))
-    body = _read_policy_file(file_map.get(view, ""))
-
-    if body.strip():
-        st.markdown(body)
-    else:
-        st.info("Policy content not found in this deployment. Add the markdown file under /policies.")
-
-    if st.button("← Back", key="btn_policy_back"):
-        st.session_state["policy_view"] = None
-        st.session_state["_just_returned_from_policy"] = True
-
-        # restore only if you have a snapshot saved
-        try:
-            restore_form_state()
-        except Exception:
-            pass
-
-        st.rerun()
-
-    return True
-
-# =========================
-# POLICY FILE READER
-# =========================
-def _read_policy_file(rel_path: str) -> str:
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        fp = os.path.join(here, rel_path)
-        if os.path.exists(fp):
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
-    except Exception:
-        pass
-    return ""
-
-# =========================
-# INIT (run once, early)
-# =========================
-init_db()
-verify_postgres_connection()
-
-st.session_state.setdefault("user", None)
-st.session_state.setdefault("accepted_policies", False)
-st.session_state.setdefault("policy_view", None)
-st.session_state.setdefault("guest_started_builder", False)
-
-# ✅ If we are viewing a policy page, render ONLY that and stop
-if show_policy_page():
-    st.stop()
-
-
-# =========================
-# FORM SNAPSHOT / RESTORE
-# =========================
-
-FORM_KEYS_TO_PRESERVE = [
-    # Section 1
-    "full_name", "title", "email", "phone", "location", "summary",
-
-    # CV upload / parsing
-    "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
-    "_last_cv_fingerprint", "cv_uploader",
-
-    # Education/experience/skills structures you use
-    "skills", "experiences", "education_items", "references",
-
-    # Target job / cover letter
-    "job_description", "_last_jd_fp", "job_summary_ai",
-    "cover_letter", "cover_letter_box", "selected_job",
-
-    # Template
-    "template_label",
-]
-
-def snapshot_form_state():
-    st.session_state["_form_snapshot"] = {
-        k: v for k, v in st.session_state.items()
-        if not k.startswith("_")
-    }
-
-def restore_form_state():
-    snap = st.session_state.get("_form_snapshot", {})
-    for k, v in snap.items():
-        st.session_state[k] = v
-
-
-
-
-# =========================
-# RESTORE SNAPSHOT ON RETURN
-# =========================
-if st.session_state.get("_just_returned_from_policy"):
-    restore_form_state()
-    st.session_state["_just_returned_from_policy"] = False
 
 
 
@@ -1932,21 +1947,24 @@ def show_consent_gate() -> None:
 
     # Always re-check DB as source of truth
     try:
-        accepted_in_db = has_accepted_policies(email)  # already returns bool
+        accepted_in_db = bool(has_accepted_policies(email))
     except Exception:
         import traceback
         st.error("Policy check failed. See details below.")
         st.code(traceback.format_exc())
         st.stop()
 
-
-    # Keep session in sync (prevents weird skips)
-    st.session_state["accepted_policies"] = bool(accepted_in_db)
-
+    # Keep session in sync
+    st.session_state["accepted_policies"] = accepted_in_db
     if accepted_in_db:
         return
 
-    # ---- UI (unchanged) ----
+    # Ensure modal infra exists + policies cached
+    st.session_state.setdefault("consent_policy_open", False)
+    st.session_state.setdefault("consent_policy_slug", None)
+    ensure_policies_loaded()
+
+    # ---- UI ----
     st.markdown(
         """
         <div style="
@@ -1971,19 +1989,22 @@ def show_consent_gate() -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Cookie Policy", key="btn_policy_cookies"):
-            snapshot_form_state()
-            st.session_state["policy_view"] = "cookies"
+            st.session_state["consent_policy_slug"] = "cookies"
+            st.session_state["consent_policy_open"] = True
             st.rerun()
     with c2:
         if st.button("Privacy Policy", key="btn_policy_privacy"):
-            snapshot_form_state()
-            st.session_state["policy_view"] = "privacy"
+            st.session_state["consent_policy_slug"] = "privacy"
+            st.session_state["consent_policy_open"] = True
             st.rerun()
     with c3:
         if st.button("Terms of Use", key="btn_policy_terms"):
-            snapshot_form_state()
-            st.session_state["policy_view"] = "terms"
+            st.session_state["consent_policy_slug"] = "terms"
+            st.session_state["consent_policy_open"] = True
             st.rerun()
+
+    # Modal render (no navigation, no snapshot)
+    render_policy_modal("consent", email=email)
 
     agree = st.checkbox(
         "I agree to the Cookie Policy, Privacy Policy and Terms of Use",
@@ -2003,11 +2024,16 @@ def show_consent_gate() -> None:
 
         # Re-check DB after write (authoritative)
         try:
-            st.session_state["accepted_policies"] = has_accepted_policies(email)
+            st.session_state["accepted_policies"] = bool(has_accepted_policies(email))
         except Exception as e:
-            # If DB read fails after write, still block to be safe
             st.error(f"Saved acceptance, but could not verify. Please refresh. ({repr(e)})")
             st.stop()
+
+        # Keep session user dict in sync too
+        u = st.session_state.get("user") or {}
+        if isinstance(u, dict):
+            u["accepted_policies"] = True
+            st.session_state["user"] = u
 
         st.rerun()
 
@@ -2190,6 +2216,8 @@ def _auth_dialog() -> None:
     _dlg()
     st.stop()
 
+render_policy_pills("reg")
+render_policy_modal("reg", email=None)
 
 
 # =========================
@@ -2558,8 +2586,6 @@ def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
 # =========================
 # ROUTING (preview-first)
 # =========================
-if show_policy_page():
-    st.stop()
 
 # ---- Policy return guard (MUST be here) ----
 just_returned = st.session_state.pop("_just_returned_from_policy", False)
@@ -3176,14 +3202,6 @@ if uploaded_cv is not None and fill_clicked:
     st.rerun()
 
 
-
-# ============================================================
-# RESTORE GUARDS (stop restore funcs from wiping new data)
-# ============================================================
-
-# If we just came back from policy, restore snapshot FIRST (then continue)
-if st.session_state.pop("_just_returned_from_policy", False):
-    restore_form_state()
 
 # If we just autofilled from CV, DO NOT run restore_* that might overwrite fields
 just_autofilled = st.session_state.pop("_just_autofilled_from_cv", False)
@@ -4405,31 +4423,38 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
-
+ensure_policies_loaded()
 # ==============================================
-# FOOTER POLICY BUTTONS (snapshot before navigate)
-# ============================================================
+# FOOTER POLICY BUTTONS (modal, no snapshot)
+# ==============================================
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
+
+# load policy markdown into memory once
+ensure_policies_loaded()
 
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
-        snapshot_form_state()
-        st.session_state["policy_view"] = "accessibility"
+        st.session_state["footer_policy_slug"] = "accessibility"
+        st.session_state["footer_policy_open"] = True
         st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
-        snapshot_form_state()
-        st.session_state["policy_view"] = "cookies"
+        st.session_state["footer_policy_slug"] = "cookies"
+        st.session_state["footer_policy_open"] = True
         st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
-        snapshot_form_state()
-        st.session_state["policy_view"] = "privacy"
+        st.session_state["footer_policy_slug"] = "privacy"
+        st.session_state["footer_policy_open"] = True
         st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
-        snapshot_form_state()
-        st.session_state["policy_view"] = "terms"
+        st.session_state["footer_policy_slug"] = "terms"
+        st.session_state["footer_policy_open"] = True
         st.rerun()
-		
+
+# render modal if opened
+session_user = st.session_state.get("user") or {}
+email = ((session_user or {}).get("email") or "").strip().lower() or None
+render_policy_modal("footer", email=email)
