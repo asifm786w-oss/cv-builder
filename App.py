@@ -10,6 +10,7 @@ import psycopg2
 import stripe
 import psycopg2.extras
 import datetime
+from db import get_conn
 
 
 from datetime import datetime, timezone
