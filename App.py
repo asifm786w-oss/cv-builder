@@ -10,9 +10,10 @@ import psycopg2
 import stripe
 import psycopg2.extras
 import datetime
+import time
+
+
 from db import get_conn
-
-
 from db import get_conn, get_db_connection, fetchone, fetchall, execute
 from psycopg2.extras import RealDictCursor
 from openai import OpenAI
@@ -719,13 +720,13 @@ def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
     if not email:
         return False
 
-    # get uid
-    row = fetchone("SELECT id FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
-    if not row:
+    uid = get_user_id_by_email(email)
+    if not uid:
         return False
 
-    uid = int(row["id"])
-    return spend_credits(uid, source=source, ai_amount=int(amount))
+    with get_conn() as conn:
+        return spend_credits(conn, int(uid), source=source, ai_amount=int(amount))
+
 
 
 def spend_credits(user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
@@ -3201,47 +3202,59 @@ if btn_summary:
     ok, left = cooldown_ok("improve_summary", 5)
     if not ok:
         st.warning(f"⏳ Please wait {left}s before trying again.")
-    else:
-        if not cv_summary_text.strip():
-            st.error("Please write a professional summary first.")
-        elif not has_free_quota("summary_uses", 1, "AI professional summary"):
-            st.stop()
-        else:
-            with st.spinner("Improving your professional summary..."):
-                try:
-                    cv_like = {
-                        "full_name": cv_full_name,
-                        "current_title": cv_title,
-                        "location": cv_location,
-                        "existing_summary": cv_summary_text,
-                    }
+        st.stop()
 
-                    instructions = (
-                        "Improve this existing professional summary so it is clearer, "
-                        "more impactful and suitable for a modern UK CV. Do not invent "
-                        "new experience, just polish what is already there."
-                    )
+    if not cv_summary_text.strip():
+        st.error("Please write a professional summary first.")
+        st.stop()
 
-                    improved = generate_tailored_summary(cv_like, instructions)
-                    improved_limited = enforce_word_limit(
-                        improved,
-                        MAX_DOC_WORDS,
-                        label="Professional summary (AI)",
-                    )
+    # ✅ Spend 1 AI credit (ledger)  <-- NEW FLOW (replaces has_free_quota)
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    if not email_for_usage:
+        st.warning("Please sign in to use AI features.")
+        st.stop()
 
-                    # stage for next rerun (do not mutate key after widget renders)
-                    st.session_state["cv_summary_pending"] = improved_limited
+    source = f"ai_summary_improve:{int(time.time())}"
+    ok_spend = spend_ai_credit(email_for_usage, source=source, amount=1)
+    if not ok_spend:
+        st.warning("You don’t have enough AI credits for this action.")
+        st.stop()
 
-                    st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
-                    email_for_usage = (st.session_state.get("user") or {}).get("email")
-                    if email_for_usage:
-                        increment_usage(email_for_usage, "summary_uses")
+    with st.spinner("Improving your professional summary..."):
+        try:
+            cv_like = {
+                "full_name": cv_full_name,
+                "current_title": cv_title,
+                "location": cv_location,
+                "existing_summary": cv_summary_text,
+            }
 
-                    st.success("AI summary applied into your main box.")
-                    st.rerun()
+            instructions = (
+                "Improve this existing professional summary so it is clearer, "
+                "more impactful and suitable for a modern UK CV. Do not invent "
+                "new experience, just polish what is already there."
+            )
 
-                except Exception as e:
-                    st.error(f"AI error (summary improvement): {e}")
+            improved = generate_tailored_summary(cv_like, instructions)
+            improved_limited = enforce_word_limit(
+                improved,
+                MAX_DOC_WORDS,
+                label="Professional summary (AI)",
+            )
+
+            # stage for next rerun (do not mutate key after widget renders)
+            st.session_state["cv_summary_pending"] = improved_limited
+
+            # ✅ Analytics only (not credits)
+            st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
+            increment_usage(email_for_usage, "summary_uses")
+
+            st.success("AI summary applied into your main box.")
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"AI error (summary improvement): {e}")
+
 
 
 
