@@ -327,7 +327,14 @@ if not APP_URL:
     # safe fallback so app still runs locally
     APP_URL = "http://localhost:8501"
 
+# -------------------------
+# POLICY ROUTER (MUST BE EARLY)
+# -------------------------
+if st.session_state.pop("_restore_cv_after_policy", False):
+    restore_cv_state()
 
+if show_policy_page():
+    st.stop()
 
 # =========================
 # POLICIES: DB HELPERS (psycopg2) - accepted_policies is INTEGER 0/1
@@ -1937,14 +1944,7 @@ div[role="dialog"] .stButton button{
     unsafe_allow_html=True,
 )
 
-# -------------------------
-# POLICY ROUTER (MUST BE EARLY)
-# -------------------------
-if st.session_state.pop("_restore_cv_after_policy", False):
-    restore_cv_state()
 
-if show_policy_page():
-    st.stop()
 
 
 import re
