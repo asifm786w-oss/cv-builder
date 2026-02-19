@@ -256,22 +256,44 @@ def render_policy_modal(scope: str) -> None:
     _dlg()
 
 # =========================
-# POLICY ROUTE (ALWAYS DEFINED)
+# STATE HELPERS (WIDGET SAFE)
 # =========================
-import os
 
-def _read_policy_file(rel_path: str) -> str:
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        fp = os.path.join(here, rel_path)
-        if os.path.exists(fp):
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
-    except Exception:
-        pass
-    return ""
+def stage_value(key: str, value):
+    """Stage a widget value to be applied on next rerun BEFORE the widget renders."""
+    st.session_state[f"__pending__{key}"] = value
+
+def apply_staged_value(key: str):
+    """Apply any staged value for a widget key before rendering that widget."""
+    pk = f"__pending__{key}"
+    if pk in st.session_state:
+        st.session_state[key] = st.session_state.pop(pk)
+
+def safe_init_key(key: str, default=""):
+    """Ensure widget keys exist and are never None (Streamlit hates None)."""
+    if key not in st.session_state or st.session_state[key] is None:
+        st.session_state[key] = default
+
+def safe_set_if_missing(key: str, value, *, strip=True):
+    """Only set if key missing/blank; does not overwrite user edits."""
+    cur = st.session_state.get(key)
+    cur_s = (cur or "").strip() if isinstance(cur, str) else cur
+    if cur is None or cur_s == "":
+        if isinstance(value, str) and strip:
+            value = value.strip()
+        if value is not None:
+            st.session_state[key] = value
+
+
+# =========================
+# POLICY PAGE ROUTE (NO MODAL)
+# =========================
 
 def show_policy_page() -> bool:
+    """
+    Renders a full policy page when st.session_state['policy_view'] is set.
+    Returns True if it rendered (caller should st.stop()).
+    """
     view = st.session_state.get("policy_view")
     if not view:
         return False
@@ -282,13 +304,23 @@ def show_policy_page() -> bool:
         "privacy": "Privacy Policy",
         "terms": "Terms of Use",
     }
-
     file_map = {
         "accessibility": "policies/accessibility.md",
         "cookies": "policies/cookie_policy.md",
         "privacy": "policies/privacy_policy.md",
         "terms": "policies/terms_of_use.md",
     }
+
+    def _read_policy_file(rel_path: str) -> str:
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            fp = os.path.join(here, rel_path)
+            if os.path.exists(fp):
+                with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                    return f.read()
+        except Exception:
+            pass
+        return ""
 
     st.title(title_map.get(view, "Policy"))
     body = _read_policy_file(file_map.get(view, ""))
@@ -298,15 +330,51 @@ def show_policy_page() -> bool:
     else:
         st.info("Policy content not found in this deployment.")
 
+    # back restores CV snapshot if you took one
     if st.button("← Back", key="btn_policy_back"):
         st.session_state["policy_view"] = None
-
-        # if you are using snapshot restore, trigger it here
         st.session_state["_restore_cv_after_policy"] = True
-
         st.rerun()
 
     return True
+
+
+# =========================
+# CV SNAPSHOT (KEEP FOR POLICY NAV)
+# =========================
+
+CV_PRESERVE_KEYS = [
+    "cv_full_name","cv_title","cv_email","cv_phone","cv_location","cv_summary",
+    "skills_text",
+    "cv_uploader","_cv_parsed","_cv_autofill_enabled","_last_cv_fingerprint",
+    "num_experiences","parsed_num_experiences",
+    "num_education",
+]
+
+def snapshot_cv_state() -> None:
+    st.session_state["_cv_policy_snapshot"] = {k: st.session_state.get(k) for k in CV_PRESERVE_KEYS}
+
+def restore_cv_state() -> None:
+    snap = st.session_state.get("_cv_policy_snapshot") or {}
+    for k, v in snap.items():
+        if v is not None:
+            st.session_state[k] = v
+
+
+# =========================
+# MUST RUN EARLY IN SCRIPT (ROUTING)
+# =========================
+if st.session_state.pop("_restore_cv_after_policy", False):
+    restore_cv_state()
+
+if show_policy_page():
+    st.stop()
+
+
+# =========================
+# POLICY ROUTE (ALWAYS DEFINED)
+# =========================
+import os
 
 def render_public_home() -> None:
     st.markdown(
@@ -607,6 +675,7 @@ def locked_action_button(
             st.stop()
 
     return True
+
 
 
 # =========================
@@ -2159,18 +2228,14 @@ if show_policy_page():
 
 
 
-# ============================================================
-# CV Upload + AI Autofill (ONE block only)
-# ============================================================
+# =========================
+# CV Upload + AI Autofill (SAFE)
+# =========================
+
 st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
-def _safe_set(key: str, value):
-    if isinstance(value, str):
-        value = value.strip()
-    if value is not None and (not isinstance(value, str) or value.strip()):
-        st.session_state[key] = value
-
+safe_init_key("cv_uploader", None)
 uploaded_cv = st.file_uploader(
     "Upload your current CV (PDF, DOCX or TXT)",
     type=["pdf", "docx", "txt"],
@@ -2188,9 +2253,74 @@ fill_clicked = locked_action_button(
     cooldown_seconds=5,
 )
 
+def _reset_outputs_on_new_cv():
+    for k in [
+        "_cv_parsed","_cv_autofill_enabled",
+        "generated_cv","generated_cover_letter","generated_summary",
+        "suggested_bullets","ats_score",
+        "final_pdf_bytes","final_docx_bytes",
+        "selected_template","download_ready",
+    ]:
+        st.session_state.pop(k, None)
+
+def _clear_education_persistence_for_new_cv():
+    for k in list(st.session_state.keys()):
+        if k.startswith(("degree_", "institution_", "edu_")):
+            st.session_state.pop(k, None)
+    st.session_state.pop("num_education", None)
+    st.session_state.pop("education_items", None)
+    st.session_state.pop("_edu_backup", None)
+
+def _apply_parsed_fallback(parsed: dict):
+    """
+    Fallback mapping if your _apply_parsed_cv_to_session isn't defined.
+    It fills: skills, experiences(1..5), education(1..5)
+    """
+    # --- skills ---
+    skills = parsed.get("skills")
+    if isinstance(skills, list):
+        joined = "\n".join(f"• {str(s).strip()}" for s in skills if str(s).strip())
+        if joined.strip():
+            stage_value("skills_text", joined)
+    elif isinstance(skills, str) and skills.strip():
+        stage_value("skills_text", skills.strip())
+
+    # --- experiences ---
+    exps = parsed.get("experiences") or parsed.get("experience") or []
+    if isinstance(exps, list) and exps:
+        n = max(1, min(5, len(exps)))
+        st.session_state["parsed_num_experiences"] = n
+        stage_value("num_experiences", n)
+
+        for i in range(n):
+            e = exps[i] or {}
+            safe_set_if_missing(f"job_title_{i}", e.get("job_title") or e.get("title") or "")
+            safe_set_if_missing(f"company_{i}", e.get("company") or e.get("employer") or "")
+            safe_set_if_missing(f"exp_location_{i}", e.get("location") or "")
+            safe_set_if_missing(f"start_date_{i}", e.get("start_date") or e.get("start") or "")
+            safe_set_if_missing(f"end_date_{i}", e.get("end_date") or e.get("end") or "")
+            desc = e.get("description") or ""
+            if isinstance(desc, list):
+                desc = "\n".join([str(x).strip() for x in desc if str(x).strip()])
+            safe_set_if_missing(f"description_{i}", desc or "")
+
+    # --- education ---
+    edu = parsed.get("education") or parsed.get("educations") or []
+    if isinstance(edu, list) and edu:
+        n = max(1, min(5, len(edu)))
+        stage_value("num_education", n)
+        for i in range(n):
+            r = edu[i] or {}
+            safe_set_if_missing(f"degree_{i}", r.get("degree") or r.get("qualification") or "")
+            safe_set_if_missing(f"institution_{i}", r.get("institution") or r.get("school") or "")
+            safe_set_if_missing(f"edu_location_{i}", r.get("location") or r.get("city") or "")
+            safe_set_if_missing(f"edu_start_{i}", r.get("start_date") or r.get("start") or "")
+            safe_set_if_missing(f"edu_end_{i}", r.get("end_date") or r.get("end") or "")
+
+
 if uploaded_cv is not None and fill_clicked:
     raw_text = _read_uploaded_cv_to_text(uploaded_cv)
-    if not raw_text.strip():
+    if not (raw_text or "").strip():
         st.warning("No readable text found in that file.")
         st.stop()
 
@@ -2198,54 +2328,55 @@ if uploaded_cv is not None and fill_clicked:
     last_fp = st.session_state.get("_last_cv_fingerprint")
 
     with st.spinner("Reading and analysing your CV..."):
-        parsed = extract_cv_data(raw_text)  # your AI parser
+        parsed = extract_cv_data(raw_text)
 
     if not isinstance(parsed, dict):
         st.error("AI parser returned an unexpected format.")
         st.stop()
 
-    # reset on new CV
+    # reset on new CV content
     if cv_fp != last_fp:
         _reset_outputs_on_new_cv()
         _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
 
-    # Apply parsed data
-    _apply_parsed_cv_to_session(parsed)
+    # ---- Apply parsed mapping (prefer your function if present)
+    if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
+        globals()["_apply_parsed_cv_to_session"](parsed)
+    else:
+        _apply_parsed_fallback(parsed)
 
-    # Force Personal details keys to match your cv_* widgets
-    _safe_set("cv_full_name", parsed.get("full_name") or parsed.get("name"))
-    _safe_set("cv_email", parsed.get("email"))
-    _safe_set("cv_phone", parsed.get("phone"))
-    _safe_set("cv_location", parsed.get("location"))
-    _safe_set("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
-    _safe_set("cv_summary", parsed.get("summary") or parsed.get("professional_summary"))
+    # ---- Personal details: stage or set if missing
+    safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
+    safe_set_if_missing("cv_email", parsed.get("email") or "")
+    safe_set_if_missing("cv_phone", parsed.get("phone") or "")
+    safe_set_if_missing("cv_location", parsed.get("location") or "")
+    safe_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
+    safe_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
 
     st.session_state["_cv_parsed"] = parsed
     st.session_state["_cv_autofill_enabled"] = True
     st.session_state["_just_autofilled_from_cv"] = True
 
-    # usage counting (only for logged-in users)
+    # usage counting
     email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if email_for_usage and "increment_usage" in globals():
+    if email_for_usage:
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
         increment_usage(email_for_usage, "upload_parses")
 
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
-
-# If we just autofilled from CV, DO NOT run restore_* that might overwrite fields
-just_autofilled = st.session_state.pop("_just_autofilled_from_cv", False)
-
-
-
-
-
+	
 
 # -------------------------
 # 1. Personal details
 # -------------------------
 st.header("1. Personal details")
+
+# Apply staged values BEFORE widgets render
+for k in ["cv_full_name","cv_title","cv_email","cv_phone","cv_location","cv_summary"]:
+    safe_init_key(k, "")
+    apply_staged_value(k)
 
 cv_full_name = st.text_input("Full name *", key="cv_full_name")
 cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key="cv_title")
@@ -2253,11 +2384,10 @@ cv_email     = st.text_input("Email *", key="cv_email")
 cv_phone     = st.text_input("Phone", key="cv_phone")
 cv_location  = st.text_input("Location (City, Country)", key="cv_location")
 
-# --- Apply staged summary BEFORE widget renders ---
-if "cv_summary_pending" in st.session_state:
-    st.session_state["cv_summary"] = st.session_state.pop("cv_summary_pending")
-
 cv_summary_text = st.text_area("Professional summary", height=120, key="cv_summary")
+
+# If you renamed it earlier, make sure this constant exists:
+MAX_PANEL_WORDS = globals().get("MAX_PANEL_WORDS", 100)
 st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
 
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
@@ -2275,14 +2405,13 @@ if btn_summary:
         st.error("Please write a professional summary first.")
         st.stop()
 
-    # ✅ Spend 1 AI credit (ledger)  <-- NEW FLOW (replaces has_free_quota)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
     if not email_for_usage:
         st.warning("Please sign in to use AI features.")
         st.stop()
 
-    source = f"ai_summary_improve:{int(time.time())}"
-    ok_spend = spend_ai_credit(email_for_usage, source=source, amount=1)
+    # Spend credit
+    ok_spend = spend_ai_credit(email_for_usage, source=f"ai_summary_improve:{int(time.time())}", amount=1)
     if not ok_spend:
         st.warning("You don’t have enough AI credits for this action.")
         st.stop()
@@ -2295,32 +2424,30 @@ if btn_summary:
                 "location": cv_location,
                 "existing_summary": cv_summary_text,
             }
-
             instructions = (
                 "Improve this existing professional summary so it is clearer, "
                 "more impactful and suitable for a modern UK CV. Do not invent "
-                "new experience, just polish what is already there."
+                "new experience, only polish what is already there."
             )
 
             improved = generate_tailored_summary(cv_like, instructions)
-            improved_limited = enforce_word_limit(
-                improved,
-                MAX_DOC_WORDS,
-                label="Professional summary (AI)",
-            )
 
-            # stage for next rerun (do not mutate key after widget renders)
-            st.session_state["cv_summary_pending"] = improved_limited
+            # enforce_word_limit MUST exist (you said you added defs)
+            improved = enforce_word_limit(improved, MAX_PANEL_WORDS, label="Professional summary")
 
-            # ✅ Analytics only (not credits)
+            # STAGE then rerun (this is the key)
+            stage_value("cv_summary", improved)
+
             st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
             increment_usage(email_for_usage, "summary_uses")
 
-            st.success("AI summary applied into your main box.")
+            st.success("AI summary applied.")
             st.rerun()
 
         except Exception as e:
             st.error(f"AI error (summary improvement): {e}")
+            st.stop()
+
 
 
 
