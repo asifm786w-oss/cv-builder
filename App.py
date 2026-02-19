@@ -1975,11 +1975,8 @@ if uploaded_cv is not None and fill_clicked:
 # If we just autofilled from CV, DO NOT run restore_* that might overwrite fields
 just_autofilled = st.session_state.pop("_just_autofilled_from_cv", False)
 
-# Your existing restore skills calls should NOT run when just_autofilled
-if not just_autofilled:
-    restore_skills_state()
 
-backup_skills_state()
+
 
 
 # -------------------------
@@ -2065,8 +2062,7 @@ if btn_summary:
 
 
 
-normalize_skills_state()
-st.header("2. Skills")
+
 
 # -------------------------
 # 2. Skills (bullet points only)
@@ -2220,8 +2216,7 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
 
-restore_experience_from_parsed()
-st.header("3. Experience (multiple roles)")
+
 
 # -------------------------
 # 3. Experience (multiple roles)
@@ -2375,7 +2370,7 @@ if not st.session_state.pop("_just_autofilled_from_cv", False):
     pass
 
 
-    restore_education_state()
+
 
 # -------------------------
 # 4. Education (multiple entries)
@@ -2440,9 +2435,7 @@ for i in range(int(num_education)):
             )
         )
 
-# ✅ CRITICAL: save what the user typed so reruns can't wipe it
-backup_education_state()
-st.session_state["education_items"] = [edu.dict() for edu in education_items]
+
 
 # -------------------------
 # 5. References (optional)
@@ -2901,6 +2894,7 @@ if ai_cover_letter_clicked:
 
         except Exception as e:
             st.error(f"AI error (cover letter): {e}")
+
 
 # -------------------------
 # Cover letter editor + downloads
