@@ -4478,9 +4478,3 @@ with fc4:
         st.session_state["policy_view"] = "terms"
         st.rerun()
 
-
-
-# render modal if opened
-session_user = st.session_state.get("user") or {}
-email = ((session_user or {}).get("email") or "").strip().lower() or None
-render_policy_modal("footer", email=email)
