@@ -2049,11 +2049,6 @@ def show_consent_gate() -> None:
     st.stop()
 
 
-st.session_state.setdefault("policy_view", None)
-
-# Restore CV state immediately after returning from policy
-if st.session_state.pop("_restore_cv_after_policy", False):
-    restore_cv_state()
 
 
 
@@ -2120,6 +2115,7 @@ def _auth_dialog() -> None:
     with c2:
         if st.button("Close", key=f"auth_modal_close_{st.session_state['auth_modal_epoch']}"):
             close_auth_modal()
+
 def set_logged_in_user(user: dict) -> None:
     if not (isinstance(user, dict) and user.get("email")):
         return
@@ -2654,7 +2650,9 @@ if email:
         st.stop()
     st.session_state["user_id"] = uid
 
-st.session_state.setdefault("policy_view", None)
+# Restore CV state immediately after returning from policy
+if st.session_state.pop("_restore_cv_after_policy", False):
+    restore_cv_state()
 
 if show_policy_page():
     st.stop()
@@ -2819,6 +2817,9 @@ def render_admin_dashboard() -> None:
             if (st.session_state.get("user") or {}).get("email") == selected_email:
                 st.session_state["user"] = None
             st.rerun()
+
+
+
 
 # =========================
 # Mode select (ADMIN ONLY)
