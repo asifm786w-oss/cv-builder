@@ -345,8 +345,7 @@ def show_policy_page() -> bool:
 
 CV_PRESERVE_KEYS = [
     "cv_full_name","cv_title","cv_email","cv_phone","cv_location","cv_summary",
-    "skills_text",
-    "cv_uploader","_cv_parsed","_cv_autofill_enabled","_last_cv_fingerprint",
+    "skills_text",  
     "num_experiences","parsed_num_experiences",
     "num_education",
 ]
@@ -2235,7 +2234,7 @@ if show_policy_page():
 st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
-safe_init_key("cv_uploader", None)
+
 uploaded_cv = st.file_uploader(
     "Upload your current CV (PDF, DOCX or TXT)",
     type=["pdf", "docx", "txt"],
