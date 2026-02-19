@@ -1146,6 +1146,16 @@ is_admin = bool(
     isinstance(current_user, dict)
     and current_user.get("role") in {"owner", "admin"}
 )
+# =========================
+# CORE ROUTING VARS (define early)
+# =========================
+current_user = st.session_state.get("user")
+is_logged_in = bool(current_user and isinstance(current_user, dict) and current_user.get("email"))
+
+# Always define user_email / is_admin so no NameError
+user_email = (current_user or {}).get("email") if is_logged_in else None
+is_admin = (current_user or {}).get("role") in {"owner", "admin"} if is_logged_in else False
+
 
 # =========================
 # AUTH MODAL (DEFINE ONCE)
