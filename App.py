@@ -544,22 +544,6 @@ PRESERVE_KEYS = [
     # any other section keys you use
 ]
 
-def restore_form_state_if_needed():
-    """
-    Restore snapshot after returning from policy pages.
-    MUST run before widgets render or Streamlit will ignore changes.
-    """
-    if not st.session_state.get("_has_form_snapshot"):
-        return
-
-    snap = st.session_state.get("_form_snapshot") or {}
-    for k, v in snap.items():
-        # Only restore if empty/missing to avoid overriding user edits
-        if k not in st.session_state or st.session_state.get(k) in (None, ""):
-            st.session_state[k] = v
-
-    # one-time restore
-    st.session_state["_has_form_snapshot"] = False
 
 import os
 
@@ -604,6 +588,45 @@ def load_policies_index() -> list[dict]:
 
     return items
 
+# =========================
+# POLICY PAGE VIEW
+# =========================
+def show_policy_page() -> bool:
+    view = st.session_state.get("policy_view")
+    if not view:
+        return False
+
+    title_map = {
+        "accessibility": "Accessibility",
+        "cookies": "Cookie Policy",
+        "privacy": "Privacy Policy",
+        "terms": "Terms of Use",
+    }
+
+    file_map = {
+        "accessibility": "policies/accessibility.md",
+        "cookies": "policies/cookie_policy.md",
+        "privacy": "policies/privacy_policy.md",
+        "terms": "policies/terms_of_use.md",
+    }
+
+    st.title(title_map.get(view, "Policy"))
+    body = _read_policy_file(file_map.get(view, ""))
+
+    if body.strip():
+        st.markdown(body)
+    else:
+        st.info("Policy content not found in this deployment. Add the markdown file under /policies.")
+
+    if st.button("← Back", key="btn_policy_back"):
+        st.session_state["policy_view"] = None
+
+        # restore only from SAFE snapshot
+        restore_form_state()
+
+        st.rerun()
+
+    return True
 
 
 
@@ -823,8 +846,6 @@ def get_user_credits(email: str) -> dict:
     return get_credits_by_user_id(int(uid))
 
 
-
-
 def grant_starter_credits(user_id: int) -> None:
     """
     Grants starter credits once per user.
@@ -863,10 +884,6 @@ def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
         return spend_credits(conn, uid, source=source, ai_amount=int(amount))
 
 
-
-
-
-
 def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
     cv_amount = int(cv_amount or 0)
     ai_amount = int(ai_amount or 0)
@@ -903,7 +920,6 @@ def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount
     except Exception:
         conn.rollback()
         raise
-
 
 
 def _clear_education_persistence_for_new_cv():
@@ -993,6 +1009,33 @@ def normalize_experience_state(max_roles: int = 5):
         st.session_state.setdefault(f"start_date_{i}", "")
         st.session_state.setdefault(f"end_date_{i}", "")
         st.session_state.setdefault(f"description_{i}", "")
+
+# =========================
+# FORM SNAPSHOT / RESTORE (SAFE)
+# =========================
+FORM_KEYS_TO_PRESERVE = [
+    # Personal details (use your actual keys)
+    "cv_full_name",
+    "cv_title",
+    "cv_email",
+    "cv_phone",
+    "cv_location",
+    "cv_summary",
+    "skills_text",
+    "num_experiences",
+]
+
+def snapshot_form_state() -> None:
+    snap = {}
+    for k in FORM_KEYS_TO_PRESERVE:
+        if k in st.session_state:
+            snap[k] = st.session_state.get(k)
+    st.session_state["_form_snapshot"] = snap
+
+def restore_form_state() -> None:
+    snap = st.session_state.get("_form_snapshot") or {}
+    for k, v in snap.items():
+        st.session_state[k] = v
 
 
 # -------------------------
@@ -1945,26 +1988,17 @@ def show_consent_gate() -> None:
     if not email:
         return
 
-    # Always re-check DB as source of truth
     try:
         accepted_in_db = bool(has_accepted_policies(email))
-    except Exception:
-        import traceback
-        st.error("Policy check failed. See details below.")
-        st.code(traceback.format_exc())
+    except Exception as e:
+        # ✅ no traceback box, but still fail-closed
+        st.error(f"Policy check failed. Please refresh and try again. ({repr(e)})")
         st.stop()
 
-    # Keep session in sync
     st.session_state["accepted_policies"] = accepted_in_db
     if accepted_in_db:
         return
 
-    # Ensure modal infra exists + policies cached
-    st.session_state.setdefault("consent_policy_open", False)
-    st.session_state.setdefault("consent_policy_slug", None)
-    ensure_policies_loaded()
-
-    # ---- UI ----
     st.markdown(
         """
         <div style="
@@ -1989,22 +2023,19 @@ def show_consent_gate() -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Cookie Policy", key="btn_policy_cookies"):
-            st.session_state["consent_policy_slug"] = "cookies"
-            st.session_state["consent_policy_open"] = True
+            snapshot_form_state()
+            st.session_state["policy_view"] = "cookies"
             st.rerun()
     with c2:
         if st.button("Privacy Policy", key="btn_policy_privacy"):
-            st.session_state["consent_policy_slug"] = "privacy"
-            st.session_state["consent_policy_open"] = True
+            snapshot_form_state()
+            st.session_state["policy_view"] = "privacy"
             st.rerun()
     with c3:
         if st.button("Terms of Use", key="btn_policy_terms"):
-            st.session_state["consent_policy_slug"] = "terms"
-            st.session_state["consent_policy_open"] = True
+            snapshot_form_state()
+            st.session_state["policy_view"] = "terms"
             st.rerun()
-
-    # Modal render (no navigation, no snapshot)
-    render_policy_modal("consent", email=email)
 
     agree = st.checkbox(
         "I agree to the Cookie Policy, Privacy Policy and Terms of Use",
@@ -2022,14 +2053,13 @@ def show_consent_gate() -> None:
             st.error(f"Could not save your acceptance. Please try again. ({repr(e)})")
             st.stop()
 
-        # Re-check DB after write (authoritative)
         try:
             st.session_state["accepted_policies"] = bool(has_accepted_policies(email))
         except Exception as e:
             st.error(f"Saved acceptance, but could not verify. Please refresh. ({repr(e)})")
             st.stop()
 
-        # Keep session user dict in sync too
+        # keep session user in sync (helps sidebar + avoids weirdness)
         u = st.session_state.get("user") or {}
         if isinstance(u, dict):
             u["accepted_policies"] = True
@@ -2039,6 +2069,7 @@ def show_consent_gate() -> None:
 
     st.info("Please accept to continue using the site.")
     st.stop()
+
 
 
 
@@ -4435,23 +4466,23 @@ ensure_policies_loaded()
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
-        st.session_state["footer_policy_slug"] = "accessibility"
-        st.session_state["footer_policy_open"] = True
+        snapshot_form_state()
+        st.session_state["policy_view"] = "accessibility"
         st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
-        st.session_state["footer_policy_slug"] = "cookies"
-        st.session_state["footer_policy_open"] = True
+        snapshot_form_state()
+        st.session_state["policy_view"] = "cookies"
         st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
-        st.session_state["footer_policy_slug"] = "privacy"
-        st.session_state["footer_policy_open"] = True
+        snapshot_form_state()
+        st.session_state["policy_view"] = "privacy"
         st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
-        st.session_state["footer_policy_slug"] = "terms"
-        st.session_state["footer_policy_open"] = True
+        snapshot_form_state()
+        st.session_state["policy_view"] = "terms"
         st.rerun()
 
 # render modal if opened
