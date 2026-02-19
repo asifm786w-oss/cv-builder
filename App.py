@@ -255,6 +255,31 @@ def render_policy_modal(scope: str) -> None:
 
     _dlg()
 
+def render_public_home() -> None:
+    st.markdown(
+        """
+        <div style="
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 20px;
+            padding: 18px 20px;
+            box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+            margin-top: 6px;
+            margin-bottom: 18px;
+        ">
+          <div style="font-weight:900; font-size:30px; letter-spacing:-0.02em; line-height:1.1;">
+            Mulyba
+          </div>
+          <div style="opacity:0.86; font-size:13px; margin-top:8px; line-height:1.55;">
+            Career Suite • CV Builder • AI tools
+          </div>
+          <div style="margin-top:10px; font-size:12px; opacity:0.70;">
+            Guests can build. Sign in only when you want downloads + saved history.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # =========================
 # COOLDOWN
