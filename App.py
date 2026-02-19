@@ -285,6 +285,17 @@ def safe_set_if_missing(key: str, value, *, strip=True):
             st.session_state[key] = value
 
 
+def enforce_word_limit(text: str, max_words: int, label: str = "") -> str:
+    words = (text or "").split()
+    if len(words) > max_words:
+        st.warning(
+            f"{label or 'Text'} is limited to {max_words} words. "
+            f"Currently {len(words)}; extra words will be ignored."
+        )
+        return " ".join(words[:max_words])
+    return text or ""
+
+
 # =========================
 # POLICY PAGE ROUTE (NO MODAL)
 # =========================
