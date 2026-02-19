@@ -423,6 +423,18 @@ def _reset_outputs_on_new_cv():
     for k in keys_to_clear:
         st.session_state.pop(k, None)
 
+def _clear_education_persistence_for_new_cv():
+    """
+    Clear education persistence so a new CV upload doesn't get overwritten by old backups.
+    """
+    for k in list(st.session_state.keys()):
+        if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
+            st.session_state.pop(k, None)
+
+    st.session_state.pop("num_education", None)
+    st.session_state.pop("education_items", None)
+    st.session_state.pop("_edu_backup", None)
+
 # =========================
 # USER LOOKUPS (DB HELPERS)
 # =========================
