@@ -188,6 +188,31 @@ def show_policy_page() -> bool:
 
     return True
 
+# =========================
+# POLICY NAV SNAPSHOT (MINIMAL)
+# =========================
+
+CV_PRESERVE_KEYS = [
+    "cv_full_name",
+    "cv_title",
+    "cv_email",
+    "cv_phone",
+    "cv_location",
+    "cv_summary",
+    "skills_text",
+]
+
+def snapshot_cv_state() -> None:
+    st.session_state["_cv_policy_snapshot"] = {
+        k: st.session_state.get(k) for k in CV_PRESERVE_KEYS
+    }
+
+def restore_cv_state() -> None:
+    snap = st.session_state.get("_cv_policy_snapshot") or {}
+    for k, v in snap.items():
+        if v is not None:
+            st.session_state[k] = v
+
 
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
@@ -1975,14 +2000,17 @@ def show_consent_gate() -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Cookie Policy", key="btn_policy_cookies"):
+            snapshot_cv_state()
             st.session_state["policy_view"] = "cookies"
             st.rerun()
     with c2:
-        if st.button("Privacy Policy", key="btn_policy_privacy"):
+    if st.button("Privacy Policy", key="btn_policy_privacy"):
+            snapshot_cv_state()
             st.session_state["policy_view"] = "privacy"
             st.rerun()
     with c3:
         if st.button("Terms of Use", key="btn_policy_terms"):
+            snapshot_cv_state()
             st.session_state["policy_view"] = "terms"
             st.rerun()
 
@@ -2021,6 +2049,11 @@ def show_consent_gate() -> None:
     st.stop()
 
 
+st.session_state.setdefault("policy_view", None)
+
+# Restore CV state immediately after returning from policy
+if st.session_state.pop("_restore_cv_after_policy", False):
+    restore_cv_state()
 
 
 
@@ -4419,20 +4452,25 @@ st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
+        snapshot_cv_state()
         st.session_state["policy_view"] = "accessibility"
         st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
+        snapshot_cv_state()
         st.session_state["policy_view"] = "cookies"
         st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
+        snapshot_cv_state()
         st.session_state["policy_view"] = "privacy"
         st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
+        snapshot_cv_state()
         st.session_state["policy_view"] = "terms"
         st.rerun()
+
 
 
 # render modal if opened
