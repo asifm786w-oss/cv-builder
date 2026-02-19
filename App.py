@@ -402,23 +402,166 @@ def _clear_education_persistence_for_new_cv():
     st.session_state.pop("_edu_backup", None)
 
 
-def _apply_parsed_cv_to_session(parsed: dict):
-    """
-    Minimal apply. Expand this to map experiences/education/etc,
-    OR replace body with your full implementation if you already have it.
-    """
+def _apply_parsed_cv_to_session(parsed: dict, max_roles: int = 5, max_edu: int = 5):
     if not isinstance(parsed, dict):
         return
 
-    # keep a copy for restore logic
+    # keep raw
     st.session_state["_cv_parsed"] = parsed
 
-    # If your parser returns skills as list/string, hydrate skills_text
-    skills_data = parsed.get("skills")
-    if isinstance(skills_data, list) and skills_data:
-        st.session_state["skills_text"] = "\n".join(f"• {str(s).strip()}" for s in skills_data if str(s).strip())
-    elif isinstance(skills_data, str) and skills_data.strip():
+    # -------------------------
+    # PERSONAL (optional) - safe, won’t overwrite non-empty
+    # -------------------------
+    def _safe_set(k, v):
+        if v is None:
+            return
+        if isinstance(v, str) and not v.strip():
+            return
+        existing = st.session_state.get(k)
+        if existing is None or (isinstance(existing, str) and not existing.strip()):
+            st.session_state[k] = v.strip() if isinstance(v, str) else v
+
+    _safe_set("cv_full_name", parsed.get("full_name") or parsed.get("name"))
+    _safe_set("cv_email", parsed.get("email"))
+    _safe_set("cv_phone", parsed.get("phone"))
+    _safe_set("cv_location", parsed.get("location"))
+    _safe_set("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
+    _safe_set("cv_summary", parsed.get("summary") or parsed.get("professional_summary"))
+
+    # -------------------------
+    # SKILLS → skills_text (bullets)
+    # -------------------------
+    skills_data = (
+        parsed.get("skills")
+        or parsed.get("skill_list")
+        or parsed.get("key_skills")
+        or []
+    )
+
+    if isinstance(skills_data, str) and skills_data.strip():
+        # if it's comma-separated or lines, keep as-is
         st.session_state["skills_text"] = skills_data.strip()
+    elif isinstance(skills_data, list) and skills_data:
+        bullets = []
+        for s in skills_data:
+            s = str(s).strip()
+            if not s:
+                continue
+            if not s.startswith(("•", "-", "*")):
+                s = f"• {s}"
+            bullets.append(s)
+        if bullets:
+            st.session_state["skills_text"] = "\n".join(bullets)
+
+    # -------------------------
+    # EXPERIENCE mapping
+    # -------------------------
+    exps = (
+        parsed.get("experiences")
+        or parsed.get("experience")
+        or parsed.get("work_experience")
+        or parsed.get("employment")
+        or []
+    )
+    if not isinstance(exps, list):
+        exps = []
+
+    # normalize each experience row
+    norm_exps = []
+    for e in exps:
+        if not isinstance(e, dict):
+            continue
+
+        title = (e.get("job_title") or e.get("title") or e.get("role") or e.get("position") or "").strip()
+        company = (e.get("company") or e.get("employer") or e.get("organisation") or e.get("organization") or "").strip()
+        location = (e.get("location") or e.get("city") or "").strip()
+        start = (e.get("start_date") or e.get("start") or e.get("from") or "").strip()
+        end = (e.get("end_date") or e.get("end") or e.get("to") or "").strip()
+
+        desc = e.get("description") or e.get("responsibilities") or e.get("bullets") or ""
+        if isinstance(desc, list):
+            desc_lines = []
+            for x in desc:
+                x = str(x).strip()
+                if not x:
+                    continue
+                if not x.startswith(("•", "-", "*")):
+                    x = f"• {x}"
+                desc_lines.append(x)
+            desc = "\n".join(desc_lines)
+        elif isinstance(desc, str):
+            desc = desc.strip()
+            # if it's a paragraph, don't force bullets here; your AI button can fix it later
+
+        # keep only if something meaningful
+        if title or company or desc:
+            norm_exps.append(
+                {
+                    "job_title": title,
+                    "company": company,
+                    "location": location,
+                    "start": start,
+                    "end": end,
+                    "description": desc,
+                }
+            )
+
+    norm_exps = norm_exps[:max_roles]
+
+    # drive UI count
+    if norm_exps:
+        st.session_state["parsed_num_experiences"] = len(norm_exps)
+        st.session_state["num_experiences"] = max(1, len(norm_exps))
+
+        for i, e in enumerate(norm_exps):
+            st.session_state[f"job_title_{i}"] = e["job_title"]
+            st.session_state[f"company_{i}"] = e["company"]
+            st.session_state[f"exp_location_{i}"] = e["location"]
+            st.session_state[f"start_date_{i}"] = e["start"]
+            st.session_state[f"end_date_{i}"] = e["end"]
+            st.session_state[f"description_{i}"] = e["description"]
+
+    # -------------------------
+    # EDUCATION mapping
+    # -------------------------
+    edu = (
+        parsed.get("education")
+        or parsed.get("educations")
+        or parsed.get("education_history")
+        or parsed.get("qualifications")
+        or []
+    )
+    if not isinstance(edu, list):
+        edu = []
+
+    norm_edu = []
+    for r in edu:
+        if not isinstance(r, dict):
+            continue
+
+        degree = (r.get("degree") or r.get("qualification") or r.get("title") or r.get("course") or "").strip()
+        inst = (r.get("institution") or r.get("school") or r.get("university") or "").strip()
+        loc = (r.get("location") or r.get("city") or "").strip()
+        start = (r.get("start_date") or r.get("start") or "").strip()
+        end = (r.get("end_date") or r.get("end") or "").strip()
+
+        if degree or inst:
+            norm_edu.append(
+                {"degree": degree, "institution": inst, "location": loc, "start": start, "end": end}
+            )
+
+    norm_edu = norm_edu[:max_edu]
+
+    if norm_edu:
+        st.session_state["num_education"] = max(1, len(norm_edu))
+        st.session_state["education_items"] = norm_edu
+
+        for i, r in enumerate(norm_edu):
+            st.session_state[f"degree_{i}"] = r["degree"]
+            st.session_state[f"institution_{i}"] = r["institution"]
+            st.session_state[f"edu_location_{i}"] = r["location"]
+            st.session_state[f"edu_start_{i}"] = r["start"]
+            st.session_state[f"edu_end_{i}"] = r["end"]
 
 
 def locked_action_button(
