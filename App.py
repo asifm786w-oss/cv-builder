@@ -1377,9 +1377,6 @@ is_admin = (current_user or {}).get("role") in {"owner", "admin"} if is_logged_i
 # 2) Non-blocking overlays / dialogs
 render_auth_modal_if_open()
 
-# Only keep these if you are ACTUALLY using the modal system:
-render_policy_modal("gate", email=user_email)
-render_policy_modal("footer", email=user_email)
 
 # 3) Guest header
 if not is_logged_in:
