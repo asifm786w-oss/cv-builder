@@ -1029,6 +1029,21 @@ def show_consent_gate() -> None:
     st.info("Please accept to continue using the site.")
     st.stop()
 
+# =========================
+# USER CONTEXT (ALWAYS DEFINED)
+# =========================
+
+current_user = st.session_state.get("user") or {}
+
+is_logged_in = bool(
+    isinstance(current_user, dict)
+    and current_user.get("email")
+)
+
+is_admin = bool(
+    isinstance(current_user, dict)
+    and current_user.get("role") in {"owner", "admin"}
+)
 
 # =========================
 # AUTH MODAL (DEFINE ONCE)
