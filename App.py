@@ -71,8 +71,6 @@ st.set_page_config(
 )
 
 
-st.set_page_config(layout="centered")
-
 st.markdown(
     """
     <style>
@@ -188,10 +186,6 @@ def show_policy_page() -> bool:
 
     return True
 
-# =========================
-# POLICY NAV SNAPSHOT (MINIMAL)
-# =========================
-
 CV_PRESERVE_KEYS = [
     "cv_full_name",
     "cv_title",
@@ -199,8 +193,18 @@ CV_PRESERVE_KEYS = [
     "cv_phone",
     "cv_location",
     "cv_summary",
+    "cv_summary_pending",
     "skills_text",
+    "skills_pending",
+
+    # uploader + parse flags (otherwise uploader resets)
+    "cv_uploader",
+    "_cv_parsed",
+    "_cv_autofill_enabled",
+    "_just_autofilled_from_cv",
+    "_last_cv_fingerprint",
 ]
+
 
 def snapshot_cv_state() -> None:
     st.session_state["_cv_policy_snapshot"] = {
