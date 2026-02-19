@@ -1953,6 +1953,14 @@ def is_valid_email(email: str) -> bool:
     email = normalize_email(email)
     return bool(EMAIL_RE.match(email))
 
+# -------------------------
+# POLICY ROUTER (MUST RUN BEFORE ANY CV WIDGETS)
+# -------------------------
+if st.session_state.pop("_restore_cv_after_policy", False):
+    restore_cv_state()
+
+if show_policy_page():
+    st.stop()
 
 
 
@@ -2654,12 +2662,6 @@ if email:
         st.stop()
     st.session_state["user_id"] = uid
 
-# Restore CV state immediately after returning from policy
-if st.session_state.pop("_restore_cv_after_policy", False):
-    restore_cv_state()
-
-if show_policy_page():
-    st.stop()
 
 
 
