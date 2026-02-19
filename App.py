@@ -2004,7 +2004,7 @@ def show_consent_gate() -> None:
             st.session_state["policy_view"] = "cookies"
             st.rerun()
     with c2:
-    if st.button("Privacy Policy", key="btn_policy_privacy"):
+        if st.button("Privacy Policy", key="btn_policy_privacy"):
             snapshot_cv_state()
             st.session_state["policy_view"] = "privacy"
             st.rerun()
