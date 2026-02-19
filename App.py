@@ -456,6 +456,38 @@ def refresh_session_user_from_db() -> None:
 
     st.session_state["user"] = dict(db_u)
 
+def _read_uploaded_cv_to_text(uploaded_cv) -> str:
+    if uploaded_cv is None:
+        return ""
+
+    name = (uploaded_cv.name or "").lower()
+    ext = os.path.splitext(name)[1]
+    data: bytes = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
+    if not data:
+        return ""
+
+    if ext == ".txt":
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data.decode("latin-1", errors="ignore")
+
+    if ext == ".docx":
+        import docx
+        doc = docx.Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs if p.text)
+
+    if ext == ".pdf":
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        parts = []
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            if txt.strip():
+                parts.append(txt)
+        return "\n\n".join(parts)
+
+    return ""
 
 # =========================
 # LEDGER CREDITS (SAFE + ATOMIC)
