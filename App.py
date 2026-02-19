@@ -395,6 +395,14 @@ def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
     st.session_state[f"_cooldown_{action_key}"] = now
     return True, 0
 
+# --- Backwards-compatible alias (upload helper) ---
+def _read_uploaded_cv_to_text(uploaded_cv):
+    if "_read_uploaded_cv_to_text" in globals():
+        return globals()["_read_uploaded_cv_to_text"](uploaded_cv)
+    if "_read_uploaded_cv_to_text" in globals():
+        return globals()["_read_uploaded_cv_to_text"](uploaded_cv)
+    raise NameError("No upload reader found. Expected _read_uploaded_cv_to_text or _read_uploaded_cv_to_text.")
+
 
 # =========================
 # USER LOOKUPS (DB HELPERS)
