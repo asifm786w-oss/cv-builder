@@ -1146,15 +1146,7 @@ is_admin = bool(
     isinstance(current_user, dict)
     and current_user.get("role") in {"owner", "admin"}
 )
-# =========================
-# CORE ROUTING VARS (define early)
-# =========================
-current_user = st.session_state.get("user")
-is_logged_in = bool(current_user and isinstance(current_user, dict) and current_user.get("email"))
 
-# Always define user_email / is_admin so no NameError
-user_email = (current_user or {}).get("email") if is_logged_in else None
-is_admin = (current_user or {}).get("role") in {"owner", "admin"} if is_logged_in else False
 
 
 # =========================
@@ -1373,39 +1365,36 @@ def auth_ui():
 
 
 # =========================
-# ROUTING (EARLY)
+# ROUTING (EARLY)  ✅ single source of truth
 # =========================
+
+# 1) Get user from session FIRST
+current_user = st.session_state.get("user")
+is_logged_in = bool(current_user and isinstance(current_user, dict) and current_user.get("email"))
+user_email = (current_user or {}).get("email") if is_logged_in else None
+is_admin = (current_user or {}).get("role") in {"owner", "admin"} if is_logged_in else False
+
+# 2) Non-blocking overlays / dialogs
 render_auth_modal_if_open()
 
-# Render BOTH policy modals early (non-blocking)
-render_policy_modal("gate")
-render_policy_modal("footer")
+# Only keep these if you are ACTUALLY using the modal system:
+render_policy_modal("gate", email=user_email)
+render_policy_modal("footer", email=user_email)
 
-
-is_logged_in = bool(current_user.get("email"))
-is_admin = current_user.get("role") in {"owner", "admin"}
-
-
-current_user = st.session_state.get("user")
-is_logged_in = _is_logged_in_user(current_user)
-
+# 3) Guest header
 if not is_logged_in:
     render_public_home()
 
-# Consent gate for logged-in users only
+# 4) Consent gate (logged in only; fail-closed inside)
 show_consent_gate()
 
-email = (st.session_state.get("user") or {}).get("email")
-if email:
-    uid = get_user_id_by_email(email)
+# 5) Cache user_id for DB ops (logged in only)
+if user_email:
+    uid = get_user_id_by_email(user_email)
     if not uid:
         st.error("No account found for this email. Please sign out and sign in again.")
         st.stop()
     st.session_state["user_id"] = uid
-
-
-
-
 
 
 # =========================
@@ -1422,6 +1411,7 @@ if is_logged_in and user_email:
 
     my_ref_count = int((st.session_state.get("user") or {}).get("referrals_count", 0) or 0)
     my_ref_count = min(my_ref_count, REFERRAL_CAP)
+
 
 # =========================
 # Admin dashboard
