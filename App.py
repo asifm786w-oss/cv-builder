@@ -1937,6 +1937,15 @@ div[role="dialog"] .stButton button{
     unsafe_allow_html=True,
 )
 
+# -------------------------
+# POLICY ROUTER (MUST BE EARLY)
+# -------------------------
+if st.session_state.pop("_restore_cv_after_policy", False):
+    restore_cv_state()
+
+if show_policy_page():
+    st.stop()
+
 
 import re
 
@@ -1953,15 +1962,12 @@ def is_valid_email(email: str) -> bool:
     email = normalize_email(email)
     return bool(EMAIL_RE.match(email))
 
-# -------------------------
-# POLICY ROUTER (MUST RUN BEFORE ANY CV WIDGETS)
-# -------------------------
-if st.session_state.pop("_restore_cv_after_policy", False):
-    restore_cv_state()
 
-if show_policy_page():
-    st.stop()
 
+if st.button("← Back", key="btn_policy_back"):
+    st.session_state["policy_view"] = None
+    st.session_state["_restore_cv_after_policy"] = True
+    st.rerun()
 
 
 
@@ -4447,13 +4453,8 @@ st.caption(
 
 
 # ==============================================
-# FOOTER POLICY BUTTONS (modal, no snapshot)
+# FOOTER POLICY BUTTONS (page route + snapshot)
 # ==============================================
-st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
-
-# load policy markdown into memory once
-ensure_policies_loaded()
-
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 
 fc1, fc2, fc3, fc4 = st.columns(4)
