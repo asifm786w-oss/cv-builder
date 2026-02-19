@@ -333,80 +333,47 @@ def render_public_home() -> None:
         """,
         unsafe_allow_html=True,
     )
-def locked_action_button(
-    label: str,
-    *,
-    key: str,
-    feature_label: str = "This feature",
-    counter_key: str | None = None,
-    cost: int = 1,
-    require_login: bool = True,
-    default_tab: str = "Sign in",
-    cooldown_name: str | None = None,
-    cooldown_seconds: int = 5,
-    disabled: bool = False,
-    **_ignore,
-) -> bool:
-    clicked = st.button(label, key=key, disabled=disabled)
-    if not clicked:
-        return False
+import os, io, hashlib
+import streamlit as st
 
-    # Require login (if enabled)
-    user = st.session_state.get("user")
-    is_logged_in = bool(user and isinstance(user, dict) and user.get("email"))
-    if require_login and not is_logged_in:
-        st.warning("Sign in to unlock this feature.")
-        # If you have an auth modal helper, call it; otherwise just stop.
+def _read_uploaded_cv_to_text(uploaded_cv) -> str:
+    """Read PDF/DOCX/TXT into text (no recursion, no globals tricks)."""
+    if uploaded_cv is None:
+        return ""
+
+    name = (getattr(uploaded_cv, "name", "") or "").lower()
+    ext = os.path.splitext(name)[1]
+
+    data: bytes = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
+    if not data:
+        return ""
+
+    if ext == ".txt":
         try:
-            open_auth_modal(default_tab)
-        except Exception:
-            pass
-        st.stop()
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            return data.decode("latin-1", errors="ignore")
 
-    # Optional cooldown
-    if cooldown_name:
-        try:
-            ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
-            if not ok:
-                st.warning(f"⏳ Please wait {left}s before trying again.")
-                st.stop()
-        except Exception:
-            pass
+    if ext == ".docx":
+        import docx
+        doc = docx.Document(io.BytesIO(data))
+        return "\n".join(p.text for p in doc.paragraphs if p.text)
 
-    # Optional quota check
-    if counter_key:
-        try:
-            if not has_free_quota(counter_key, cost, feature_label):
-                st.stop()
-        except Exception:
-            pass
+    if ext == ".pdf":
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        parts = []
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            if txt.strip():
+                parts.append(txt)
+        return "\n\n".join(parts)
 
-    return True
+    return ""
 
-# =========================
-# COOLDOWN
-# =========================
-def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
-    now = time.monotonic()
-    last = st.session_state.get(f"_cooldown_{action_key}", 0.0)
-    remaining = seconds - (now - last)
-    if remaining > 0:
-        return False, int(remaining) + 1
-    st.session_state[f"_cooldown_{action_key}"] = now
-    return True, 0
-
-# --- Backwards-compatible alias (upload helper) ---
-def _read_uploaded_cv_to_text(uploaded_cv):
-    if "_read_uploaded_cv_to_text" in globals():
-        return globals()["_read_uploaded_cv_to_text"](uploaded_cv)
-    if "_read_uploaded_cv_to_text" in globals():
-        return globals()["_read_uploaded_cv_to_text"](uploaded_cv)
-    raise NameError("No upload reader found. Expected _read_uploaded_cv_to_text or _read_uploaded_cv_to_text.")
 
 def _reset_outputs_on_new_cv():
-    """
-    Clears derived/generated outputs when a new CV is uploaded.
-    """
+    """Clear derived/generated outputs when a new CV is uploaded."""
     keys_to_clear = [
         "_cv_parsed",
         "_cv_autofill_enabled",
@@ -423,10 +390,9 @@ def _reset_outputs_on_new_cv():
     for k in keys_to_clear:
         st.session_state.pop(k, None)
 
+
 def _clear_education_persistence_for_new_cv():
-    """
-    Clear education persistence so a new CV upload doesn't get overwritten by old backups.
-    """
+    """Clear education persistence so a new CV upload doesn't get overwritten by old backups."""
     for k in list(st.session_state.keys()):
         if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
             st.session_state.pop(k, None)
@@ -434,6 +400,87 @@ def _clear_education_persistence_for_new_cv():
     st.session_state.pop("num_education", None)
     st.session_state.pop("education_items", None)
     st.session_state.pop("_edu_backup", None)
+
+
+def _apply_parsed_cv_to_session(parsed: dict):
+    """
+    Minimal apply. Expand this to map experiences/education/etc,
+    OR replace body with your full implementation if you already have it.
+    """
+    if not isinstance(parsed, dict):
+        return
+
+    # keep a copy for restore logic
+    st.session_state["_cv_parsed"] = parsed
+
+    # If your parser returns skills as list/string, hydrate skills_text
+    skills_data = parsed.get("skills")
+    if isinstance(skills_data, list) and skills_data:
+        st.session_state["skills_text"] = "\n".join(f"• {str(s).strip()}" for s in skills_data if str(s).strip())
+    elif isinstance(skills_data, str) and skills_data.strip():
+        st.session_state["skills_text"] = skills_data.strip()
+
+
+def locked_action_button(
+    label: str,
+    *,
+    key: str,
+    feature_label: str = "This feature",
+    counter_key: str | None = None,
+    cost: int = 1,
+    require_login: bool = True,
+    default_tab: str = "Sign in",
+    cooldown_name: str | None = None,
+    cooldown_seconds: int = 5,
+    disabled: bool = False,
+) -> bool:
+    """
+    Minimal version: click gate only. If you already have your full one,
+    remove this and keep yours (but make sure it's defined ABOVE usage).
+    """
+    clicked = st.button(label, key=key, disabled=disabled)
+    if not clicked:
+        return False
+
+    # login gate
+    user = st.session_state.get("user") or {}
+    is_logged_in = bool(isinstance(user, dict) and user.get("email"))
+    if require_login and not is_logged_in:
+        st.warning("Sign in to unlock this feature.")
+        # if you have open_auth_modal(), call it here
+        # open_auth_modal(default_tab)
+        st.stop()
+
+    # cooldown gate (if you have cooldown_ok(), call it)
+    if cooldown_name and "cooldown_ok" in globals():
+        ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
+        if not ok:
+            st.warning(f"⏳ Please wait {left}s before trying again.")
+            st.stop()
+
+    # quota gate (if you have has_free_quota(), call it)
+    if counter_key and "has_free_quota" in globals():
+        if not has_free_quota(counter_key, cost, feature_label):
+            st.stop()
+
+    return True
+
+
+# =========================
+# COOLDOWN
+# =========================
+def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
+    now = time.monotonic()
+    last = st.session_state.get(f"_cooldown_{action_key}", 0.0)
+    remaining = seconds - (now - last)
+    if remaining > 0:
+        return False, int(remaining) + 1
+    st.session_state[f"_cooldown_{action_key}"] = now
+    return True, 0
+
+ 
+
+
 
 # =========================
 # USER LOOKUPS (DB HELPERS)
@@ -1967,16 +2014,13 @@ if show_policy_page():
     st.stop()
 
 
-# =========================
+
+
+# ============================================================
 # CV Upload + AI Autofill (ONE block only)
-# =========================
+# ============================================================
 st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
-
-
-# ============================================================
-# CV Upload + AI Autofill (ONE block only)
-# ============================================================
 
 def _safe_set(key: str, value):
     if isinstance(value, str):
@@ -1995,7 +2039,7 @@ fill_clicked = locked_action_button(
     key="btn_fill_from_cv",
     feature_label="CV upload & parsing",
     counter_key="upload_parses",
-    require_login=True,          # 🔒 blocks guests
+    require_login=True,
     default_tab="Sign in",
     cooldown_name="upload_parse",
     cooldown_seconds=5,
@@ -2011,7 +2055,7 @@ if uploaded_cv is not None and fill_clicked:
     last_fp = st.session_state.get("_last_cv_fingerprint")
 
     with st.spinner("Reading and analysing your CV..."):
-        parsed = extract_cv_data(raw_text)
+        parsed = extract_cv_data(raw_text)  # your AI parser
 
     if not isinstance(parsed, dict):
         st.error("AI parser returned an unexpected format.")
@@ -2023,10 +2067,10 @@ if uploaded_cv is not None and fill_clicked:
         _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
 
-    # ✅ Apply parsed data (your existing function)
+    # Apply parsed data
     _apply_parsed_cv_to_session(parsed)
 
-    # ✅ FORCE Personal details keys to match YOUR NEW cv_* widgets
+    # Force Personal details keys to match your cv_* widgets
     _safe_set("cv_full_name", parsed.get("full_name") or parsed.get("name"))
     _safe_set("cv_email", parsed.get("email"))
     _safe_set("cv_phone", parsed.get("phone"))
@@ -2034,24 +2078,22 @@ if uploaded_cv is not None and fill_clicked:
     _safe_set("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
     _safe_set("cv_summary", parsed.get("summary") or parsed.get("professional_summary"))
 
-
-    # ✅ Flags so restore/default logic can’t wipe after rerun
     st.session_state["_cv_parsed"] = parsed
     st.session_state["_cv_autofill_enabled"] = True
     st.session_state["_just_autofilled_from_cv"] = True
-    st.session_state["_skip_restore_personal_once"] = True  # << important
 
-    # ✅ usage counting (only for logged-in users)
+    # usage counting (only for logged-in users)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if email_for_usage:
+    if email_for_usage and "increment_usage" in globals():
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
         increment_usage(email_for_usage, "upload_parses")
-   
+
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
 
 # If we just autofilled from CV, DO NOT run restore_* that might overwrite fields
 just_autofilled = st.session_state.pop("_just_autofilled_from_cv", False)
+
 
 
 
