@@ -1254,6 +1254,11 @@ render_auth_modal_if_open()
 render_policy_modal("gate")
 render_policy_modal("footer")
 
+
+is_logged_in = bool(current_user.get("email"))
+is_admin = current_user.get("role") in {"owner", "admin"}
+
+
 current_user = st.session_state.get("user")
 is_logged_in = _is_logged_in_user(current_user)
 
@@ -1440,6 +1445,15 @@ def render_admin_dashboard() -> None:
 # =========================
 # Mode select (ADMIN ONLY)
 # =========================
+
+current_user = st.session_state.get("user") or {}
+
+is_admin = (
+    isinstance(current_user, dict)
+    and current_user.get("role") in {"owner", "admin"}
+)
+
+
 if is_admin:
     mode = st.sidebar.radio("Mode", ["Use app", "Admin dashboard"], index=0, key="mode_select")
 else:
