@@ -255,6 +255,59 @@ def render_policy_modal(scope: str) -> None:
 
     _dlg()
 
+# =========================
+# POLICY ROUTE (ALWAYS DEFINED)
+# =========================
+import os
+
+def _read_policy_file(rel_path: str) -> str:
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        fp = os.path.join(here, rel_path)
+        if os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+def show_policy_page() -> bool:
+    view = st.session_state.get("policy_view")
+    if not view:
+        return False
+
+    title_map = {
+        "accessibility": "Accessibility",
+        "cookies": "Cookie Policy",
+        "privacy": "Privacy Policy",
+        "terms": "Terms of Use",
+    }
+
+    file_map = {
+        "accessibility": "policies/accessibility.md",
+        "cookies": "policies/cookie_policy.md",
+        "privacy": "policies/privacy_policy.md",
+        "terms": "policies/terms_of_use.md",
+    }
+
+    st.title(title_map.get(view, "Policy"))
+    body = _read_policy_file(file_map.get(view, ""))
+
+    if body.strip():
+        st.markdown(body)
+    else:
+        st.info("Policy content not found in this deployment.")
+
+    if st.button("← Back", key="btn_policy_back"):
+        st.session_state["policy_view"] = None
+
+        # if you are using snapshot restore, trigger it here
+        st.session_state["_restore_cv_after_policy"] = True
+
+        st.rerun()
+
+    return True
+
 def render_public_home() -> None:
     st.markdown(
         """
