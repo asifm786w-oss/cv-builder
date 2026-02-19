@@ -394,6 +394,17 @@ def render_policy_modal(scope: str, email: str | None = None) -> None:
 
     _dlg()
 
+def _read_policy_file(rel_path: str) -> str:
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        fp = os.path.join(here, rel_path)
+        if os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
 def show_policy_page() -> bool:
     view = st.session_state.get("policy_view")
     if not view:
