@@ -645,6 +645,13 @@ def sync_session_plan_and_credits() -> None:
     st.session_state["user"]["cv_remaining"] = int(credits.get("cv", 0) or 0)
     st.session_state["user"]["ai_remaining"] = int(credits.get("ai", 0) or 0)
 
+# =========================
+# CONSTANTS
+# =========================
+MAX_PANEL_WORDS = 100
+MAX_DOC_WORDS = 300
+MAX_LETTER_WORDS = 300
+COOLDOWN_SECONDS = 5
 
 
 # -------------------------
