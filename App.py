@@ -591,40 +591,7 @@ def _title_from_md(text: str, fallback: str) -> str:
         return first.lstrip("#").strip() or fallback
     return fallback
 
-def load_policies_index() -> list[dict]:
-    base_dir = os.path.join(os.path.dirname(__file__), "policies")
-    items: list[dict] = []
 
-    if not os.path.isdir(base_dir):
-        return items
-
-    for name in sorted(os.listdir(base_dir)):
-        if not name.lower().endswith(".md"):
-            continue
-
-        path = os.path.join(base_dir, name)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                body = f.read()
-        except Exception:
-            continue
-
-        slug = os.path.splitext(name)[0]
-        title = _title_from_md(body, slug.replace("_", " ").title())
-
-        items.append(
-            {
-                "slug": slug,
-                "title": title,
-                "body": body,
-                "path": path,
-            }
-        )
-
-    return items
-
-if show_policy_page():
-    st.stop()
 
 
 
