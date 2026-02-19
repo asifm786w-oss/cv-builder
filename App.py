@@ -1364,6 +1364,7 @@ def auth_ui():
                     st.error("Invalid or expired reset token. Please request a new reset link.")
 
 
+
 # =========================
 # ROUTING (EARLY)  ✅ single source of truth
 # =========================
@@ -1392,7 +1393,6 @@ if user_email:
         st.error("No account found for this email. Please sign out and sign in again.")
         st.stop()
     st.session_state["user_id"] = uid
-
 
 # =========================
 # Referral code (ONLY when logged in)
