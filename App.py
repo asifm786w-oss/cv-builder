@@ -410,6 +410,9 @@ def get_user_row_by_id(user_id: int) -> dict | None:
         (int(user_id),),
     )
 
+def get_user_id(email: str) -> int | None:
+    return get_user_id_by_email(email)
+
 
 def get_user_id_by_email(email: str) -> int | None:
     email = (email or "").strip().lower()
