@@ -403,6 +403,25 @@ def _read_uploaded_cv_to_text(uploaded_cv):
         return globals()["_read_uploaded_cv_to_text"](uploaded_cv)
     raise NameError("No upload reader found. Expected _read_uploaded_cv_to_text or _read_uploaded_cv_to_text.")
 
+def _reset_outputs_on_new_cv():
+    """
+    Clears derived/generated outputs when a new CV is uploaded.
+    """
+    keys_to_clear = [
+        "_cv_parsed",
+        "_cv_autofill_enabled",
+        "generated_cv",
+        "generated_cover_letter",
+        "generated_summary",
+        "suggested_bullets",
+        "ats_score",
+        "final_pdf_bytes",
+        "final_docx_bytes",
+        "selected_template",
+        "download_ready",
+    ]
+    for k in keys_to_clear:
+        st.session_state.pop(k, None)
 
 # =========================
 # USER LOOKUPS (DB HELPERS)
