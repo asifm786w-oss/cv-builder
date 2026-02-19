@@ -336,6 +336,16 @@ if not APP_URL:
 
 from db import fetchone, execute
 
+def ensure_section1_keys():
+    st.session_state.setdefault("cv_full_name", "")
+    st.session_state.setdefault("cv_title", "")
+    st.session_state.setdefault("cv_email", "")
+    st.session_state.setdefault("cv_phone", "")
+    st.session_state.setdefault("cv_location", "")
+    st.session_state.setdefault("cv_summary", "")
+
+
+
 
 def has_accepted_policies(email: str) -> bool:
     email = (email or "").strip().lower()
@@ -3233,7 +3243,7 @@ if not just_autofilled:
 
 backup_skills_state()
 
-
+ensure_section1_keys()
 # -------------------------
 # 1. Personal details
 # -------------------------
