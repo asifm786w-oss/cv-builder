@@ -333,6 +333,55 @@ def render_public_home() -> None:
         """,
         unsafe_allow_html=True,
     )
+def locked_action_button(
+    label: str,
+    *,
+    key: str,
+    feature_label: str = "This feature",
+    counter_key: str | None = None,
+    cost: int = 1,
+    require_login: bool = True,
+    default_tab: str = "Sign in",
+    cooldown_name: str | None = None,
+    cooldown_seconds: int = 5,
+    disabled: bool = False,
+    **_ignore,
+) -> bool:
+    clicked = st.button(label, key=key, disabled=disabled)
+    if not clicked:
+        return False
+
+    # Require login (if enabled)
+    user = st.session_state.get("user")
+    is_logged_in = bool(user and isinstance(user, dict) and user.get("email"))
+    if require_login and not is_logged_in:
+        st.warning("Sign in to unlock this feature.")
+        # If you have an auth modal helper, call it; otherwise just stop.
+        try:
+            open_auth_modal(default_tab)
+        except Exception:
+            pass
+        st.stop()
+
+    # Optional cooldown
+    if cooldown_name:
+        try:
+            ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
+            if not ok:
+                st.warning(f"⏳ Please wait {left}s before trying again.")
+                st.stop()
+        except Exception:
+            pass
+
+    # Optional quota check
+    if counter_key:
+        try:
+            if not has_free_quota(counter_key, cost, feature_label):
+                st.stop()
+        except Exception:
+            pass
+
+    return True
 
 # =========================
 # COOLDOWN
