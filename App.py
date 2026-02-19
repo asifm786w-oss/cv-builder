@@ -143,6 +143,50 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
+def _read_policy_file(rel_path: str) -> str:
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        fp = os.path.join(here, rel_path)
+        if os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+
+def show_policy_page() -> bool:
+    view = st.session_state.get("policy_view")
+    if not view:
+        return False
+
+    title_map = {
+        "accessibility": "Accessibility",
+        "cookies": "Cookie Policy",
+        "privacy": "Privacy Policy",
+        "terms": "Terms of Use",
+    }
+
+    file_map = {
+        "accessibility": "policies/accessibility.md",
+        "cookies": "policies/cookie_policy.md",
+        "privacy": "policies/privacy_policy.md",
+        "terms": "policies/terms_of_use.md",
+    }
+
+    st.title(title_map.get(view, "Policy"))
+    body = _read_policy_file(file_map.get(view, ""))
+
+    if body.strip():
+        st.markdown(body)
+    else:
+        st.info("Policy content not found in this deployment.")
+
+    if st.button("← Back", key="btn_policy_back"):
+        st.session_state["policy_view"] = None
+        st.rerun()
+
+    return True
 
 
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
@@ -394,50 +438,7 @@ def render_policy_modal(scope: str, email: str | None = None) -> None:
 
     _dlg()
 
-def _read_policy_file(rel_path: str) -> str:
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        fp = os.path.join(here, rel_path)
-        if os.path.exists(fp):
-            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
-                return f.read()
-    except Exception:
-        pass
-    return ""
 
-def show_policy_page() -> bool:
-    view = st.session_state.get("policy_view")
-    if not view:
-        return False
-
-    title_map = {
-        "accessibility": "Accessibility",
-        "cookies": "Cookie Policy",
-        "privacy": "Privacy Policy",
-        "terms": "Terms of Use",
-    }
-
-    file_map = {
-        "accessibility": "policies/accessibility.md",
-        "cookies": "policies/cookie_policy.md",
-        "privacy": "policies/privacy_policy.md",
-        "terms": "policies/terms_of_use.md",
-    }
-
-    st.title(title_map.get(view, "Policy"))
-    body = _read_policy_file(file_map.get(view, ""))
-
-    if body.strip():
-        st.markdown(body)
-    else:
-        st.info("Policy content not found in this deployment.")
-
-    if st.button("← Back", key="btn_policy_back"):
-        st.session_state["policy_view"] = None
-        st.session_state["_just_returned_from_policy"] = True
-        st.rerun()
-
-    return True
 
 
 def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
@@ -987,62 +988,7 @@ def normalize_experience_state(max_roles: int = 5):
         st.session_state.setdefault(f"end_date_{i}", "")
         st.session_state.setdefault(f"description_{i}", "")
 
-# =========================
-# FORM SNAPSHOT / RESTORE (SAFE)
-# =========================
-FORM_KEYS_TO_PRESERVE = [
-    # Personal details (use your actual keys)
-    "cv_full_name",
-    "cv_title",
-    "cv_email",
-    "cv_phone",
-    "cv_location",
-    "cv_summary",
-    "skills_text",
-    "num_experiences",
-]
 
-def snapshot_form_state() -> None:
-    snap = {}
-
-    # preserve known keys
-    for k in FORM_KEYS_TO_PRESERVE:
-        if k in st.session_state:
-            snap[k] = st.session_state.get(k)
-
-    # preserve dynamic role keys (experience blocks)
-    for k in list(st.session_state.keys()):
-        if k.startswith(("job_title_", "company_", "exp_location_", "start_date_", "end_date_", "description_")):
-            snap[k] = st.session_state.get(k)
-
-        if k.startswith(("description_pending_",)):
-            snap[k] = st.session_state.get(k)
-
-    # preserve skills textbox key(s) if you use them
-    for k in ("skills_text", "skills_pending", "cv_summary", "cv_summary_pending"):
-        if k in st.session_state:
-            snap[k] = st.session_state.get(k)
-
-    st.session_state["_form_snapshot"] = snap
-
-
-def restore_form_state() -> None:
-    snap = st.session_state.get("_form_snapshot") or {}
-    for k, v in snap.items():
-        st.session_state[k] = v
-
-
-def restore_form_state_if_needed() -> None:
-    """
-    Safe wrapper: only restores when we know we just came back from a policy page.
-    Must be called EARLY (before widgets render) to avoid Streamlit key write errors.
-    """
-    if st.session_state.pop("_just_returned_from_policy", False):
-        try:
-            restore_form_state()
-        except Exception:
-            # Never crash the app because of a restore
-            pass
 
 # -------------------------
 # Word limit helpers
@@ -2029,19 +1975,17 @@ def show_consent_gate() -> None:
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("Cookie Policy", key="btn_policy_cookies"):
-            snapshot_form_state()
             st.session_state["policy_view"] = "cookies"
             st.rerun()
     with c2:
         if st.button("Privacy Policy", key="btn_policy_privacy"):
-            snapshot_form_state()
             st.session_state["policy_view"] = "privacy"
             st.rerun()
     with c3:
         if st.button("Terms of Use", key="btn_policy_terms"):
-            snapshot_form_state()
             st.session_state["policy_view"] = "terms"
             st.rerun()
+
 
     agree = st.checkbox(
         "I agree to the Cookie Policy, Privacy Policy and Terms of Use",
@@ -2677,6 +2621,10 @@ if email:
         st.stop()
     st.session_state["user_id"] = uid
 
+st.session_state.setdefault("policy_view", None)
+
+if show_policy_page():
+    st.stop()
 
 
 
@@ -3238,9 +3186,6 @@ if uploaded_cv is not None and fill_clicked:
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
 
-if show_policy_page():
-    st.stop()
-
 # If we just autofilled from CV, DO NOT run restore_* that might overwrite fields
 just_autofilled = st.session_state.pop("_just_autofilled_from_cv", False)
 
@@ -3250,7 +3195,6 @@ if not just_autofilled:
 
 backup_skills_state()
 
-restore_form_state_if_needed()
 
 # -------------------------
 # 1. Personal details
@@ -4461,7 +4405,7 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
-ensure_policies_loaded()
+
 # ==============================================
 # FOOTER POLICY BUTTONS (modal, no snapshot)
 # ==============================================
@@ -4470,27 +4414,26 @@ st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 # load policy markdown into memory once
 ensure_policies_loaded()
 
+st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
+
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
-        snapshot_form_state()
         st.session_state["policy_view"] = "accessibility"
         st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
-        snapshot_form_state()
         st.session_state["policy_view"] = "cookies"
         st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
-        snapshot_form_state()
         st.session_state["policy_view"] = "privacy"
         st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
-        snapshot_form_state()
         st.session_state["policy_view"] = "terms"
         st.rerun()
+
 
 # render modal if opened
 session_user = st.session_state.get("user") or {}
