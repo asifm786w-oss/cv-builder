@@ -238,6 +238,7 @@ def snapshot_protected_state(label=None):
             snap[k] = v
 
     # keep a copy in session too (optional, for debug)
+	
     st.session_state["_protected_snapshot"] = snap
     if label:
         st.session_state["_protected_snapshot_label"] = label
