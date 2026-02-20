@@ -392,6 +392,68 @@ def spend_ai_credit(email: str, *, source: str, amount: int = 1) -> bool:
     if not uid:
         return False
     return try_spend(uid, source=source, ai=int(amount or 1))
+def spend_credits(user_id: int, *, source: str, cv: int = 0, ai: int = 0) -> bool:
+    """
+    Public helper used by UI.
+    Wraps the atomic spend_credits(conn, ...) logic safely.
+
+    Usage:
+        spend_credits(uid, source="ai_summary_improve", ai=1)
+        spend_credits(uid, source="cv_generate", cv=1)
+    """
+    user_id = int(user_id)
+    cv = int(cv or 0)
+    ai = int(ai or 0)
+
+    if cv <= 0 and ai <= 0:
+        return False
+
+    with get_conn() as conn:
+        return spend_credits_on_conn(conn, user_id, source=source, cv_amount=cv, ai_amount=ai)
+
+
+def spend_credits_on_conn(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
+    """
+    Atomic spend using SAME connection + row lock.
+    (This is your real implementation.)
+    """
+    user_id = int(user_id)
+    cv_amount = int(cv_amount or 0)
+    ai_amount = int(ai_amount or 0)
+    source = (source or "").strip()
+    if not source:
+        return False
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
+            if not cur.fetchone():
+                conn.rollback()
+                return False
+
+            bal = _get_credits_by_user_id_on_conn(conn, user_id)
+
+            if cv_amount > 0 and bal["cv"] < cv_amount:
+                conn.rollback()
+                return False
+            if ai_amount > 0 and bal["ai"] < ai_amount:
+                conn.rollback()
+                return False
+
+            cur.execute(
+                """
+                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (user_id, source, cv_amount, ai_amount),
+            )
+
+        conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
 
 # ---------- locked_action_button (compatible with BOTH of your call styles) ----------
 def locked_action_button(
