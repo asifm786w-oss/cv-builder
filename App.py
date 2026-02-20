@@ -326,7 +326,16 @@ def apply_staged_value(key: str):
     if pk in st.session_state:
         st.session_state[key] = st.session_state.pop(pk)
 
+def get_user_id(email: str):
+    """
+    Backwards-compatible shim.
+    Do NOT duplicate DB logic everywhere.
+    """
+    if not email:
+        return None
+    return get_user_id_by_email(email)
 # ---- Outputs-only reset (safe) ----
+
 def clear_ai_upload_state_only() -> None:
     """
     Clears derived/generated outputs and transient flags.
