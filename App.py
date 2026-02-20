@@ -425,6 +425,35 @@ def locked_action_button(
 
     return True
 
+# =========================
+# AI CREDIT SPEND (WRAPPER)
+# =========================
+
+def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
+    """
+    Spend AI credits using the ledger.
+    Returns True if spent, False if insufficient or not logged in.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+
+    uid = get_user_id_by_email(email)
+    if not uid:
+        return False
+
+    try:
+        with get_conn() as conn:
+            return spend_credits(
+                conn,
+                user_id=int(uid),
+                source=source,
+                ai_amount=int(amount),
+            )
+    except Exception as e:
+        st.error(f"Credit spend failed: {e}")
+        return False
+
 # -------------------------
 # OUTPUT RESET (compat)
 # -------------------------
