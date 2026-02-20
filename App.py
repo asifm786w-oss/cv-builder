@@ -254,70 +254,72 @@ PROTECTED_PREFIXES = (
     "edu_start_", "edu_end_",
 )
 
-def is_protected_key(key: str) -> bool:
-    if key in PROTECTED_EXACT_KEYS:
-        return True
-    return any(key.startswith(prefix) for prefix in PROTECTED_PREFIXES)
+# ============================================================
+# FOUNDATION DEFS (paste ONCE, near top of App.py)
+# - fixes NameError spam
+# - prevents session wipes on rerun/AI clicks
+# - provides consistent credit spend helpers
+# ============================================================
 
-def _is_protected_key(k: str) -> bool:
+from typing import Any
+
+# ---------- Protected session keys (never clear these mid-session) ----------
+PROTECTED_EXACT_KEYS = {
+    # personal/cv inputs
+    "skills_text", "references", "job_description", "template_label",
+
+    # job search
+    "adzuna_keywords", "adzuna_location", "adzuna_results", "selected_job",
+
+    # AI outputs you said must NOT disappear
+    "job_summary_ai", "cover_letter", "cover_letter_box",
+
+    # counts/structure
+    "num_experiences", "parsed_num_experiences", "num_education", "education_items",
+
+    # auth/user
+    "user", "user_id", "accepted_policies", "chk_policy_agree",
+}
+
+PROTECTED_PREFIXES = (
+    "cv_",
+    "job_title_", "company_", "exp_location_", "start_date_", "end_date_", "description_",
+    "degree_", "institution_", "edu_location_", "edu_start_", "edu_end_",
+)
+
+def is_protected_key(k: str) -> bool:
     if k in PROTECTED_EXACT_KEYS:
         return True
     return any(k.startswith(p) for p in PROTECTED_PREFIXES)
 
-def snapshot_protected_state(tag: str = "snap") -> None:
-    """Save only user-input keys so a rerun/error can restore them."""
+# ---------- Snapshot / restore (extra safety; useful around clears) ----------
+def snapshot_protected_state() -> dict:
     snap = {}
-    for k in list(st.session_state.keys()):
-        if _is_protected_key(k):
-            snap[k] = st.session_state.get(k)
-    st.session_state["_protected_snapshot"] = snap
-    st.session_state["_protected_snapshot_tag"] = tag
-    st.session_state["_protected_snapshot_ts"] = time.time()
+    for k, v in st.session_state.items():
+        if is_protected_key(k):
+            snap[k] = v
+    return snap
 
-def restore_protected_state_if_needed() -> None:
-    """Call once near the top of the script (early)."""
-    snap = st.session_state.get("_protected_snapshot") or {}
-    if not isinstance(snap, dict) or not snap:
+def restore_protected_state(snap: dict) -> None:
+    if not isinstance(snap, dict):
         return
-    # restore missing/None only (never overwrite live edits)
     for k, v in snap.items():
-        if k not in st.session_state or st.session_state.get(k) is None:
-            st.session_state[k] = v
+        st.session_state[k] = v
 
-
-def safe_pop(key: str) -> None:
-    """Pop only if not protected."""
-    if is_protected_key(key):
+# ---------- Safe session ops ----------
+def safe_pop_state(k: str) -> None:
+    if is_protected_key(k):
         return
-    st.session_state.pop(key, None)
+    st.session_state.pop(k, None)
 
-def safe_clear(keys: list[str]) -> None:
+def safe_clear_state(keys: list[str]) -> None:
     for k in keys:
-        safe_pop(k)
+        safe_pop_state(k)
 
-def clear_state(keys: list[str]) -> None:
-    """
-    Compatibility wrapper: any old code calling clear_state()
-    becomes safe automatically.
-    """
-    safe_clear(keys)
-
-# ---- Widget safety: Streamlit hates None ----
 def safe_init_key(key: str, default=""):
     if key not in st.session_state or st.session_state[key] is None:
         st.session_state[key] = default
 
-def safe_set_if_missing(key: str, value, *, strip=True):
-    """Only set if missing/blank. Never overwrite user edits."""
-    cur = st.session_state.get(key)
-    cur_s = (cur or "").strip() if isinstance(cur, str) else cur
-    if cur is None or cur_s == "":
-        if isinstance(value, str) and strip:
-            value = value.strip()
-        if value is not None:
-            st.session_state[key] = value
-
-# ---- Staging pattern: apply AI edits without wiping current render ----
 def stage_value(key: str, value):
     st.session_state[f"__pending__{key}"] = value
 
@@ -326,121 +328,168 @@ def apply_staged_value(key: str):
     if pk in st.session_state:
         st.session_state[key] = st.session_state.pop(pk)
 
-def get_user_id(email: str):
-    """
-    Backwards-compatible shim.
-    Do NOT duplicate DB logic everywhere.
-    """
-    if not email:
-        return None
-    return get_user_id_by_email(email)
-# ---- Outputs-only reset (safe) ----
+def safe_set_if_missing(key: str, value, *, strip: bool = True):
+    cur = st.session_state.get(key)
+    cur_s = (cur or "").strip() if isinstance(cur, str) else cur
+    if cur is None or cur_s == "":
+        if isinstance(value, str) and strip:
+            value = value.strip()
+        if value is not None:
+            st.session_state[key] = value
 
-def clear_ai_upload_state_only() -> None:
+# ---------- Word limit helper (you call this in multiple places) ----------
+def enforce_word_limit(text: str, max_words: int, label: str = "") -> str:
+    words = (text or "").split()
+    if len(words) > int(max_words):
+        st.warning(
+            f"{label or 'Text'} is limited to {max_words} words. "
+            f"Currently {len(words)}; extra words are ignored."
+        )
+        return " ".join(words[: int(max_words)])
+    return text or ""
+
+# ---------- Output-only resets (aliases to match your calls) ----------
+def reset_outputs_only() -> None:
     """
-    Clears derived/generated outputs and transient flags.
-    Never clears user-input keys (cv_*, roles, education, job search, etc).
+    Clear ONLY derived/transient outputs.
+    Never clears user inputs.
     """
-    safe_clear([
+    snap = snapshot_protected_state()
+    safe_clear_state([
         "_cv_parsed",
         "_cv_autofill_enabled",
         "_just_autofilled_from_cv",
         "_last_cv_fingerprint",
-
-        "final_pdf_bytes",
-        "final_docx_bytes",
-        "download_ready",
-
         "generated_cv",
         "generated_cover_letter",
         "generated_summary",
         "suggested_bullets",
         "ats_score",
-
+        "final_pdf_bytes",
+        "final_docx_bytes",
         "selected_template",
+        "download_ready",
     ])
+    restore_protected_state(snap)
 
-def get_cv_field(key: str, default: str = "") -> str:
-    v = st.session_state.get(key, default)
-    if v is None:
-        return default
-    if isinstance(v, str):
-        return v.strip()
-    try:
-        return str(v).strip()
-    except Exception:
-        return default
+# some parts of your app call these names:
+reset_outputs_on_new_cv = reset_outputs_only
 
-def enforce_word_limit(text: str, max_words: int, label: str = "") -> str:
-    words = (text or "").split()
-    if len(words) > max_words:
-        st.warning(
-            f"{label or 'Text'} is limited to {max_words} words. "
-            f"Currently {len(words)}; extra words will be ignored."
-        )
-        return " ".join(words[:max_words])
-    return text or ""
-
-def render_public_home() -> None:
+def clear_ai_upload_state_only() -> None:
     """
-    Fallback guest header. Safe no-op UI.
-    Replace later with your real marketing block if you want.
+    This is the one you call before Generate CV.
+    It must never clear cv_*, skills_text, roles, edu, job stuff.
     """
-    st.markdown(
-        """
-        <div style="
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 16px;
-            padding: 14px 16px;
-            margin: 8px 0 14px 0;
-        ">
-          <div style="font-weight:900; font-size:22px;">Mulyba</div>
-          <div style="opacity:0.85; font-size:13px; line-height:1.5;">
-            Guest mode: build your CV freely. Sign in only for downloads + AI tools.
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    reset_outputs_only()
+
+# ---------- User ID helpers (NO recursion, no globals tricks) ----------
+def get_user_id_by_email(email: str) -> int | None:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    row = fetchone(
+        "SELECT id FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1",
+        (email,),
     )
+    if not row:
+        return None
+    try:
+        return int(row["id"])
+    except Exception:
+        return None
 
-def grant_starter_credits(user_id: int) -> None:
-    """
-    Fallback: if you don't have starter credits logic, do nothing.
-    Your ledger / referral system still works.
-    """
-    return
+def get_user_id(email: str) -> int | None:
+    return get_user_id_by_email(email)
 
+# ---------- Credits (ledger truth) ----------
+def get_credits_by_user_id(user_id: int) -> dict:
+    user_id = int(user_id)
+    row = fetchone(
+        """
+        SELECT
+          GREATEST(
+            COALESCE((SELECT SUM(cv_amount) FROM credit_grants
+                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+            -
+            COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
+          0) AS cv,
+          GREATEST(
+            COALESCE((SELECT SUM(ai_amount) FROM credit_grants
+                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+            -
+            COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
+          0) AS ai
+        """,
+        (user_id, user_id, user_id, user_id),
+    ) or {}
+    return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
+
+def try_spend(user_id: int, *, source: str, cv: int = 0, ai: int = 0) -> bool:
+    """
+    Wrapper your UI calls everywhere.
+    Uses your spend_credits(conn, user_id, source, cv_amount, ai_amount).
+    """
+    user_id = int(user_id)
+    cv = int(cv or 0)
+    ai = int(ai or 0)
+    source = (source or "").strip()
+    if not source:
+        return False
+
+    snap = snapshot_protected_state()
+    try:
+        with get_conn() as conn:
+            ok = spend_credits(conn, user_id, source=source, cv_amount=cv, ai_amount=ai)
+        return bool(ok)
+    except Exception as e:
+        # never wipe the form because a spend failed
+        restore_protected_state(snap)
+        st.error(f"Credit spend failed: {e}")
+        return False
+
+def spend_ai_credit(email: str, *, source: str, amount: int = 1) -> bool:
+    """
+    Your summary/skills/role buttons call this.
+    """
+    email = (email or "").strip().lower()
+    uid = get_user_id_by_email(email)
+    if not uid:
+        return False
+    return try_spend(uid, source=source, ai=int(amount or 1))
+
+# ---------- locked_action_button (compatible with BOTH of your call styles) ----------
 def locked_action_button(
     label: str,
     *,
     key: str,
-    feature_label: str = "This feature",
-    action_label: str | None = None,   # ✅ accept old name
+    feature_label: str | None = None,   # your newer usage
+    action_label: str | None = None,    # your older usage
     counter_key: str | None = None,
-    cost: int = 1,
     require_login: bool = True,
     default_tab: str = "Sign in",
     cooldown_name: str | None = None,
     cooldown_seconds: int = 5,
     disabled: bool = False,
+    **_ignored: Any,  # absorbs unexpected kwargs safely
 ) -> bool:
-    # if old param used, map it
-    if action_label:
-        feature_label = action_label
-
+    """
+    Gate + cooldown only.
+    IMPORTANT: does NOT clear state.
+    """
     clicked = st.button(label, key=key, disabled=disabled)
     if not clicked:
         return False
 
-    user = st.session_state.get("user") or {}
-    is_logged_in = bool(isinstance(user, dict) and user.get("email"))
+    # login gate
+    if require_login:
+        u = st.session_state.get("user") or {}
+        if not (isinstance(u, dict) and (u.get("email") or "").strip()):
+            st.toast(f"🔒 Sign in to {feature_label or action_label or 'use this feature'}", icon="🔒")
+            if "open_auth_modal" in globals():
+                open_auth_modal(default_tab)
+            st.stop()
 
-    if require_login and not is_logged_in:
-        st.warning("Sign in to unlock this feature.")
-        open_auth_modal(default_tab)
-        st.stop()
-
+    # cooldown gate
     if cooldown_name:
         ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
         if not ok:
@@ -448,92 +497,6 @@ def locked_action_button(
             st.stop()
 
     return True
-
-# =========================
-# AI CREDIT SPEND (WRAPPER)
-# =========================
-from psycopg2.extras import RealDictCursor
-
-def _get_credits_by_user_id_on_conn(conn, user_id: int) -> dict:
-    user_id = int(user_id)
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute(
-            """
-            SELECT
-              GREATEST(
-                COALESCE((SELECT SUM(cv_amount) FROM credit_grants
-                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
-                -
-                COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
-              0) AS cv,
-              GREATEST(
-                COALESCE((SELECT SUM(ai_amount) FROM credit_grants
-                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
-                -
-                COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
-              0) AS ai
-            """,
-            (user_id, user_id, user_id, user_id),
-        )
-        row = cur.fetchone() or {}
-        return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
-
-def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
-    """
-    Atomic spend using the SAME connection.
-    Locks the user row, checks balance, writes a spend row, commits.
-    """
-    user_id = int(user_id)
-    cv_amount = int(cv_amount or 0)
-    ai_amount = int(ai_amount or 0)
-    source = (source or "").strip()
-
-    if not source:
-        return False
-
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # lock user row to avoid race conditions
-            cur.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
-            if not cur.fetchone():
-                conn.rollback()
-                return False
-
-            bal = _get_credits_by_user_id_on_conn(conn, user_id)
-
-            if cv_amount > 0 and bal["cv"] < cv_amount:
-                conn.rollback()
-                return False
-            if ai_amount > 0 and bal["ai"] < ai_amount:
-                conn.rollback()
-                return False
-
-            cur.execute(
-                """
-                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
-                VALUES (%s, %s, %s, %s)
-                """,
-                (user_id, source, cv_amount, ai_amount),
-            )
-
-        conn.commit()
-        return True
-
-    except Exception:
-        conn.rollback()
-        raise
-
-def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
-    email = (email or "").strip().lower()
-    if not email:
-        return False
-
-    uid = get_user_id_by_email(email)
-    if not uid:
-        return False
-
-    with get_conn() as conn:
-        return spend_credits(conn, int(uid), source=source, ai_amount=int(amount))
 
 # -------------------------
 # OUTPUT RESET (compat)
@@ -689,70 +652,6 @@ def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
     st.session_state[f"_cooldown_{action_key}"] = now
     return True, 0
 
-# ============================================================
-# END OF TOP CHUNK — NEXT: AUTH UI + MAIN APP UI SECTIONS
-# ============================================================
-def get_credits_by_user_id(user_id: int) -> dict:
-    """
-    Compatibility wrapper.
-    Some parts of the app call get_credits_by_user_id().
-    Your ledger truth function might already exist under a different name.
-    Returns: {"cv": int, "ai": int}
-    """
-    # If you already have the real function named get_credits_by_user_id, delete this wrapper.
-    # Otherwise, this provides the missing def using your existing SQL + fetchone.
-
-    user_id = int(user_id)
-
-    row = fetchone(
-        """
-        SELECT
-          GREATEST(
-            COALESCE((SELECT SUM(cv_amount) FROM credit_grants
-                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
-            -
-            COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
-          0) AS cv,
-          GREATEST(
-            COALESCE((SELECT SUM(ai_amount) FROM credit_grants
-                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
-            -
-            COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
-          0) AS ai
-        """,
-        (user_id, user_id, user_id, user_id),
-    ) or {}
-
-    return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
-
-
-def get_user_id_by_email(email: str) -> int | None:
-    """
-    REAL implementation: hits DB and returns user.id (or None).
-    No globals(), no wrappers.
-    """
-    email = (email or "").strip().lower()
-    if not email:
-        return None
-
-    row = fetchone(
-        """
-        SELECT id
-        FROM users
-        WHERE LOWER(email) = LOWER(%s)
-        LIMIT 1
-        """,
-        (email,),
-    )
-    return int(row["id"]) if row and row.get("id") is not None else None
-
-
-def get_user_id(email: str) -> int | None:
-    """
-    Backwards compatible alias.
-    Must NOT call back into get_user_id_by_email via globals().
-    """
-    return get_user_id_by_email(email)
 
 # -------------------------
 # GLOBAL THEME + LAYOUT CSS
@@ -2273,17 +2172,13 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
-
-# If we just autofilled from CV, sync the UI role count to what was parsed
 if st.session_state.get("_just_autofilled_from_cv", False):
     parsed_n = int(st.session_state.get("parsed_num_experiences", 1) or 1)
     st.session_state["num_experiences"] = max(1, min(5, parsed_n))
 
-# Keep count stable (parsed -> UI)
 if "num_experiences" not in st.session_state or st.session_state["num_experiences"] is None:
     st.session_state["num_experiences"] = st.session_state.get("parsed_num_experiences", 1)
 
-# AI control flags
 st.session_state.setdefault("ai_running_role", None)
 st.session_state.setdefault("ai_run_now", False)
 
@@ -2297,7 +2192,6 @@ num_experiences = st.number_input(
 
 experiences = []
 
-# ---- Render roles ----
 for i in range(int(num_experiences)):
     st.subheader(f"Role {i + 1}")
 
@@ -2308,7 +2202,6 @@ for i in range(int(num_experiences)):
     end_key       = f"end_date_{i}"
     desc_key      = f"description_{i}"
 
-    # ensure keys exist + not None
     safe_init_key(job_title_key, "")
     safe_init_key(company_key, "")
     safe_init_key(loc_key, "")
@@ -2316,27 +2209,21 @@ for i in range(int(num_experiences)):
     safe_init_key(end_key, "")
     safe_init_key(desc_key, "")
 
-    # apply staged AI BEFORE widget renders
     apply_staged_value(desc_key)
 
-    # widgets
     job_title = st.text_input("Job title", key=job_title_key)
     company   = st.text_input("Company", key=company_key)
     exp_loc   = st.text_input("Job location", key=loc_key)
     start_dt  = st.text_input("Start date (e.g. Jan 2020)", key=start_key)
     end_dt    = st.text_input("End date (e.g. Present or Jun 2023)", key=end_key)
 
-    desc_value = st.text_area(
+    st.text_area(
         "Description / key achievements",
         key=desc_key,
         help="Use one bullet per line.",
     )
 
-    # ✅ AI button (SNAPSHOT + schedule run)
-    btn_role = st.button("Improve this role (AI)", key=f"btn_role_ai_{i}")
-    if btn_role:
-        snapshot_protected_state(f"before_ai_role_click_{i}")  # ✅ ADD
-
+    if st.button("Improve this role (AI)", key=f"btn_role_ai_{i}"):
         if not gate_premium(f"improve Role {i+1} with AI"):
             st.stop()
 
@@ -2345,12 +2232,13 @@ for i in range(int(num_experiences)):
             st.warning(f"⏳ Please wait {left}s before trying again.")
             st.stop()
 
-        # schedule AI to run AFTER loop
+        # ✅ SNAPSHOT right before doing anything that may rerun / error
+        st.session_state["_snap_before_role_ai"] = snapshot_protected_state()
+
         st.session_state["ai_running_role"] = i
         st.session_state["ai_run_now"] = True
         st.rerun()
 
-    # build Experience objects
     if job_title and company:
         experiences.append(
             Experience(
@@ -2363,44 +2251,41 @@ for i in range(int(num_experiences)):
             )
         )
 
-# ---------- Run AI AFTER the loop (single run) ----------
+# ---------- Run AI AFTER render ----------
 role_to_improve = st.session_state.get("ai_running_role")
-run_now = st.session_state.pop("ai_run_now", False)  # pop so it runs once
+run_now = st.session_state.pop("ai_run_now", False)
 
 if run_now and role_to_improve is not None:
     i = int(role_to_improve)
-
-    # clear early so reruns don't re-trigger
     st.session_state["ai_running_role"] = None
 
-    snapshot_protected_state(f"before_ai_role_run_{i}")  # ✅ ADD (belt + braces)
+    # ✅ If something clears, we can restore
+    snap = st.session_state.pop("_snap_before_role_ai", None)
 
     desc_key = f"description_{i}"
     current_text = (st.session_state.get(desc_key) or "").strip()
     if not current_text:
+        if snap: restore_protected_state(snap)
         st.warning("Please add text for this role first.")
         st.stop()
 
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     if not email_for_usage:
+        if snap: restore_protected_state(snap)
         st.warning("Please sign in to use AI features.")
         st.stop()
 
     ok_spend = spend_ai_credit(email_for_usage, source=f"ai_role_improve_{i+1}", amount=1)
     if not ok_spend:
+        if snap: restore_protected_state(snap)
         st.warning("You don’t have enough AI credits for this action.")
         st.stop()
 
     with st.spinner(f"Improving Role {i+1} description..."):
         try:
             improved = improve_bullets(current_text)
-            improved_limited = enforce_word_limit(
-                improved,
-                MAX_DOC_WORDS,
-                label=f"Role {i+1} description",
-            )
+            improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label=f"Role {i+1} description")
 
-            # stage update for next render
             stage_value(desc_key, improved_limited)
 
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
@@ -2410,9 +2295,9 @@ if run_now and role_to_improve is not None:
             st.rerun()
 
         except Exception as e:
+            if snap: restore_protected_state(snap)
             st.error(f"AI error: {e}")
 
-# ensures sync only happens once after autofill
 st.session_state.pop("_just_autofilled_from_cv", None)
 
 
@@ -2882,8 +2767,8 @@ template_label = st.selectbox(
 # If your locked_action_button supports feature_label, use it.
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
-    key="btn_generate_cv",
     feature_label="generate and download your CV",
+    key="btn_generate_cv",
 )
 
 if generate_clicked:
