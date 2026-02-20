@@ -189,57 +189,55 @@ for k, v in DEFAULT_SESSION_KEYS.items():
 init_db()
 verify_postgres_connection()
 
-# ============================================================
-# STATE SAFETY (SINGLE SOURCE OF TRUTH) — NO DUPLICATES
-# ============================================================
+# ---- Snapshot ONLY protected/user input keys ----
+PROTECTED_EXACT_KEYS = {
+    "skills_text",
+    "references",
+    "job_description",
+    "template_label",
+    "adzuna_keywords",
+    "adzuna_location",
+    "adzuna_results",
+    "selected_job",
+    "job_summary_ai",
+    "cover_letter",
+    "cover_letter_box",
+    "num_experiences",
+    "num_education",
+    "parsed_num_experiences",
+}
 
-# Anything the user typed MUST survive every rerun.
-NEVER_CLEAR_PREFIXES = (
+PROTECTED_PREFIXES = (
     "cv_",
     "job_title_", "company_", "exp_location_", "start_date_", "end_date_", "description_",
     "degree_", "institution_", "edu_location_", "edu_start_", "edu_end_",
 )
 
-NEVER_CLEAR_KEYS = {
-    # auth/session/policies
-    "user",
-    "accepted_policies",
-    "chk_policy_agree",
-    "footer_policy_open",
-    "footer_policy_slug",
-    "gate_policy_open",
-    "gate_policy_slug",
-    "_policies_loaded",
-    "_policies",
-
-    # form inputs
-    "skills_text",
-    "references",
-    "num_experiences",
-    "parsed_num_experiences",
-    "num_education",
-    "education_items",
-
-    # job / adzuna
-    "job_description",
-    "adzuna_keywords",
-    "adzuna_location",
-    "adzuna_results",
-    "selected_job",
-
-    # outputs you said must NOT disappear
-    "job_summary_ai",
-    "cover_letter",
-    "cover_letter_box",
-
-    # template UI choice
-    "template_label",
-}
-
-def is_protected_key(key: str) -> bool:
-    if key in NEVER_CLEAR_KEYS:
+def _is_protected_key(k: str) -> bool:
+    if k in PROTECTED_EXACT_KEYS:
         return True
-    return any(key.startswith(p) for p in NEVER_CLEAR_PREFIXES)
+    return any(k.startswith(p) for p in PROTECTED_PREFIXES)
+
+def snapshot_protected_state(tag: str = "snap") -> None:
+    """Save only user-input keys so a rerun/error can restore them."""
+    snap = {}
+    for k in list(st.session_state.keys()):
+        if _is_protected_key(k):
+            snap[k] = st.session_state.get(k)
+    st.session_state["_protected_snapshot"] = snap
+    st.session_state["_protected_snapshot_tag"] = tag
+    st.session_state["_protected_snapshot_ts"] = time.time()
+
+def restore_protected_state_if_needed() -> None:
+    """Call once near the top of the script (early)."""
+    snap = st.session_state.get("_protected_snapshot") or {}
+    if not isinstance(snap, dict) or not snap:
+        return
+    # restore missing/None only (never overwrite live edits)
+    for k, v in snap.items():
+        if k not in st.session_state or st.session_state.get(k) is None:
+            st.session_state[k] = v
+
 
 def safe_pop(key: str) -> None:
     """Pop only if not protected."""
@@ -363,64 +361,35 @@ def locked_action_button(
     *,
     key: str,
     feature_label: str = "This feature",
+    action_label: str | None = None,   # ✅ accept old name
     counter_key: str | None = None,
+    cost: int = 1,
     require_login: bool = True,
     default_tab: str = "Sign in",
     cooldown_name: str | None = None,
     cooldown_seconds: int = 5,
     disabled: bool = False,
 ) -> bool:
-    """
-    Safe gating button used across the app.
+    # if old param used, map it
+    if action_label:
+        feature_label = action_label
 
-    Returns True only when:
-      - user clicked
-      - (optional) logged in
-      - (optional) cooldown passed
-
-    IMPORTANT:
-      - Does NOT clear session state
-      - Does NOT change credits
-      - Only gates access and (optionally) blocks via st.stop()
-    """
     clicked = st.button(label, key=key, disabled=disabled)
     if not clicked:
         return False
 
-    # ---- login gate ----
-    if require_login:
-        u = st.session_state.get("user") or {}
-        email = (u.get("email") if isinstance(u, dict) else None) or ""
-        if not str(email).strip():
-            st.warning("Please sign in to use this feature.")
-            # if you have modal auth, open it
-            if "open_auth_modal" in globals() and callable(globals()["open_auth_modal"]):
-                globals()["open_auth_modal"](default_tab)
-            st.stop()
+    user = st.session_state.get("user") or {}
+    is_logged_in = bool(isinstance(user, dict) and user.get("email"))
 
-    # ---- cooldown gate (optional) ----
+    if require_login and not is_logged_in:
+        st.warning("Sign in to unlock this feature.")
+        open_auth_modal(default_tab)
+        st.stop()
+
     if cooldown_name:
-        if "cooldown_ok" in globals() and callable(globals()["cooldown_ok"]):
-            ok, left = globals()["cooldown_ok"](cooldown_name, cooldown_seconds)
-            if not ok:
-                st.warning(f"⏳ Please wait {left}s before trying again.")
-                st.stop()
-        else:
-            # fallback cooldown if cooldown_ok() doesn't exist
-            now = time.monotonic()
-            k = f"_cooldown_{cooldown_name}"
-            last = float(st.session_state.get(k, 0.0) or 0.0)
-            remaining = cooldown_seconds - (now - last)
-            if remaining > 0:
-                st.warning(f"⏳ Please wait {int(remaining)+1}s before trying again.")
-                st.stop()
-            st.session_state[k] = now
-
-    # ---- optional quota gate (if your old system still exists) ----
-    # NOTE: you told me credits/ledger works, so we DON'T spend here.
-    # This is ONLY for legacy "has_free_quota" if present.
-    if counter_key and "has_free_quota" in globals() and callable(globals()["has_free_quota"]):
-        if not globals()["has_free_quota"](counter_key, 1, feature_label):
+        ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
+        if not ok:
+            st.warning(f"⏳ Please wait {left}s before trying again.")
             st.stop()
 
     return True
@@ -1108,7 +1077,8 @@ div[role="dialog"] .stButton button{
     unsafe_allow_html=True,
 )
 
-
+# run early every script start
+restore_protected_state_if_needed()
 
 
 import re
@@ -2081,6 +2051,8 @@ st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
 
 if btn_summary:
+    snapshot_protected_state("before_ai_summary")  # ✅ ADD
+
     if not gate_premium("improve your professional summary"):
         st.stop()
 
@@ -2120,7 +2092,6 @@ if btn_summary:
             improved = generate_tailored_summary(cv_like, instructions)
             improved = enforce_word_limit(improved, MAX_PANEL_WORDS, label="Professional summary")
 
-            # stage then rerun
             stage_value("cv_summary", improved)
 
             st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
@@ -2187,6 +2158,8 @@ skills_text = st.text_area(
 btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
 
 if btn_skills:
+    snapshot_protected_state("before_ai_skills")  # ✅ ADD
+
     if not gate_premium("improve your skills"):
         st.stop()
 
@@ -2211,7 +2184,7 @@ if btn_skills:
 
     with st.spinner("Improving your skills..."):
         try:
-            improved = improve_skills(skills_text)  # your function
+            improved = improve_skills(skills_text)
             improved_bullets = normalize_skills_to_bullets(improved)
             improved_limited = enforce_word_limit(improved_bullets, MAX_DOC_WORDS, label="Skills (AI)")
 
@@ -2247,13 +2220,17 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
+
+# If we just autofilled from CV, sync the UI role count to what was parsed
 if st.session_state.get("_just_autofilled_from_cv", False):
     parsed_n = int(st.session_state.get("parsed_num_experiences", 1) or 1)
     st.session_state["num_experiences"] = max(1, min(5, parsed_n))
 
+# Keep count stable (parsed -> UI)
 if "num_experiences" not in st.session_state or st.session_state["num_experiences"] is None:
     st.session_state["num_experiences"] = st.session_state.get("parsed_num_experiences", 1)
 
+# AI control flags
 st.session_state.setdefault("ai_running_role", None)
 st.session_state.setdefault("ai_run_now", False)
 
@@ -2267,6 +2244,7 @@ num_experiences = st.number_input(
 
 experiences = []
 
+# ---- Render roles ----
 for i in range(int(num_experiences)):
     st.subheader(f"Role {i + 1}")
 
@@ -2277,6 +2255,7 @@ for i in range(int(num_experiences)):
     end_key       = f"end_date_{i}"
     desc_key      = f"description_{i}"
 
+    # ensure keys exist + not None
     safe_init_key(job_title_key, "")
     safe_init_key(company_key, "")
     safe_init_key(loc_key, "")
@@ -2284,8 +2263,10 @@ for i in range(int(num_experiences)):
     safe_init_key(end_key, "")
     safe_init_key(desc_key, "")
 
-    apply_staged_value(desc_key)  # staged AI result for this role, if any
+    # apply staged AI BEFORE widget renders
+    apply_staged_value(desc_key)
 
+    # widgets
     job_title = st.text_input("Job title", key=job_title_key)
     company   = st.text_input("Company", key=company_key)
     exp_loc   = st.text_input("Job location", key=loc_key)
@@ -2298,19 +2279,25 @@ for i in range(int(num_experiences)):
         help="Use one bullet per line.",
     )
 
+    # ✅ AI button (SNAPSHOT + schedule run)
     btn_role = st.button("Improve this role (AI)", key=f"btn_role_ai_{i}")
     if btn_role:
+        snapshot_protected_state(f"before_ai_role_click_{i}")  # ✅ ADD
+
         if not gate_premium(f"improve Role {i+1} with AI"):
             st.stop()
+
         ok, left = cooldown_ok(f"improve_role_{i}", 5)
         if not ok:
             st.warning(f"⏳ Please wait {left}s before trying again.")
             st.stop()
 
+        # schedule AI to run AFTER loop
         st.session_state["ai_running_role"] = i
         st.session_state["ai_run_now"] = True
         st.rerun()
 
+    # build Experience objects
     if job_title and company:
         experiences.append(
             Experience(
@@ -2323,12 +2310,17 @@ for i in range(int(num_experiences)):
             )
         )
 
+# ---------- Run AI AFTER the loop (single run) ----------
 role_to_improve = st.session_state.get("ai_running_role")
-run_now = st.session_state.pop("ai_run_now", False)
+run_now = st.session_state.pop("ai_run_now", False)  # pop so it runs once
 
 if run_now and role_to_improve is not None:
     i = int(role_to_improve)
+
+    # clear early so reruns don't re-trigger
     st.session_state["ai_running_role"] = None
+
+    snapshot_protected_state(f"before_ai_role_run_{i}")  # ✅ ADD (belt + braces)
 
     desc_key = f"description_{i}"
     current_text = (st.session_state.get(desc_key) or "").strip()
@@ -2349,8 +2341,13 @@ if run_now and role_to_improve is not None:
     with st.spinner(f"Improving Role {i+1} description..."):
         try:
             improved = improve_bullets(current_text)
-            improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label=f"Role {i+1} description")
+            improved_limited = enforce_word_limit(
+                improved,
+                MAX_DOC_WORDS,
+                label=f"Role {i+1} description",
+            )
 
+            # stage update for next render
             stage_value(desc_key, improved_limited)
 
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
@@ -2362,6 +2359,7 @@ if run_now and role_to_improve is not None:
         except Exception as e:
             st.error(f"AI error: {e}")
 
+# ensures sync only happens once after autofill
 st.session_state.pop("_just_autofilled_from_cv", None)
 
 
@@ -2587,6 +2585,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 # -------------------------
 # 5. Target Job (optional, for AI) — workspace safe:
 # - DO NOT auto-pop outputs when JD changes
+# - SNAPSHOT before AI actions
 # -------------------------
 st.header("5. Target Job (optional)")
 
@@ -2604,6 +2603,9 @@ title_ss     = get_personal_value("title", "cv_title")
 phone_ss     = get_personal_value("phone", "cv_phone")
 location_ss  = get_personal_value("location", "cv_location")
 
+safe_init_key("job_description", "")
+apply_staged_value("job_description")  # if you ever stage it
+
 job_description = st.text_area(
     "Paste the job description here",
     height=200,
@@ -2612,9 +2614,12 @@ job_description = st.text_area(
 )
 
 jd_fp = _fingerprint(job_description)
-st.session_state["_last_jd_fp"] = jd_fp  # track it, but don't clear other stuff
+st.session_state["_last_jd_fp"] = jd_fp  # track it, but DO NOT clear other stuff
 
-st.caption(f"For best results, keep this to {MAX_DOC_WORDS} words or less. (Extra words are ignored.)")
+st.caption(
+    f"For best results, keep this to {MAX_DOC_WORDS} words or less. "
+    "(Extra words are ignored.)"
+)
 
 col_jd1, col_jd2 = st.columns(2)
 with col_jd1:
@@ -2622,14 +2627,16 @@ with col_jd1:
 with col_jd2:
     ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key="btn_cover")
 
+
 # -------------------------
 # AI job-description summary
 # -------------------------
 if job_summary_clicked:
+    snapshot_protected_state("before_ai_job_summary")  # ✅ SNAPSHOT
+
     if not gate_premium("generate a job summary"):
         st.stop()
 
-    # ✅ use safe personal values
     if not (full_name_ss and email_ss):
         st.warning("Complete Section 1 (Full name + Email) first — these are used in outputs.")
         st.stop()
@@ -2638,7 +2645,6 @@ if job_summary_clicked:
         st.error("Please paste a job description first.")
         st.stop()
 
-    # ✅ LEDGER SPEND (1 AI credit)
     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
     if not uid:
@@ -2655,16 +2661,20 @@ if job_summary_clicked:
             jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description")
             job_summary_text = generate_job_summary(jd_limited)
 
+            # keep output in session
             st.session_state["job_summary_ai"] = job_summary_text
             st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
 
-            # Optional analytics only (won't affect credits)
             if email_for_usage:
                 increment_usage(email_for_usage, "job_summary_uses")
 
             st.success("AI job summary generated below.")
+            st.rerun()
+
         except Exception as e:
             st.error(f"AI error (job summary): {e}")
+            st.stop()
+
 
 # Display job summary
 job_summary_text = st.session_state.get("job_summary_ai", "")
@@ -2672,14 +2682,16 @@ if job_summary_text:
     st.markdown("**AI job summary for this role (read-only):**")
     st.write(job_summary_text)
 
+
 # -------------------------
 # AI cover letter generation
 # -------------------------
 if ai_cover_letter_clicked:
+    snapshot_protected_state("before_ai_cover_letter")  # ✅ SNAPSHOT
+
     if not gate_premium("generate a cover letter"):
         st.stop()
 
-    # ✅ use safe personal values
     if not (full_name_ss and email_ss):
         st.warning("Complete Section 1 (Full name + Email) first — added to cover letter.")
         st.stop()
@@ -2688,7 +2700,6 @@ if ai_cover_letter_clicked:
         st.error("Please paste a job description first.")
         st.stop()
 
-    # ✅ LEDGER SPEND (1 AI credit)
     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
     if not uid:
@@ -2730,6 +2741,7 @@ if ai_cover_letter_clicked:
 
         except Exception as e:
             st.error(f"AI error (cover letter): {e}")
+            st.stop()
 
 
 # -------------------------
@@ -2737,7 +2749,7 @@ if ai_cover_letter_clicked:
 # -------------------------
 st.session_state.setdefault("cover_letter", "")
 
-if st.session_state["cover_letter"]:
+if st.session_state.get("cover_letter"):
     st.subheader("✏️ Cover letter")
 
     edited = st.text_area(
@@ -2748,7 +2760,6 @@ if st.session_state["cover_letter"]:
     st.session_state["cover_letter"] = edited
 
     try:
-        # ✅ use safe values so we never hit NameError or blank fields
         letter_pdf = render_cover_letter_pdf_bytes(
             full_name=full_name_ss or "Candidate",
             letter_body=st.session_state["cover_letter"],
@@ -2785,9 +2796,6 @@ if st.session_state["cover_letter"]:
         st.error(f"Error generating cover letter files: {e!r}")
 
 
-
-
-
 # -------------------------
 # CV Template mapping
 # -------------------------
@@ -2800,11 +2808,8 @@ TEMPLATE_MAP = {
     "Classic Grey": "classic_grey.html",
 }
 
-# ✅ Ensure a default template label exists
-if "template_label" not in st.session_state or not st.session_state["template_label"]:
-    st.session_state["template_label"] = "Blue"
+safe_init_key("template_label", "Blue")
 
-# ✅ UI: Template dropdown
 template_label = st.selectbox(
     "Choose a CV template",
     options=list(TEMPLATE_MAP.keys()),
@@ -2817,19 +2822,21 @@ template_label = st.selectbox(
 )
 
 
-
 # -------------------------
 # Generate CV (spend 1 credit)
 # -------------------------
+# IMPORTANT: keep call signature consistent with your definition.
+# If your locked_action_button supports feature_label, use it.
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
-    feature_label="generate and download your CV",
     key="btn_generate_cv",
+    feature_label="generate and download your CV",
 )
 
 if generate_clicked:
-    # IMPORTANT: make sure this does NOT clear cv_* keys
-    # If it does, comment it out or fix it
+    snapshot_protected_state("before_generate_cv")  # ✅ SNAPSHOT
+
+    # clears only derived outputs (must be your SAFE version)
     clear_ai_upload_state_only()
 
     email_for_usage = (st.session_state.get("user") or {}).get("email")
@@ -2842,12 +2849,10 @@ if generate_clicked:
     cv_location  = get_cv_field("cv_location")
     raw_summary  = get_cv_field("cv_summary", "")
 
-    # Validate CV fields (NOT auth email)
     if not cv_full_name or not cv_email:
         st.error("Please fill in at least your full name and email.")
         st.stop()
 
-    # Validate login
     if not email_for_usage:
         st.error("Please sign in again.")
         open_auth_modal("Sign in")
@@ -2858,18 +2863,13 @@ if generate_clicked:
         st.error("Please sign in again.")
         st.stop()
 
-    # Spend ledger credit (1 CV)
     spent = try_spend(uid, source="cv_generate", cv=1)
     if not spent:
         st.warning("You don’t have enough CV credits to generate a CV.")
         st.stop()
 
     try:
-        cv_summary = enforce_word_limit(
-            raw_summary or "",
-            MAX_DOC_WORDS,
-            "Professional summary",
-        )
+        cv_summary = enforce_word_limit(raw_summary or "", MAX_DOC_WORDS, "Professional summary")
 
         cv = CV(
             full_name=cv_full_name,
@@ -2885,10 +2885,7 @@ if generate_clicked:
             references=references or None,
         )
 
-        template_name = TEMPLATE_MAP.get(
-            st.session_state.get("template_label"),
-            "Blue Theme.html",
-        )
+        template_name = TEMPLATE_MAP.get(st.session_state.get("template_label"), "Blue Theme.html")
 
         pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
         docx_bytes = render_cv_docx_bytes(cv)
@@ -2903,7 +2900,6 @@ if generate_clicked:
                 file_name="cv.pdf",
                 mime="application/pdf",
             )
-
         with col_cv2:
             st.download_button(
                 "📝 Download CV as Word (.docx)",
@@ -2912,7 +2908,6 @@ if generate_clicked:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
-        # Optional analytics only
         st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
         increment_usage(email_for_usage, "cv_generations")
 
