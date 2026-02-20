@@ -428,12 +428,78 @@ def locked_action_button(
 # =========================
 # AI CREDIT SPEND (WRAPPER)
 # =========================
+from psycopg2.extras import RealDictCursor
+
+def _get_credits_by_user_id_on_conn(conn, user_id: int) -> dict:
+    user_id = int(user_id)
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT
+              GREATEST(
+                COALESCE((SELECT SUM(cv_amount) FROM credit_grants
+                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+                -
+                COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
+              0) AS cv,
+              GREATEST(
+                COALESCE((SELECT SUM(ai_amount) FROM credit_grants
+                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+                -
+                COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
+              0) AS ai
+            """,
+            (user_id, user_id, user_id, user_id),
+        )
+        row = cur.fetchone() or {}
+        return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
+
+def spend_credits(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
+    """
+    Atomic spend using the SAME connection.
+    Locks the user row, checks balance, writes a spend row, commits.
+    """
+    user_id = int(user_id)
+    cv_amount = int(cv_amount or 0)
+    ai_amount = int(ai_amount or 0)
+    source = (source or "").strip()
+
+    if not source:
+        return False
+
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # lock user row to avoid race conditions
+            cur.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
+            if not cur.fetchone():
+                conn.rollback()
+                return False
+
+            bal = _get_credits_by_user_id_on_conn(conn, user_id)
+
+            if cv_amount > 0 and bal["cv"] < cv_amount:
+                conn.rollback()
+                return False
+            if ai_amount > 0 and bal["ai"] < ai_amount:
+                conn.rollback()
+                return False
+
+            cur.execute(
+                """
+                INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (user_id, source, cv_amount, ai_amount),
+            )
+
+        conn.commit()
+        return True
+
+    except Exception:
+        conn.rollback()
+        raise
 
 def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
-    """
-    Spend AI credits using the ledger.
-    Returns True if spent, False if insufficient or not logged in.
-    """
     email = (email or "").strip().lower()
     if not email:
         return False
@@ -442,17 +508,8 @@ def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
     if not uid:
         return False
 
-    try:
-        with get_conn() as conn:
-            return spend_credits(
-                conn,
-                user_id=int(uid),
-                source=source,
-                ai_amount=int(amount),
-            )
-    except Exception as e:
-        st.error(f"Credit spend failed: {e}")
-        return False
+    with get_conn() as conn:
+        return spend_credits(conn, int(uid), source=source, ai_amount=int(amount))
 
 # -------------------------
 # OUTPUT RESET (compat)
