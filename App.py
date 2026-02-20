@@ -396,7 +396,7 @@ def locked_action_button(
     cooldown_name: str | None = None,
     cooldown_seconds: int = 5,
     disabled: bool = False,
-    **_ignored: Any,  # absorbs unexpected kwargs safely
+    **_ignored,  # absorbs unexpected kwargs safely
 ) -> bool:
     """
     Gate + cooldown only.
