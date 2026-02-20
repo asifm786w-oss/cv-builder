@@ -362,65 +362,61 @@ def locked_action_button(
     label: str,
     *,
     key: str,
-    feature_label: str = "This feature",
+    feature_label: str | None = None,
+    action_label: str | None = None,   # ✅ allow old/new callsites
     counter_key: str | None = None,
+    cost: int = 1,
     require_login: bool = True,
     default_tab: str = "Sign in",
     cooldown_name: str | None = None,
     cooldown_seconds: int = 5,
     disabled: bool = False,
+    type: str | None = None,           # optional passthrough
+    use_container_width: bool = False, # optional passthrough
 ) -> bool:
     """
-    Safe gating button used across the app.
-
-    Returns True only when:
-      - user clicked
-      - (optional) logged in
-      - (optional) cooldown passed
-
-    IMPORTANT:
-      - Does NOT clear session state
-      - Does NOT change credits
-      - Only gates access and (optionally) blocks via st.stop()
+    Compatibility wrapper:
+    - Some places call action_label=...
+    - Some places call feature_label=...
+    We accept both and use whichever is provided.
     """
-    clicked = st.button(label, key=key, disabled=disabled)
+
+    # pick a friendly label for messages
+    msg_label = (
+        (action_label or "").strip()
+        or (feature_label or "").strip()
+        or "use this feature"
+    )
+
+    clicked = st.button(
+        label,
+        key=key,
+        disabled=disabled,
+        type=type,
+        use_container_width=use_container_width,
+    )
     if not clicked:
         return False
 
     # ---- login gate ----
-    if require_login:
-        u = st.session_state.get("user") or {}
-        email = (u.get("email") if isinstance(u, dict) else None) or ""
-        if not str(email).strip():
-            st.warning("Please sign in to use this feature.")
-            # if you have modal auth, open it
-            if "open_auth_modal" in globals() and callable(globals()["open_auth_modal"]):
-                globals()["open_auth_modal"](default_tab)
+    user = st.session_state.get("user") or {}
+    is_logged_in = bool(isinstance(user, dict) and user.get("email"))
+    if require_login and not is_logged_in:
+        st.warning(f"Sign in to {msg_label}.")
+        if "open_auth_modal" in globals():
+            open_auth_modal(default_tab)
+        st.stop()
+
+    # ---- cooldown gate ----
+    if cooldown_name and "cooldown_ok" in globals():
+        ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
+        if not ok:
+            st.warning(f"⏳ Please wait {left}s before trying again.")
             st.stop()
 
-    # ---- cooldown gate (optional) ----
-    if cooldown_name:
-        if "cooldown_ok" in globals() and callable(globals()["cooldown_ok"]):
-            ok, left = globals()["cooldown_ok"](cooldown_name, cooldown_seconds)
-            if not ok:
-                st.warning(f"⏳ Please wait {left}s before trying again.")
-                st.stop()
-        else:
-            # fallback cooldown if cooldown_ok() doesn't exist
-            now = time.monotonic()
-            k = f"_cooldown_{cooldown_name}"
-            last = float(st.session_state.get(k, 0.0) or 0.0)
-            remaining = cooldown_seconds - (now - last)
-            if remaining > 0:
-                st.warning(f"⏳ Please wait {int(remaining)+1}s before trying again.")
-                st.stop()
-            st.session_state[k] = now
-
-    # ---- optional quota gate (if your old system still exists) ----
-    # NOTE: you told me credits/ledger works, so we DON'T spend here.
-    # This is ONLY for legacy "has_free_quota" if present.
-    if counter_key and "has_free_quota" in globals() and callable(globals()["has_free_quota"]):
-        if not globals()["has_free_quota"](counter_key, 1, feature_label):
+    # ---- quota gate (only if you still use this anywhere) ----
+    if counter_key and "has_free_quota" in globals():
+        if not has_free_quota(counter_key, cost, msg_label):
             st.stop()
 
     return True
@@ -547,6 +543,39 @@ def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
 # ============================================================
 # END OF TOP CHUNK — NEXT: AUTH UI + MAIN APP UI SECTIONS
 # ============================================================
+def get_credits_by_user_id(user_id: int) -> dict:
+    """
+    Compatibility wrapper.
+    Some parts of the app call get_credits_by_user_id().
+    Your ledger truth function might already exist under a different name.
+    Returns: {"cv": int, "ai": int}
+    """
+    # If you already have the real function named get_credits_by_user_id, delete this wrapper.
+    # Otherwise, this provides the missing def using your existing SQL + fetchone.
+
+    user_id = int(user_id)
+
+    row = fetchone(
+        """
+        SELECT
+          GREATEST(
+            COALESCE((SELECT SUM(cv_amount) FROM credit_grants
+                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+            -
+            COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
+          0) AS cv,
+          GREATEST(
+            COALESCE((SELECT SUM(ai_amount) FROM credit_grants
+                      WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+            -
+            COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
+          0) AS ai
+        """,
+        (user_id, user_id, user_id, user_id),
+    ) or {}
+
+    return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
+
 
 def get_user_id_by_email(email: str) -> int | None:
     """
