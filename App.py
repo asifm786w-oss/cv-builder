@@ -507,6 +507,12 @@ def restore_protected_state_if_needed():
     # If you later decide to use snapshots, you can extend this.
     return
 
+def render_public_home():
+    """
+    Safe placeholder for guest / public landing.
+    Keeps app running if the real implementation was removed.
+    """
+    return
 
 # -------------------------
 # OUTPUT RESET (compat)
