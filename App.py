@@ -224,23 +224,12 @@ def is_protected_key(k: str) -> bool:
         return True
     return any(k.startswith(p) for p in PROTECTED_PREFIXES)
 
-# ---------- Snapshot / restore (extra safety; useful around clears) ----------
-def snapshot_protected_state(label=None):
-    """
-    Snapshot protected session state so AI actions / reruns
-    never wipe user input.
-    Label is optional (for debugging/logging only).
-    """
-    snap = {}
-
-    for k, v in st.session_state.items():
-        if k in PROTECTED_EXACT_KEYS or any(k.startswith(p) for p in PROTECTED_PREFIXES):
-            snap[k] = v
-
-    st.session_state["_protected_snapshot"] = snap
-
+def snapshot_protected_state(label: str | None = None) -> dict:
+    snap = {k: st.session_state.get(k) for k in st.session_state.keys() if is_protected_key(k)}
+    # store last snapshot if you want (optional)
     if label:
-        st.session_state["_protected_snapshot_label"] = label
+        st.session_state[f"__snap__{label}"] = snap
+    return snap
 
 def restore_protected_state(snap: dict) -> None:
     if not isinstance(snap, dict):
@@ -337,7 +326,15 @@ def get_user_id_by_email(email: str) -> int | None:
 def get_user_id(email: str) -> int | None:
     return get_user_id_by_email(email)
 
-# ---------- Credits (ledger truth) ----------
+# ============================================================
+# LEDGER CREDITS — SINGLE SOURCE OF TRUTH (NO NAME CLASH)
+# - supports BOTH styles:
+#     spend_credits(conn, uid, source=..., cv_amount=1)
+#     spend_credits(uid, source=..., cv=1)
+# - fixes: unexpected keyword 'cv_amount'
+# - prevents recursion bugs
+# ============================================================
+
 def get_credits_by_user_id(user_id: int) -> dict:
     user_id = int(user_id)
     row = fetchone(
@@ -360,62 +357,35 @@ def get_credits_by_user_id(user_id: int) -> dict:
     ) or {}
     return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
 
-def try_spend(user_id: int, *, source: str, cv: int = 0, ai: int = 0) -> bool:
-    """
-    Wrapper your UI calls everywhere.
-    Uses your spend_credits(conn, user_id, source, cv_amount, ai_amount).
-    """
+
+def _get_credits_by_user_id_on_conn(conn, user_id: int) -> dict:
     user_id = int(user_id)
-    cv = int(cv or 0)
-    ai = int(ai or 0)
-    source = (source or "").strip()
-    if not source:
-        return False
+    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+        cur.execute(
+            """
+            SELECT
+              GREATEST(
+                COALESCE((SELECT SUM(cv_amount) FROM credit_grants
+                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+                -
+                COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
+              0) AS cv,
+              GREATEST(
+                COALESCE((SELECT SUM(ai_amount) FROM credit_grants
+                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
+                -
+                COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
+              0) AS ai
+            """,
+            (user_id, user_id, user_id, user_id),
+        )
+        row = cur.fetchone() or {}
+        return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
 
-    snap = snapshot_protected_state()
-    try:
-        with get_conn() as conn:
-            ok = spend_credits(conn, user_id, source=source, cv_amount=cv, ai_amount=ai)
-        return bool(ok)
-    except Exception as e:
-        # never wipe the form because a spend failed
-        restore_protected_state(snap)
-        st.error(f"Credit spend failed: {e}")
-        return False
 
-def spend_ai_credit(email: str, *, source: str, amount: int = 1) -> bool:
+def spend_credits_on_conn(conn, user_id: int, *, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
     """
-    Your summary/skills/role buttons call this.
-    """
-    email = (email or "").strip().lower()
-    uid = get_user_id_by_email(email)
-    if not uid:
-        return False
-    return try_spend(uid, source=source, ai=int(amount or 1))
-def spend_credits(user_id: int, *, source: str, cv: int = 0, ai: int = 0) -> bool:
-    """
-    Public helper used by UI.
-    Wraps the atomic spend_credits(conn, ...) logic safely.
-
-    Usage:
-        spend_credits(uid, source="ai_summary_improve", ai=1)
-        spend_credits(uid, source="cv_generate", cv=1)
-    """
-    user_id = int(user_id)
-    cv = int(cv or 0)
-    ai = int(ai or 0)
-
-    if cv <= 0 and ai <= 0:
-        return False
-
-    with get_conn() as conn:
-        return spend_credits_on_conn(conn, user_id, source=source, cv_amount=cv, ai_amount=ai)
-
-
-def spend_credits_on_conn(conn, user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
-    """
-    Atomic spend using SAME connection + row lock.
-    (This is your real implementation.)
+    Atomic spend USING THE SAME CONNECTION.
     """
     user_id = int(user_id)
     cv_amount = int(cv_amount or 0)
@@ -450,10 +420,71 @@ def spend_credits_on_conn(conn, user_id: int, source: str, cv_amount: int = 0, a
 
         conn.commit()
         return True
-
     except Exception:
         conn.rollback()
         raise
+
+
+def spend_credits(*args, **kwargs) -> bool:
+    """
+    Backwards-compatible dispatcher.
+
+    Accepts:
+      1) spend_credits(conn, uid, source="x", cv_amount=1, ai_amount=0)
+      2) spend_credits(uid, source="x", cv=1, ai=0)
+
+    Also accepts cv_amount/ai_amount even in style #2, so old calls won't crash.
+    """
+    # ---- detect if first arg is a DB connection ----
+    if len(args) >= 2 and hasattr(args[0], "cursor"):
+        conn = args[0]
+        user_id = int(args[1])
+        source = (kwargs.get("source") or "").strip()
+
+        cv_amount = kwargs.get("cv_amount", kwargs.get("cv", 0))
+        ai_amount = kwargs.get("ai_amount", kwargs.get("ai", 0))
+
+        return spend_credits_on_conn(conn, user_id, source=source, cv_amount=int(cv_amount or 0), ai_amount=int(ai_amount or 0))
+
+    # ---- style #2 (no conn provided) ----
+    if len(args) < 1:
+        return False
+
+    user_id = int(args[0])
+    source = (kwargs.get("source") or "").strip()
+
+    cv_amount = kwargs.get("cv_amount", kwargs.get("cv", 0))
+    ai_amount = kwargs.get("ai_amount", kwargs.get("ai", 0))
+
+    if not source:
+        return False
+
+    with get_conn() as conn:
+        return spend_credits_on_conn(conn, user_id, source=source, cv_amount=int(cv_amount or 0), ai_amount=int(ai_amount or 0))
+
+
+def try_spend(user_id: int, *, source: str, cv: int = 0, ai: int = 0) -> bool:
+    """
+    UI-friendly helper.
+    """
+    user_id = int(user_id)
+    source = (source or "").strip()
+    if not source:
+        return False
+    return bool(spend_credits(user_id, source=source, cv=int(cv or 0), ai=int(ai or 0)))
+
+
+def spend_ai_credit(email: str, *, source: str, amount: int = 1) -> bool:
+    """
+    Email → uid → spend AI credits (1 by default)
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+    uid = get_user_id_by_email(email)
+    if not uid:
+        return False
+    return try_spend(int(uid), source=source, ai=int(amount or 1))
 
 # ---------- locked_action_button (compatible with BOTH of your call styles) ----------
 def locked_action_button(
@@ -1979,54 +2010,66 @@ def _apply_parsed_fallback(parsed: dict):
             safe_set_if_missing(f"edu_start_{i}", r.get("start_date") or r.get("start") or "")
             safe_set_if_missing(f"edu_end_{i}", r.get("end_date") or r.get("end") or "")
 
+
+
+
 if uploaded_cv is not None and fill_clicked:
-    raw_text = _read_uploaded_cv_to_text(uploaded_cv)
-    if not (raw_text or "").strip():
-        st.warning("No readable text found in that file.")
+    # ✅ take snapshot before doing anything risky
+    snap = snapshot_protected_state("before_cv_parse")
+
+    try:
+        raw_text = _read_uploaded_cv_to_text(uploaded_cv)
+        if not (raw_text or "").strip():
+            st.warning("No readable text found in that file.")
+            st.stop()
+
+        cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
+        last_fp = st.session_state.get("_last_cv_fingerprint")
+
+        with st.spinner("Reading and analysing your CV..."):
+            parsed = extract_cv_data(raw_text)
+
+        if not isinstance(parsed, dict):
+            st.error("AI parser returned an unexpected format.")
+            st.stop()
+
+        # ✅ ONLY reset derived outputs if it’s a new file
+        if cv_fp != last_fp:
+            reset_outputs_only()
+            st.session_state["_last_cv_fingerprint"] = cv_fp
+
+        # ✅ Apply parsed mapping
+        if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
+            globals()["_apply_parsed_cv_to_session"](parsed)
+        else:
+            _apply_parsed_fallback(parsed)
+
+        # ✅ Personal details: set only if missing (and skip None)
+        safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
+        safe_set_if_missing("cv_email", parsed.get("email") or "")
+        safe_set_if_missing("cv_phone", parsed.get("phone") or "")
+        safe_set_if_missing("cv_location", parsed.get("location") or "")
+        safe_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
+        safe_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
+
+        st.session_state["_cv_parsed"] = parsed
+        st.session_state["_cv_autofill_enabled"] = True
+        st.session_state["_just_autofilled_from_cv"] = True
+
+        # usage counting
+        email_for_usage = (st.session_state.get("user") or {}).get("email")
+        if email_for_usage:
+            st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
+            increment_usage(email_for_usage, "upload_parses")
+
+        st.success("Form fields updated from your CV. Scroll down to review and edit.")
+        st.rerun()
+
+    except Exception as e:
+        # ✅ if anything goes wrong, restore what the user typed
+        restore_protected_state(snap)
+        st.error(f"CV upload failed: {e!r}")
         st.stop()
-
-    cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
-    last_fp = st.session_state.get("_last_cv_fingerprint")
-
-    with st.spinner("Reading and analysing your CV..."):
-        parsed = extract_cv_data(raw_text)
-
-    if not isinstance(parsed, dict):
-        st.error("AI parser returned an unexpected format.")
-        st.stop()
-
-    # Workspace rule: DO NOT wipe user inputs when a new CV is uploaded.
-    # We only reset derived outputs (PDF bytes, cached AI outputs etc).
-    if cv_fp != last_fp:
-        reset_outputs_only()
-        st.session_state["_last_cv_fingerprint"] = cv_fp
-
-    # Apply parsed mapping (prefer your function if present) — but it must be workspace-safe.
-    if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
-        globals()["_apply_parsed_cv_to_session"](parsed)
-    else:
-        _apply_parsed_fallback(parsed)
-
-    # Personal details: set only if missing
-    safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
-    safe_set_if_missing("cv_email", parsed.get("email") or "")
-    safe_set_if_missing("cv_phone", parsed.get("phone") or "")
-    safe_set_if_missing("cv_location", parsed.get("location") or "")
-    safe_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
-    safe_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
-
-    st.session_state["_cv_parsed"] = parsed
-    st.session_state["_cv_autofill_enabled"] = True
-    st.session_state["_just_autofilled_from_cv"] = True
-
-    # usage counting
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if email_for_usage:
-        st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-        increment_usage(email_for_usage, "upload_parses")
-
-    st.success("Form fields updated from your CV. Scroll down to review and edit.")
-    st.rerun()
 
 
 # -------------------------
