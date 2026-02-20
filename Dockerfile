@@ -24,4 +24,4 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/.playwright
 RUN python -m playwright install chromium chromium-headless-shell
 
 COPY . .
-CMD ["bash","-lc","python -m streamlit run App.py --server.address 0.0.0.0 --server.port ${PORT:-8080} --server.headless true"]
+CMD ["bash","-lc","streamlit run App.py --server.address=0.0.0.0 --server.port=${PORT:-8080} --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false"]
