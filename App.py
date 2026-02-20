@@ -358,6 +358,73 @@ def grant_starter_credits(user_id: int) -> None:
     """
     return
 
+def locked_action_button(
+    label: str,
+    *,
+    key: str,
+    feature_label: str = "This feature",
+    counter_key: str | None = None,
+    require_login: bool = True,
+    default_tab: str = "Sign in",
+    cooldown_name: str | None = None,
+    cooldown_seconds: int = 5,
+    disabled: bool = False,
+) -> bool:
+    """
+    Safe gating button used across the app.
+
+    Returns True only when:
+      - user clicked
+      - (optional) logged in
+      - (optional) cooldown passed
+
+    IMPORTANT:
+      - Does NOT clear session state
+      - Does NOT change credits
+      - Only gates access and (optionally) blocks via st.stop()
+    """
+    clicked = st.button(label, key=key, disabled=disabled)
+    if not clicked:
+        return False
+
+    # ---- login gate ----
+    if require_login:
+        u = st.session_state.get("user") or {}
+        email = (u.get("email") if isinstance(u, dict) else None) or ""
+        if not str(email).strip():
+            st.warning("Please sign in to use this feature.")
+            # if you have modal auth, open it
+            if "open_auth_modal" in globals() and callable(globals()["open_auth_modal"]):
+                globals()["open_auth_modal"](default_tab)
+            st.stop()
+
+    # ---- cooldown gate (optional) ----
+    if cooldown_name:
+        if "cooldown_ok" in globals() and callable(globals()["cooldown_ok"]):
+            ok, left = globals()["cooldown_ok"](cooldown_name, cooldown_seconds)
+            if not ok:
+                st.warning(f"⏳ Please wait {left}s before trying again.")
+                st.stop()
+        else:
+            # fallback cooldown if cooldown_ok() doesn't exist
+            now = time.monotonic()
+            k = f"_cooldown_{cooldown_name}"
+            last = float(st.session_state.get(k, 0.0) or 0.0)
+            remaining = cooldown_seconds - (now - last)
+            if remaining > 0:
+                st.warning(f"⏳ Please wait {int(remaining)+1}s before trying again.")
+                st.stop()
+            st.session_state[k] = now
+
+    # ---- optional quota gate (if your old system still exists) ----
+    # NOTE: you told me credits/ledger works, so we DON'T spend here.
+    # This is ONLY for legacy "has_free_quota" if present.
+    if counter_key and "has_free_quota" in globals() and callable(globals()["has_free_quota"]):
+        if not globals()["has_free_quota"](counter_key, 1, feature_label):
+            st.stop()
+
+    return True
+
 # ============================================================
 # POLICIES (MODAL ONLY — NO PAGE ROUTING)
 # If you route pages, you’ll keep hitting state surprises.
