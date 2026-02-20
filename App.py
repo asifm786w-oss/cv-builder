@@ -237,10 +237,12 @@ def snapshot_protected_state(label=None):
         if k in PROTECTED_EXACT_KEYS or any(k.startswith(p) for p in PROTECTED_PREFIXES):
             snap[k] = v
 
+    # keep a copy in session too (optional, for debug)
     st.session_state["_protected_snapshot"] = snap
-
     if label:
         st.session_state["_protected_snapshot_label"] = label
+
+    return snap
 
 def restore_protected_state(snap: dict) -> None:
     if not isinstance(snap, dict):
@@ -305,7 +307,7 @@ def reset_outputs_only() -> None:
     Clear ONLY derived/transient outputs.
     Never clears user inputs.
     """
-    snap = snapshot_protected_state()
+    snap = snapshot_protected_state()   # ✅ now returns dict
     safe_clear_state([
         "_cv_parsed",
         "_cv_autofill_enabled",
@@ -321,11 +323,7 @@ def reset_outputs_only() -> None:
         "selected_template",
         "download_ready",
     ])
-    restore_protected_state(snap)
-
-# some parts of your app call these names:
-reset_outputs_on_new_cv = reset_outputs_only
-
+    restore_protected_state(snap)       # ✅ restores properly
 
 # ---------- User ID helpers (NO recursion, no globals tricks) ----------
 def get_user_id_by_email(email: str) -> int | None:
