@@ -225,12 +225,22 @@ def is_protected_key(k: str) -> bool:
     return any(k.startswith(p) for p in PROTECTED_PREFIXES)
 
 # ---------- Snapshot / restore (extra safety; useful around clears) ----------
-def snapshot_protected_state() -> dict:
+def snapshot_protected_state(label=None):
+    """
+    Snapshot protected session state so AI actions / reruns
+    never wipe user input.
+    Label is optional (for debugging/logging only).
+    """
     snap = {}
+
     for k, v in st.session_state.items():
-        if is_protected_key(k):
+        if k in PROTECTED_EXACT_KEYS or any(k.startswith(p) for p in PROTECTED_PREFIXES):
             snap[k] = v
-    return snap
+
+    st.session_state["_protected_snapshot"] = snap
+
+    if label:
+        st.session_state["_protected_snapshot_label"] = label
 
 def restore_protected_state(snap: dict) -> None:
     if not isinstance(snap, dict):
