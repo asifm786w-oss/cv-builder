@@ -224,18 +224,38 @@ def is_protected_key(k: str) -> bool:
         return True
     return any(k.startswith(p) for p in PROTECTED_PREFIXES)
 
-def snapshot_protected_state(label: str | None = None) -> dict:
-    snap = {k: st.session_state.get(k) for k in st.session_state.keys() if is_protected_key(k)}
-    # store last snapshot if you want (optional)
+# ---------- Snapshot / restore (extra safety; useful around clears) ----------
+def snapshot_protected_state(label=None):
+    """
+    Snapshot protected session state so AI actions / reruns
+    never wipe user input.
+    Label is optional (for debugging/logging only).
+    """
+    snap = {}
+
+    for k, v in st.session_state.items():
+        if k in PROTECTED_EXACT_KEYS or any(k.startswith(p) for p in PROTECTED_PREFIXES):
+            snap[k] = v
+
+    st.session_state["_protected_snapshot"] = snap
+
     if label:
-        st.session_state[f"__snap__{label}"] = snap
-    return snap
+        st.session_state["_protected_snapshot_label"] = label
 
 def restore_protected_state(snap: dict) -> None:
     if not isinstance(snap, dict):
         return
     for k, v in snap.items():
         st.session_state[k] = v
+
+def _safe_set(k, v):
+    if v is None:
+        return
+    if isinstance(v, str) and not v.strip():
+        return
+    cur = st.session_state.get(k)
+    if cur is None or (isinstance(cur, str) and not cur.strip()):
+        st.session_state[k] = v.strip() if isinstance(v, str) else v
 
 # ---------- Safe session ops ----------
 def safe_pop_state(k: str) -> None:
