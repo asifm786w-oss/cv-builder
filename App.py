@@ -213,6 +213,52 @@ PROTECTED_PREFIXES = (
     "degree_", "institution_", "edu_location_", "edu_start_", "edu_end_",
 )
 
+# -------------------------
+# Protected session keys (NEVER clear unless logout)
+# -------------------------
+
+PROTECTED_EXACT_KEYS = {
+    # CV core
+    "skills_text",
+    "references",
+    "job_description",
+    "template_label",
+
+    # Job search
+    "adzuna_keywords",
+    "adzuna_location",
+    "adzuna_results",
+    "selected_job",
+
+    # AI outputs
+    "job_summary_ai",
+    "cover_letter",
+    "cover_letter_box",
+
+    # Counters / structure
+    "num_experiences",
+    "num_education",
+    "parsed_num_experiences",
+}
+
+PROTECTED_PREFIXES = (
+    # CV personal
+    "cv_",
+
+    # Experience
+    "job_title_", "company_", "exp_location_",
+    "start_date_", "end_date_", "description_",
+
+    # Education
+    "degree_", "institution_", "edu_location_",
+    "edu_start_", "edu_end_",
+)
+
+def is_protected_key(key: str) -> bool:
+    if key in PROTECTED_EXACT_KEYS:
+        return True
+    return any(key.startswith(prefix) for prefix in PROTECTED_PREFIXES)
+
 def _is_protected_key(k: str) -> bool:
     if k in PROTECTED_EXACT_KEYS:
         return True
