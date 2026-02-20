@@ -548,6 +548,35 @@ def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
 # END OF TOP CHUNK — NEXT: AUTH UI + MAIN APP UI SECTIONS
 # ============================================================
 
+def get_user_id_by_email(email: str) -> int | None:
+    """
+    Compatibility alias.
+    Your app sometimes calls get_user_id_by_email().
+    If your real function is named get_user_id_by_email(), keep it and delete this.
+    If your real function is named get_user_id_by_email() or get_user_id(), map it here.
+    """
+    # If you already defined get_user_id_by_email somewhere else, this block won't run
+    # (but in your case it's missing, so we provide it).
+
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+
+    # Prefer your existing helper if present
+    if "get_user_id" in globals() and callable(globals()["get_user_id"]):
+        return globals()["get_user_id"](email)
+
+    # Otherwise, hit DB directly using your fetchone()
+    row = fetchone(
+        """
+        SELECT id
+        FROM users
+        WHERE LOWER(email) = LOWER(%s)
+        LIMIT 1
+        """,
+        (email,),
+    )
+    return int(row["id"]) if row and row.get("id") is not None else None
 
 # -------------------------
 # GLOBAL THEME + LAYOUT CSS
