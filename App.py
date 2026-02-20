@@ -425,6 +425,41 @@ def locked_action_button(
 
     return True
 
+# -------------------------
+# OUTPUT RESET (compat)
+# -------------------------
+
+def reset_outputs_only() -> None:
+    """
+    Clears ONLY derived/generated outputs and transient flags.
+    Never clears user input (cv_*, skills, roles, education, job search, etc).
+    """
+    # If you already have safe_pop_state / clear_ai_upload_state_only, reuse it.
+    if "clear_ai_upload_state_only" in globals():
+        clear_ai_upload_state_only()
+        return
+
+    # Fallback: minimal safe clear (won't touch user fields)
+    for k in [
+        "_cv_parsed",
+        "_cv_autofill_enabled",
+        "_just_autofilled_from_cv",
+        "_last_cv_fingerprint",
+        "generated_cv",
+        "generated_cover_letter",
+        "generated_summary",
+        "suggested_bullets",
+        "ats_score",
+        "final_pdf_bytes",
+        "final_docx_bytes",
+        "selected_template",
+        "download_ready",
+    ]:
+        st.session_state.pop(k, None)
+
+# ✅ backwards compat alias (some parts call the old name)
+reset_outputs_on_new_cv = reset_outputs_only
+
 # ============================================================
 # POLICIES (MODAL ONLY — NO PAGE ROUTING)
 # If you route pages, you’ll keep hitting state surprises.
