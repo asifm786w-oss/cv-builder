@@ -362,61 +362,65 @@ def locked_action_button(
     label: str,
     *,
     key: str,
-    feature_label: str | None = None,
-    action_label: str | None = None,   # ✅ allow old/new callsites
+    feature_label: str = "This feature",
     counter_key: str | None = None,
-    cost: int = 1,
     require_login: bool = True,
     default_tab: str = "Sign in",
     cooldown_name: str | None = None,
     cooldown_seconds: int = 5,
     disabled: bool = False,
-    type: str | None = None,           # optional passthrough
-    use_container_width: bool = False, # optional passthrough
 ) -> bool:
     """
-    Compatibility wrapper:
-    - Some places call action_label=...
-    - Some places call feature_label=...
-    We accept both and use whichever is provided.
+    Safe gating button used across the app.
+
+    Returns True only when:
+      - user clicked
+      - (optional) logged in
+      - (optional) cooldown passed
+
+    IMPORTANT:
+      - Does NOT clear session state
+      - Does NOT change credits
+      - Only gates access and (optionally) blocks via st.stop()
     """
-
-    # pick a friendly label for messages
-    msg_label = (
-        (action_label or "").strip()
-        or (feature_label or "").strip()
-        or "use this feature"
-    )
-
-    clicked = st.button(
-        label,
-        key=key,
-        disabled=disabled,
-        type=type,
-        use_container_width=use_container_width,
-    )
+    clicked = st.button(label, key=key, disabled=disabled)
     if not clicked:
         return False
 
     # ---- login gate ----
-    user = st.session_state.get("user") or {}
-    is_logged_in = bool(isinstance(user, dict) and user.get("email"))
-    if require_login and not is_logged_in:
-        st.warning(f"Sign in to {msg_label}.")
-        if "open_auth_modal" in globals():
-            open_auth_modal(default_tab)
-        st.stop()
-
-    # ---- cooldown gate ----
-    if cooldown_name and "cooldown_ok" in globals():
-        ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
-        if not ok:
-            st.warning(f"⏳ Please wait {left}s before trying again.")
+    if require_login:
+        u = st.session_state.get("user") or {}
+        email = (u.get("email") if isinstance(u, dict) else None) or ""
+        if not str(email).strip():
+            st.warning("Please sign in to use this feature.")
+            # if you have modal auth, open it
+            if "open_auth_modal" in globals() and callable(globals()["open_auth_modal"]):
+                globals()["open_auth_modal"](default_tab)
             st.stop()
 
-    # ---- quota gate (only if you still use this anywhere) ----
-    if counter_key and "has_free_quota" in globals():
-        if not has_free_quota(counter_key, cost, msg_label):
+    # ---- cooldown gate (optional) ----
+    if cooldown_name:
+        if "cooldown_ok" in globals() and callable(globals()["cooldown_ok"]):
+            ok, left = globals()["cooldown_ok"](cooldown_name, cooldown_seconds)
+            if not ok:
+                st.warning(f"⏳ Please wait {left}s before trying again.")
+                st.stop()
+        else:
+            # fallback cooldown if cooldown_ok() doesn't exist
+            now = time.monotonic()
+            k = f"_cooldown_{cooldown_name}"
+            last = float(st.session_state.get(k, 0.0) or 0.0)
+            remaining = cooldown_seconds - (now - last)
+            if remaining > 0:
+                st.warning(f"⏳ Please wait {int(remaining)+1}s before trying again.")
+                st.stop()
+            st.session_state[k] = now
+
+    # ---- optional quota gate (if your old system still exists) ----
+    # NOTE: you told me credits/ledger works, so we DON'T spend here.
+    # This is ONLY for legacy "has_free_quota" if present.
+    if counter_key and "has_free_quota" in globals() and callable(globals()["has_free_quota"]):
+        if not globals()["has_free_quota"](counter_key, 1, feature_label):
             st.stop()
 
     return True
@@ -2698,7 +2702,7 @@ template_label = st.selectbox(
 # -------------------------
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
-    action_label="generate and download your CV",
+    feature_label="generate and download your CV",
     key="btn_generate_cv",
 )
 
