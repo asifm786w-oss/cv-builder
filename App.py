@@ -162,10 +162,12 @@ APP_URL = (os.getenv("APP_URL") or "").strip() or "http://localhost:8501"
 # ============================================================
 DEFAULT_SESSION_KEYS = {
     "user": None,
+    "user_id": None,
+
     "accepted_policies": False,
     "chk_policy_agree": False,
 
-    # policy modal state (scoped)
+    # policy modal state
     "footer_policy_open": False,
     "footer_policy_slug": None,
     "gate_policy_open": False,
@@ -175,115 +177,45 @@ DEFAULT_SESSION_KEYS = {
     "_policies_loaded": False,
     "_policies": {},
 
-    # adzuna state (so expander doesn’t “forget”)
+    # job search cache
     "adzuna_results": [],
 }
 
 for k, v in DEFAULT_SESSION_KEYS.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+    st.session_state.setdefault(k, v)
 
-# -------------------------
-# DB INIT (EARLY)
-# -------------------------
+# DB init stays here (once)
 init_db()
 verify_postgres_connection()
 
-# ---- Snapshot ONLY protected/user input keys ----
-PROTECTED_EXACT_KEYS = {
-    "skills_text",
-    "references",
-    "job_description",
-    "template_label",
-    "adzuna_keywords",
-    "adzuna_location",
-    "adzuna_results",
-    "selected_job",
-    "job_summary_ai",
-    "cover_letter",
-    "cover_letter_box",
-    "num_experiences",
-    "num_education",
-    "parsed_num_experiences",
-}
-
-PROTECTED_PREFIXES = (
-    "cv_",
-    "job_title_", "company_", "exp_location_", "start_date_", "end_date_", "description_",
-    "degree_", "institution_", "edu_location_", "edu_start_", "edu_end_",
-)
-
-# -------------------------
-# Protected session keys (NEVER clear unless logout)
-# -------------------------
-
-PROTECTED_EXACT_KEYS = {
-    # CV core
-    "skills_text",
-    "references",
-    "job_description",
-    "template_label",
-
-    # Job search
-    "adzuna_keywords",
-    "adzuna_location",
-    "adzuna_results",
-    "selected_job",
-
-    # AI outputs
-    "job_summary_ai",
-    "cover_letter",
-    "cover_letter_box",
-
-    # Counters / structure
-    "num_experiences",
-    "num_education",
-    "parsed_num_experiences",
-}
-
-PROTECTED_PREFIXES = (
-    # CV personal
-    "cv_",
-
-    # Experience
-    "job_title_", "company_", "exp_location_",
-    "start_date_", "end_date_", "description_",
-
-    # Education
-    "degree_", "institution_", "edu_location_",
-    "edu_start_", "edu_end_",
-)
-
 # ============================================================
-# FOUNDATION DEFS (paste ONCE, near top of App.py)
-# - fixes NameError spam
-# - prevents session wipes on rerun/AI clicks
-# - provides consistent credit spend helpers
+# PROTECTED STATE (NEVER CLEAR MID-SESSION)
 # ============================================================
-
-from typing import Any
-
-# ---------- Protected session keys (never clear these mid-session) ----------
 PROTECTED_EXACT_KEYS = {
-    # personal/cv inputs
+    # auth/user
+    "user", "user_id", "accepted_policies", "chk_policy_agree",
+
+    # CV inputs
     "skills_text", "references", "job_description", "template_label",
 
     # job search
     "adzuna_keywords", "adzuna_location", "adzuna_results", "selected_job",
 
-    # AI outputs you said must NOT disappear
+    # AI outputs you want to persist
     "job_summary_ai", "cover_letter", "cover_letter_box",
 
-    # counts/structure
+    # structure
     "num_experiences", "parsed_num_experiences", "num_education", "education_items",
-
-    # auth/user
-    "user", "user_id", "accepted_policies", "chk_policy_agree",
 }
 
 PROTECTED_PREFIXES = (
+    # personal
     "cv_",
+
+    # experience
     "job_title_", "company_", "exp_location_", "start_date_", "end_date_", "description_",
+
+    # education
     "degree_", "institution_", "edu_location_", "edu_start_", "edu_end_",
 )
 
@@ -375,12 +307,6 @@ def reset_outputs_only() -> None:
 # some parts of your app call these names:
 reset_outputs_on_new_cv = reset_outputs_only
 
-def clear_ai_upload_state_only() -> None:
-    """
-    This is the one you call before Generate CV.
-    It must never clear cv_*, skills_text, roles, edu, job stuff.
-    """
-    reset_outputs_only()
 
 # ---------- User ID helpers (NO recursion, no globals tricks) ----------
 def get_user_id_by_email(email: str) -> int | None:
@@ -514,40 +440,75 @@ def render_public_home():
     """
     return
 
-# -------------------------
-# OUTPUT RESET (compat)
-# -------------------------
+
+# =========================
+# OUTPUT RESET (NO RECURSION)
+# Replace BOTH of your functions with these versions.
+# =========================
 
 def reset_outputs_only() -> None:
     """
-    Clears ONLY derived/generated outputs and transient flags.
-    Never clears user input (cv_*, skills, roles, education, job search, etc).
+    Clears only generated/derived outputs.
+    Does NOT touch user inputs (cv_*, skills_text, education fields, etc).
+    MUST NOT call clear_ai_upload_state_only() (prevents recursion).
     """
-    # If you already have safe_pop_state / clear_ai_upload_state_only, reuse it.
-    if "clear_ai_upload_state_only" in globals():
-        clear_ai_upload_state_only()
-        return
+    keys_to_clear = [
+        # generated doc bytes / downloads
+        "final_pdf_bytes",
+        "final_docx_bytes",
+        "download_ready",
 
-    # Fallback: minimal safe clear (won't touch user fields)
-    for k in [
-        "_cv_parsed",
-        "_cv_autofill_enabled",
-        "_just_autofilled_from_cv",
-        "_last_cv_fingerprint",
+        # cached 'generated' outputs
         "generated_cv",
         "generated_cover_letter",
         "generated_summary",
         "suggested_bullets",
         "ats_score",
+
+        # job-derived outputs (optional clears)
+        "job_summary_ai",
+        # keep cover_letter if you want; comment out if you don't want cleared
+        # "cover_letter",
+        # "cover_letter_box",
+
+        # template output (NOT template_label)
+        "selected_template",
+    ]
+
+    for k in keys_to_clear:
+        safe_pop_state(k) if "safe_pop_state" in globals() else st.session_state.pop(k, None)
+
+
+def clear_ai_upload_state_only() -> None:
+    """
+    Clears only upload/parse transient flags and any derived outputs.
+    DOES NOT call reset_outputs_only() (prevents recursion).
+    """
+    keys_to_clear = [
+        # upload/parse internal flags (NOT user fields)
+        "_cv_parsed",
+        "_cv_autofill_enabled",
+        "_just_autofilled_from_cv",
+        "_last_cv_fingerprint",
+    ]
+
+    # clear upload flags
+    for k in keys_to_clear:
+        safe_pop_state(k) if "safe_pop_state" in globals() else st.session_state.pop(k, None)
+
+    # also clear outputs (inline, no function call to avoid recursion)
+    for k in [
         "final_pdf_bytes",
         "final_docx_bytes",
-        "selected_template",
         "download_ready",
+        "generated_cv",
+        "generated_cover_letter",
+        "generated_summary",
+        "suggested_bullets",
+        "ats_score",
+        "selected_template",
     ]:
-        st.session_state.pop(k, None)
-
-# ✅ backwards compat alias (some parts call the old name)
-reset_outputs_on_new_cv = reset_outputs_only
+        safe_pop_state(k) if "safe_pop_state" in globals() else st.session_state.pop(k, None)
 
 # ============================================================
 # POLICIES (MODAL ONLY — NO PAGE ROUTING)
