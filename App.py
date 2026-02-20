@@ -498,6 +498,16 @@ def locked_action_button(
 
     return True
 
+def restore_protected_state_if_needed():
+    """
+    Safety no-op restore helper.
+    Keeps backward compatibility with older calls.
+    Does NOT clear or modify session state.
+    """
+    # If you later decide to use snapshots, you can extend this.
+    return
+
+
 # -------------------------
 # OUTPUT RESET (compat)
 # -------------------------
