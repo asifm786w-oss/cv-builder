@@ -2596,13 +2596,6 @@ Please ensure your details are reviewed before downloading.
 
 
 
-
-if uploaded_cv is not None:
-    data = uploaded_cv.getvalue()
-    if data:
-        st.session_state["cv_upload_bytes"] = data
-        st.session_state["cv_upload_name"] = uploaded_cv.name
-
 fill_clicked = locked_action_button(
     "Fill the form from this CV (AI)",
     key="btn_fill_from_cv",
