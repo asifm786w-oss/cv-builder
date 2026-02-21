@@ -3475,5 +3475,11 @@ with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         open_policy("footer", "terms")
 
+# FOOTER POLICY BUTTONS
+render_policy_modal("footer")
+
 # Consent gate LAST so it doesn't wipe widget state
 show_consent_gate()
+
+# Ensure the gate modal can render if user clicks from inside show_consent_gate()
+render_policy_modal("gate")
