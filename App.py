@@ -2195,16 +2195,19 @@ def section_cv_upload():
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
 
-# --- CV Upload (ONE widget ONLY) ---
+# =========================
+# CV Upload + AI Autofill (ONE BLOCK ONLY)
+# =========================
 st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
 uploaded_cv = st.file_uploader(
     "Upload your current CV (PDF, DOCX or TXT)",
     type=["pdf", "docx", "txt"],
-    key="cv_uploader",  # MUST be unique across the entire app
+    key="cv_uploader",
 )
 
+# Persist bytes+name across reruns
 if uploaded_cv is not None:
     data = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
     if data:
@@ -2242,12 +2245,29 @@ if fill_clicked:
         st.error("AI parser returned an unexpected format.")
         st.stop()
 
+    # Apply parsed -> prefer your canonical apply function if it exists
     if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
         globals()["_apply_parsed_cv_to_session"](parsed)
     else:
         _apply_parsed_fallback(parsed)
 
+    # ✅ Fill Section 1 keys (only if missing; never overwrite user edits)
+    safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
+    safe_set_if_missing("cv_email", parsed.get("email") or "")
+    safe_set_if_missing("cv_phone", parsed.get("phone") or "")
+    safe_set_if_missing("cv_location", parsed.get("location") or "")
+    safe_set_if_missing(
+        "cv_title",
+        parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or ""
+    )
+    safe_set_if_missing(
+        "cv_summary",
+        parsed.get("summary") or parsed.get("professional_summary") or ""
+    )
+
+    # Let experience section optionally set counts once
     st.session_state["_just_autofilled_from_cv"] = True
+
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
 
