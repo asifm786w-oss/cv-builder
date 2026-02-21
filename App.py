@@ -2712,6 +2712,8 @@ if fill_clicked:
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
 
+
+section_personal_details()
 # -------------------------
 # 1. Personal details
 # -------------------------
@@ -2790,7 +2792,7 @@ if btn_summary:
             st.error(f"AI error (summary improvement): {e}")
             st.stop()
 
-
+skills = section_skills()
 # -------------------------
 # 2. Skills (bullet points only)
 # -------------------------
@@ -2904,7 +2906,7 @@ for ln in raw.splitlines():
 _seen = set()
 skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
-
+experiences = section_experience()
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
@@ -3038,7 +3040,7 @@ if run_now and role_to_improve is not None:
 
 st.session_state.pop("_just_autofilled_from_cv", None)
 
-
+education_items, references = section_education_and_references()
 # -------------------------
 # 4. Education (multiple entries)
 # -------------------------
@@ -3111,6 +3113,12 @@ references = st.text_area(
 )
 
 
+section_target_job_and_outputs(
+    skills=skills,
+    experiences=experiences,
+    education_items=education_items,
+    references=references,
+)
 # -------------------------
 # 5. Target Job (optional, for AI) — workspace safe:
 # - DO NOT auto-pop outputs when JD changes
@@ -3448,29 +3456,6 @@ if generate_clicked:
         st.error(f"CV generation failed: {e}")
         st.stop()
 
-# =========================
-# MAIN CV BUILDER FLOW (CALLERS ONLY)
-# =========================
-
-# 2) Personal details (+ improve summary)
-section_personal_details()
-
-# 3) Skills (+ improve skills) -> returns list[str]
-skills = section_skills()
-
-# 4) Experience (+ improve role) -> returns list[Experience]
-experiences = section_experience()
-
-# 5) Education + references -> returns (education_items, references)
-education_items, references = section_education_and_references()
-
-# 6) Target job + outputs (job summary, cover letter, template, generate CV)
-section_target_job_and_outputs(
-    skills=skills,
-    experiences=experiences,
-    education_items=education_items,
-    references=references,
-)
 
 # -------------------------
 # Pricing (SUBSCRIPTIONS)
