@@ -292,10 +292,12 @@ def safe_pop_state(k: str) -> None:
     st.session_state.pop(k, None)
 
 def safe_clear_state(keys: list[str]) -> None:
+    state_debug_capture("safe_clear_state:before")
     for k in keys:
         if is_widget_key(k):
             continue
         safe_pop_state(k)
+    state_debug_capture("safe_clear_state:after")
 
 def safe_init_key(key: str, default=""):
     if key not in st.session_state or st.session_state[key] is None:
@@ -317,6 +319,116 @@ def safe_set_if_missing(key: str, value, *, strip: bool = True):
             value = value.strip()
         if value is not None:
             st.session_state[key] = value
+
+
+# ---------- State forensic debugger ----------
+STATE_DEBUG_STATIC_KEYS = {
+    "cv_full_name", "cv_email", "cv_phone", "cv_location", "cv_title", "cv_summary",
+    "skills_text", "references", "job_description", "template_label",
+    "num_experiences", "num_education",
+    "_just_autofilled_from_cv", "_last_cv_fingerprint", "_pending_cv_parsed",
+}
+STATE_DEBUG_PREFIXES = (
+    "job_title_", "company_", "description_", "start_date_", "end_date_",
+    "degree_", "institution_", "edu_start_", "edu_end_", "cv_",
+)
+
+
+def _state_debug_should_track(key: str) -> bool:
+    return key in STATE_DEBUG_STATIC_KEYS or key.startswith(STATE_DEBUG_PREFIXES)
+
+
+def _state_debug_is_empty(value) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, tuple, dict, set)):
+        return len(value) == 0
+    return False
+
+
+def _state_debug_fingerprint(value) -> str:
+    kind = type(value).__name__
+    if isinstance(value, str):
+        txt = value.strip()
+        if not txt:
+            return "str:<empty>"
+        head = txt.replace("\n", " ")[:60]
+        h = hashlib.sha1(txt.encode("utf-8", errors="ignore")).hexdigest()[:8]
+        return f"str:len={len(txt)} hash={h} '{head}'"
+    if isinstance(value, (list, tuple, set)):
+        return f"{kind}:len={len(value)}"
+    if isinstance(value, dict):
+        return f"dict:keys={len(value)}"
+    return f"{kind}:{repr(value)[:80]}"
+
+
+def _state_debug_snapshot() -> dict:
+    snap = {}
+    for k, v in st.session_state.items():
+        if _state_debug_should_track(k):
+            snap[k] = {
+                "empty": _state_debug_is_empty(v),
+                "fp": _state_debug_fingerprint(v),
+            }
+    return snap
+
+
+def state_debug_capture(tag: str) -> None:
+    current = _state_debug_snapshot()
+    prev = st.session_state.get("_state_debug_prev_snapshot") or {}
+
+    removed = sorted([k for k in prev.keys() if k not in current])
+    emptied = sorted([
+        k for k in current.keys() & prev.keys()
+        if prev[k].get("empty") is False and current[k].get("empty") is True
+    ])
+    overwritten = sorted([
+        k for k in current.keys() & prev.keys()
+        if prev[k].get("fp") != current[k].get("fp")
+    ])
+
+    events = st.session_state.get("_state_debug_events", [])
+    events.append({
+        "tag": tag,
+        "removed": removed,
+        "emptied": emptied,
+        "overwritten": overwritten,
+        "ts": datetime.now(timezone.utc).isoformat(),
+    })
+    st.session_state["_state_debug_events"] = events[-30:]
+    st.session_state["_state_debug_prev_snapshot"] = current
+    st.session_state["_state_debug_last_tag"] = tag
+
+
+def state_debug_report(tag: str = "run") -> None:
+    st.session_state["_state_debug_report_tag"] = tag
+    with st.expander("State Debug", expanded=False):
+        st.caption(f"Last capture tag: {st.session_state.get('_state_debug_last_tag', 'n/a')}")
+        events = st.session_state.get("_state_debug_events", [])
+        if not events:
+            st.write("No state debug events yet.")
+        else:
+            for ev in events[-8:]:
+                st.markdown(f"**{ev.get('ts', '')}** `{ev.get('tag', '')}`")
+                st.write({
+                    "keys_removed": ev.get("removed", []),
+                    "non_empty_to_empty": ev.get("emptied", []),
+                    "keys_overwritten": ev.get("overwritten", []),
+                })
+
+    # Wipe Tripwire: any cv_* key going non-empty -> empty in a single transition
+    events = st.session_state.get("_state_debug_events", [])
+    if events:
+        last = events[-1]
+        cv_emptied = [k for k in last.get("emptied", []) if k.startswith("cv_")]
+        if cv_emptied:
+            st.error(
+                "Wipe Tripwire triggered: cv_* key(s) changed from non-empty to empty in one rerun. "
+                f"Keys: {cv_emptied}. Last tag: {last.get('tag', 'unknown')}"
+            )
+            st.stop()
 
 
 
@@ -676,6 +788,7 @@ def render_public_home():
 # =========================
 
 def reset_outputs_only() -> None:
+    state_debug_capture("reset_outputs_only:before")
     """
     Clears only generated/derived outputs.
     Does NOT touch user inputs (cv_*, skills_text, education fields, etc).
@@ -698,9 +811,11 @@ def reset_outputs_only() -> None:
     for k in keys_to_clear:
         safe_pop_state(k)
     restore_protected_state(snap)
+    state_debug_capture("reset_outputs_only:after")
 
 
 def clear_ai_upload_state_only() -> None:
+    state_debug_capture("clear_ai_upload_state_only:before")
     """
     Clears only upload/parse transient flags and any derived outputs.
     (prevents recursion).
@@ -731,6 +846,7 @@ def clear_ai_upload_state_only() -> None:
         safe_pop_state(k)
 
     restore_protected_state(snap)
+    state_debug_capture("clear_ai_upload_state_only:after")
 
 # ============================================================
 # POLICIES (MODAL ONLY — NO PAGE ROUTING)
@@ -1580,6 +1696,8 @@ def render_auth_modal_if_open() -> None:
         _auth_dialog()
 
 
+state_debug_capture("run:start")
+
 # =========================
 # ROUTING (EARLY) — ONE VERSION ONLY
 # =========================
@@ -2261,6 +2379,7 @@ skills_text = st.text_area(
 btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
 
 if btn_skills:
+    state_debug_capture("btn_improve_skills:clicked")
     snap = snapshot_protected_state("before_ai_skills")
 
     if not gate_premium("improve your skills"):
@@ -2293,11 +2412,13 @@ if btn_skills:
 
             stage_value("skills_text", improved_limited)
             restore_protected_state(snap)
+            state_debug_capture("btn_improve_skills:staged")
 
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
             increment_usage(email_for_usage, "bullets_uses")
 
             st.success("AI skills applied.")
+            state_debug_capture("btn_improve_skills:before_rerun")
             st.rerun()
 
         except Exception as e:
@@ -2378,6 +2499,7 @@ for i in range(int(num_experiences)):
     )
 
     if st.button("Improve this role (AI)", key=f"btn_role_ai_{i}"):
+        state_debug_capture(f"btn_role_ai_{i}:clicked")
         if not gate_premium(f"improve Role {i+1} with AI"):
             st.stop()
 
@@ -2391,6 +2513,7 @@ for i in range(int(num_experiences)):
 
         st.session_state["ai_running_role"] = i
         st.session_state["ai_run_now"] = True
+        state_debug_capture(f"btn_role_ai_{i}:before_rerun")
         st.rerun()
 
     if job_title and company:
@@ -2441,6 +2564,7 @@ if run_now and role_to_improve is not None:
             improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label=f"Role {i+1} description")
 
             stage_value(desc_key, improved_limited)
+            state_debug_capture(f"role_ai_{i}:staged")
             if snap:
                 restore_protected_state(snap)
 
@@ -2448,6 +2572,7 @@ if run_now and role_to_improve is not None:
             increment_usage(email_for_usage, "bullets_uses")
 
             st.success(f"Role {i+1} updated.")
+            state_debug_capture(f"role_ai_{i}:before_rerun")
             st.rerun()
 
         except Exception as e:
@@ -2734,10 +2859,12 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                     st.stop()
 
                 st.session_state["adzuna_results"] = jobs
+                state_debug_capture("adzuna_search:results_staged")
 
                 if not jobs:
                     st.info("No results found. Try different keywords or a nearby location.")
 
+                state_debug_capture("adzuna_search:before_rerun")
                 st.rerun()
 
             except AdzunaConfigError:
@@ -2804,6 +2931,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                             }
 
                             st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
+                            state_debug_capture("use_job:before_rerun")
                             st.rerun()
 
                 st.markdown("**Preview description**")
@@ -2858,6 +2986,7 @@ with col_jd2:
 # AI job-description summary
 # -------------------------
 if job_summary_clicked:
+    state_debug_capture("btn_job_summary:clicked")
     snap = snapshot_protected_state("before_ai_job_summary")
 
     if not gate_premium("generate a job summary"):
@@ -2889,12 +3018,14 @@ if job_summary_clicked:
 
             stage_value("job_summary_ai", job_summary_text)
             restore_protected_state(snap)
+            state_debug_capture("btn_job_summary:staged")
             st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
 
             if email_for_usage:
                 increment_usage(email_for_usage, "job_summary_uses")
 
             st.success("AI job summary generated below.")
+            state_debug_capture("btn_job_summary:before_rerun")
             st.rerun()
 
         except Exception as e:
@@ -2915,6 +3046,7 @@ if job_summary_text:
 # AI cover letter generation
 # -------------------------
 if ai_cover_letter_clicked:
+    state_debug_capture("btn_cover_letter:clicked")
     snap = snapshot_protected_state("before_ai_cover_letter")
 
     if not gate_premium("generate a cover letter"):
@@ -2964,12 +3096,14 @@ if ai_cover_letter_clicked:
             stage_value("cover_letter", final_letter)
             stage_value("cover_letter_box", final_letter)
             restore_protected_state(snap)
+            state_debug_capture("btn_cover_letter:staged")
 
             st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
             if email_for_usage:
                 increment_usage(email_for_usage, "cover_uses")
 
             st.success("AI cover letter generated below. You can edit it before downloading.")
+            state_debug_capture("btn_cover_letter:before_rerun")
             st.rerun()
 
         except Exception as e:
@@ -3067,6 +3201,7 @@ generate_clicked = locked_action_button(
 )
 
 if generate_clicked:
+    state_debug_capture("btn_generate_cv:clicked")
     snapshot_protected_state("before_generate_cv")  # ✅ SNAPSHOT
 
     # clears only derived outputs (must be your SAFE version)
@@ -3200,6 +3335,7 @@ with col_monthly:
                 customer_email=email_for_checkout,
             )
             st.session_state["checkout_url_monthly"] = url
+            state_debug_capture("start_monthly_sub:before_rerun")
             st.rerun()
         except Exception as e:
             st.error(f"Stripe error: {e}")
@@ -3237,6 +3373,7 @@ with col_pro:
                 customer_email=email_for_checkout,
             )
             st.session_state["checkout_url_pro"] = url
+            state_debug_capture("start_pro_sub:before_rerun")
             st.rerun()
         except Exception as e:
             st.error(f"Stripe error: {e}")
@@ -3263,6 +3400,8 @@ st.caption(
 )
 
 
+state_debug_report("run:report")
+
 # ==============================================
 # FOOTER POLICY BUTTONS (MODAL ONLY - NO SNAPSHOT)
 # ==============================================
@@ -3283,4 +3422,3 @@ with fc3:
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         open_policy("footer", "terms")
-
