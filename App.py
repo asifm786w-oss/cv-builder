@@ -385,6 +385,8 @@ def safe_set_if_missing(key: str, value, *, strip: bool = True):
         if value is not None:
             st.session_state[key] = value
 
+
+
 def _apply_parsed_fallback(parsed: dict) -> None:
     """
     Fallback mapping if _apply_parsed_cv_to_session isn't available.
@@ -392,6 +394,50 @@ def _apply_parsed_fallback(parsed: dict) -> None:
     """
     if not isinstance(parsed, dict):
         return
+
+    # --- skills ---
+    skills = parsed.get("skills")
+    if isinstance(skills, list):
+        joined = "\n".join(
+            f"• {str(s).strip()}" for s in skills if str(s).strip()
+        )
+        if joined.strip():
+            safe_set_if_missing("skills_text", joined)
+    elif isinstance(skills, str) and skills.strip():
+        safe_set_if_missing("skills_text", skills.strip())
+
+    # --- experiences ---
+    exps = parsed.get("experiences") or parsed.get("experience") or []
+    if isinstance(exps, list) and exps:
+        n = max(1, min(5, len(exps)))
+        st.session_state["parsed_num_experiences"] = n
+        safe_set_if_missing("num_experiences", n)
+
+        for i in range(n):
+            e = exps[i] or {}
+            safe_set_if_missing(f"job_title_{i}", e.get("job_title") or e.get("title") or "")
+            safe_set_if_missing(f"company_{i}", e.get("company") or e.get("employer") or "")
+            safe_set_if_missing(f"exp_location_{i}", e.get("location") or "")
+            safe_set_if_missing(f"start_date_{i}", e.get("start_date") or e.get("start") or "")
+            safe_set_if_missing(f"end_date_{i}", e.get("end_date") or e.get("end") or "")
+            desc = e.get("description") or ""
+            if isinstance(desc, list):
+                desc = "\n".join(str(x).strip() for x in desc if str(x).strip())
+            safe_set_if_missing(f"description_{i}", desc or "")
+
+    # --- education ---
+    edu = parsed.get("education") or parsed.get("educations") or []
+    if isinstance(edu, list) and edu:
+        n = max(1, min(5, len(edu)))
+        safe_set_if_missing("num_education", n)
+
+        for i in range(n):
+            r = edu[i] or {}
+            safe_set_if_missing(f"degree_{i}", r.get("degree") or r.get("qualification") or "")
+            safe_set_if_missing(f"institution_{i}", r.get("institution") or r.get("school") or "")
+            safe_set_if_missing(f"edu_location_{i}", r.get("location") or r.get("city") or "")
+            safe_set_if_missing(f"edu_start_{i}", r.get("start_date") or r.get("start") or "")
+            safe_set_if_missing(f"edu_end_{i}", r.get("end_date") or r.get("end") or "")
 
     # --- skills ---
     skills = parsed.get("skills")
@@ -691,71 +737,7 @@ def render_public_home():
 
 
 
-def section_cv_upload():
-    st.subheader("Upload an existing CV (optional)")
-    st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
-    uploaded_cv = st.file_uploader(
-        "Upload your current CV (PDF, DOCX or TXT)",
-        type=["pdf", "docx", "txt"],
-        key="cv_uploader",
-    )
-
-    # persist bytes+name across reruns
-    if uploaded_cv is not None:
-        data = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
-        if data:
-            st.session_state["cv_upload_bytes"] = data
-            st.session_state["cv_upload_name"] = getattr(uploaded_cv, "name", "uploaded_cv")
-
-    fill_clicked = locked_action_button(
-        "Fill the form from this CV (AI)",
-        key="btn_fill_from_cv",
-        feature_label="CV upload & parsing",
-        counter_key="upload_parses",
-        require_login=True,
-        default_tab="Sign in",
-        cooldown_name="upload_parse",
-        cooldown_seconds=5,
-    )
-
-    if fill_clicked:
-        
-        cv_upload_bytes = st.session_state.get("cv_upload_bytes")
-        cv_upload_name = st.session_state.get("cv_upload_name")
-
-        raw_text = _read_uploaded_cv_bytes_to_text(cv_upload_name, cv_upload_bytes)
-        if not (raw_text or "").strip():
-            st.warning("Please upload a readable PDF, DOCX, or TXT CV first.")
-            st.stop()
-
-        with st.spinner("Reading and analysing your CV..."):
-            parsed = extract_cv_data(raw_text)
-
-        if not isinstance(parsed, dict):
-            st.error("AI parser returned an unexpected format.")
-            st.stop()
-
-        # Apply parsed -> use YOUR existing apply function if you have it
-        if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
-            globals()["_apply_parsed_cv_to_session"](parsed)
-        else:
-            _apply_parsed_fallback(parsed)
-
-        # set missing personal fields only
-        safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
-        safe_set_if_missing("cv_email", parsed.get("email") or "")
-        safe_set_if_missing("cv_phone", parsed.get("phone") or "")
-        safe_set_if_missing("cv_location", parsed.get("location") or "")
-        safe_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
-        safe_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
-
-        # allow the experience section to set count once
-        st.session_state["_just_autofilled_from_cv"] = True
-        st.session_state["parsed_num_experiences"] = int(parsed.get("parsed_num_experiences") or st.session_state.get("parsed_num_experiences", 1) or 1)
-        
-        st.success("Form fields updated from your CV. Scroll down to review and edit.")
-        st.rerun()
 
 
 def section_personal_details():
@@ -2599,13 +2581,14 @@ Please ensure your details are reviewed before downloading.
 
 
 
+# --- CV Upload (ONE widget ONLY) ---
 st.subheader("Upload an existing CV (optional)")
 st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
 uploaded_cv = st.file_uploader(
     "Upload your current CV (PDF, DOCX or TXT)",
     type=["pdf", "docx", "txt"],
-    key="cv_uploader",
+    key="cv_uploader",  # MUST be unique across the entire app
 )
 
 if uploaded_cv is not None:
@@ -2629,13 +2612,14 @@ if fill_clicked:
     cv_upload_bytes = st.session_state.get("cv_upload_bytes")
     cv_upload_name = st.session_state.get("cv_upload_name")
 
+    if not cv_upload_bytes:
+        st.warning("Upload a CV first.")
+        st.stop()
+
     raw_text = _read_uploaded_cv_bytes_to_text(cv_upload_name, cv_upload_bytes)
     if not (raw_text or "").strip():
         st.warning("Please upload a readable PDF, DOCX, or TXT CV first.")
         st.stop()
-
-    cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
-    last_fp = st.session_state.get("_last_cv_fingerprint")
 
     with st.spinner("Reading and analysing your CV..."):
         parsed = extract_cv_data(raw_text)
@@ -2644,31 +2628,12 @@ if fill_clicked:
         st.error("AI parser returned an unexpected format.")
         st.stop()
 
-    if cv_fp != last_fp:
-        reset_outputs_only()
-        st.session_state["_last_cv_fingerprint"] = cv_fp
-
     if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
         globals()["_apply_parsed_cv_to_session"](parsed)
     else:
         _apply_parsed_fallback(parsed)
 
-    safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
-    safe_set_if_missing("cv_email", parsed.get("email") or "")
-    safe_set_if_missing("cv_phone", parsed.get("phone") or "")
-    safe_set_if_missing("cv_location", parsed.get("location") or "")
-    safe_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
-    safe_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
-
-    st.session_state["_cv_parsed"] = parsed
-    st.session_state["_cv_autofill_enabled"] = True
     st.session_state["_just_autofilled_from_cv"] = True
-
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if email_for_usage:
-        st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
-        increment_usage(email_for_usage, "upload_parses")
-
     st.success("Form fields updated from your CV. Scroll down to review and edit.")
     st.rerun()
 
