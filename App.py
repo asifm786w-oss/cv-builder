@@ -1766,9 +1766,6 @@ if not is_logged_in:
     # make sure render_public_home() is defined before this chunk runs
     render_public_home()
 
-# Consent gate (only triggers when logged in)
-show_consent_gate()
-
 # Cache uid for DB ops (logged in only)
 if user_email:
     uid = get_user_id_by_email(user_email)
@@ -3477,3 +3474,6 @@ with fc3:
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         open_policy("footer", "terms")
+
+# Consent gate LAST so it doesn't wipe widget state
+show_consent_gate()
