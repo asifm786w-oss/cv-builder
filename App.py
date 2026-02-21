@@ -929,6 +929,72 @@ def restore_education_state(max_rows: int = 5):
         st.session_state[f"edu_start_{i}"] = row.get("start", "")
         st.session_state[f"edu_end_{i}"] = row.get("end", "")
 
+def build_cover_input_from_cv_or_form(
+    *,
+    full_name_ss: str,
+    title_ss: str,
+    location_ss: str,
+    skills_from_form: list[str],
+    experiences_from_form: list,
+    education_from_form: list,
+) -> dict:
+    """
+    Prefer parsed CV data (from upload) if available.
+    Fallback to whatever is currently in the form.
+    """
+
+    parsed = st.session_state.get("_cv_parsed")
+    if isinstance(parsed, dict) and parsed:
+        # skills
+        pskills = parsed.get("skills") or []
+        if isinstance(pskills, str):
+            pskills = [s.strip() for s in pskills.splitlines() if s.strip()]
+        if isinstance(pskills, list):
+            pskills = [str(s).strip() for s in pskills if str(s).strip()]
+        else:
+            pskills = []
+
+        # experiences
+        pexps = parsed.get("experiences") or []
+        if not isinstance(pexps, list):
+            pexps = []
+        clean_exps = []
+        for e in pexps:
+            if not isinstance(e, dict):
+                continue
+            clean_exps.append({
+                "job_title": e.get("job_title") or e.get("title") or "",
+                "company": e.get("company") or e.get("employer") or "",
+                "location": e.get("location") or "",
+                "start_date": e.get("start_date") or e.get("start") or "",
+                "end_date": e.get("end_date") or e.get("end") or "",
+                "description": e.get("description") or "",
+            })
+
+        # education
+        pedu = parsed.get("education") or []
+        if not isinstance(pedu, list):
+            pedu = []
+
+        return {
+            "full_name": (parsed.get("full_name") or parsed.get("name") or full_name_ss or "").strip(),
+            "current_title": (parsed.get("title") or parsed.get("professional_title") or title_ss or "").strip(),
+            "location": (parsed.get("location") or location_ss or "").strip(),
+            "skills": pskills,
+            "experiences": clean_exps,
+            "education": pedu,
+        }
+
+    # ---- fallback: use form ----
+    return {
+        "full_name": full_name_ss,
+        "current_title": title_ss,
+        "location": location_ss,
+        "skills": skills_from_form,
+        "experiences": [exp.dict() for exp in experiences_from_form],
+        "education": education_from_form,
+    }
+
 # -------------------------
 # Resend helper (kept local)
 # -------------------------
@@ -4053,14 +4119,14 @@ if ai_cover_letter_clicked:
 
     with st.spinner("Generating cover letter..."):
         try:
-            cover_input = {
-                "full_name": full_name_ss,
-                "current_title": title_ss,
-                "skills": skills,
-                "experiences": [exp.dict() for exp in experiences],
-                "education": st.session_state.get("education_items", []),
-                "location": location_ss,
-            }
+            cover_input = build_cover_input_from_cv_or_form(
+                full_name_ss=full_name_ss,
+                title_ss=title_ss,
+                location_ss=location_ss,
+                skills_from_form=skills,
+                experiences_from_form=experiences,
+                education_from_form=st.session_state.get("education_items", []),
+            )
 
             jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description (AI input)")
             job_summary = st.session_state.get("job_summary_ai", "") or ""
