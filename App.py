@@ -2252,7 +2252,6 @@ if fill_clicked:
     st.rerun()
 
 
-section_personal_details()
 # -------------------------
 # 1. Personal details
 # -------------------------
@@ -2331,7 +2330,7 @@ if btn_summary:
             st.error(f"AI error (summary improvement): {e}")
             st.stop()
 
-skills = section_skills()
+
 # -------------------------
 # 2. Skills (bullet points only)
 # -------------------------
@@ -2579,7 +2578,7 @@ if run_now and role_to_improve is not None:
 
 st.session_state.pop("_just_autofilled_from_cv", None)
 
-education_items, references = section_education_and_references()
+
 # -------------------------
 # 4. Education (multiple entries)
 # -------------------------
@@ -2652,12 +2651,6 @@ references = st.text_area(
 )
 
 
-section_target_job_and_outputs(
-    skills=skills,
-    experiences=experiences,
-    education_items=education_items,
-    references=references,
-)
 # -------------------------
 # 5. Target Job (optional, for AI) — workspace safe:
 # - DO NOT auto-pop outputs when JD changes
