@@ -604,8 +604,10 @@ def reset_outputs_only() -> None:
         "selected_template",
     ]
 
+    snap = snapshot_protected_state("reset_outputs_only")
     for k in keys_to_clear:
         safe_pop_state(k) if "safe_pop_state" in globals() else st.session_state.pop(k, None)
+    restore_protected_state(snap)
 
 
 def clear_ai_upload_state_only() -> None:
@@ -613,6 +615,8 @@ def clear_ai_upload_state_only() -> None:
     Clears only upload/parse transient flags and any derived outputs.
     DOES NOT call reset_outputs_only() (prevents recursion).
     """
+    snap = snapshot_protected_state("clear_ai_upload_state_only")
+
     keys_to_clear = [
         # upload/parse internal flags (NOT user fields)
         "_cv_parsed",
@@ -638,6 +642,8 @@ def clear_ai_upload_state_only() -> None:
         "selected_template",
     ]:
         safe_pop_state(k) if "safe_pop_state" in globals() else st.session_state.pop(k, None)
+
+    restore_protected_state(snap)
 
 # ============================================================
 # POLICIES (MODAL ONLY — NO PAGE ROUTING)
@@ -702,10 +708,16 @@ def render_policy_modal(scope: str) -> None:
         else:
             st.info("Policy content not found in this deployment.")
 
-        if st.button("Close", key=f"{scope}_policy_close"):
-            close_policy(scope)
-
-    _dlg()
+        # Back/Close controls (no forced rerun)
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button("← Back", key=f"{scope}_policy_back"):
+                close_policy(scope)
+                st.stop()
+        with b2:
+            if st.button("Close", key=f"{scope}_policy_close"):
+                close_policy(scope)
+                st.stop()
 
 # ============================================================
 # CV FILE READER (ONE COPY ONLY)
@@ -2109,7 +2121,7 @@ st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
 
 if btn_summary:
-    snapshot_protected_state("before_ai_summary")  # ✅ ADD
+    snap = snapshot_protected_state("before_ai_summary")
 
     if not gate_premium("improve your professional summary"):
         st.stop()
@@ -2151,6 +2163,7 @@ if btn_summary:
             improved = enforce_word_limit(improved, MAX_PANEL_WORDS, label="Professional summary")
 
             stage_value("cv_summary", improved)
+            restore_protected_state(snap)
 
             st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
             increment_usage(email_for_usage, "summary_uses")
@@ -2159,6 +2172,7 @@ if btn_summary:
             st.rerun()
 
         except Exception as e:
+            restore_protected_state(snap)
             st.error(f"AI error (summary improvement): {e}")
             st.stop()
 
@@ -2216,7 +2230,7 @@ skills_text = st.text_area(
 btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
 
 if btn_skills:
-    snapshot_protected_state("before_ai_skills")  # ✅ ADD
+    snap = snapshot_protected_state("before_ai_skills")
 
     if not gate_premium("improve your skills"):
         st.stop()
@@ -2247,6 +2261,7 @@ if btn_skills:
             improved_limited = enforce_word_limit(improved_bullets, MAX_DOC_WORDS, label="Skills (AI)")
 
             stage_value("skills_text", improved_limited)
+            restore_protected_state(snap)
 
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
             increment_usage(email_for_usage, "bullets_uses")
@@ -2255,6 +2270,7 @@ if btn_skills:
             st.rerun()
 
         except Exception as e:
+            restore_protected_state(snap)
             st.error(f"AI error (skills improvement): {e}")
 
 
@@ -2393,6 +2409,8 @@ if run_now and role_to_improve is not None:
             improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label=f"Role {i+1} description")
 
             stage_value(desc_key, improved_limited)
+            if snap:
+                restore_protected_state(snap)
 
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
             increment_usage(email_for_usage, "bullets_uses")
@@ -2676,7 +2694,7 @@ with col_jd2:
 # AI job-description summary
 # -------------------------
 if job_summary_clicked:
-    snapshot_protected_state("before_ai_job_summary")  # ✅ SNAPSHOT
+    snap = snapshot_protected_state("before_ai_job_summary")
 
     if not gate_premium("generate a job summary"):
         st.stop()
@@ -2705,8 +2723,8 @@ if job_summary_clicked:
             jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description")
             job_summary_text = generate_job_summary(jd_limited)
 
-            # keep output in session
-            st.session_state["job_summary_ai"] = job_summary_text
+            stage_value("job_summary_ai", job_summary_text)
+            restore_protected_state(snap)
             st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
 
             if email_for_usage:
@@ -2716,11 +2734,13 @@ if job_summary_clicked:
             st.rerun()
 
         except Exception as e:
+            restore_protected_state(snap)
             st.error(f"AI error (job summary): {e}")
             st.stop()
 
 
 # Display job summary
+apply_staged_value("job_summary_ai")
 job_summary_text = st.session_state.get("job_summary_ai", "")
 if job_summary_text:
     st.markdown("**AI job summary for this role (read-only):**")
@@ -2731,7 +2751,7 @@ if job_summary_text:
 # AI cover letter generation
 # -------------------------
 if ai_cover_letter_clicked:
-    snapshot_protected_state("before_ai_cover_letter")  # ✅ SNAPSHOT
+    snap = snapshot_protected_state("before_ai_cover_letter")
 
     if not gate_premium("generate a cover letter"):
         st.stop()
@@ -2773,8 +2793,9 @@ if ai_cover_letter_clicked:
             cleaned = clean_cover_letter_body(cover_text)
             final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-            st.session_state["cover_letter"] = final_letter
-            st.session_state["cover_letter_box"] = final_letter
+            stage_value("cover_letter", final_letter)
+            stage_value("cover_letter_box", final_letter)
+            restore_protected_state(snap)
 
             st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
             if email_for_usage:
@@ -2784,6 +2805,7 @@ if ai_cover_letter_clicked:
             st.rerun()
 
         except Exception as e:
+            restore_protected_state(snap)
             st.error(f"AI error (cover letter): {e}")
             st.stop()
 
@@ -2791,6 +2813,8 @@ if ai_cover_letter_clicked:
 # -------------------------
 # Cover letter editor + downloads
 # -------------------------
+apply_staged_value("cover_letter")
+apply_staged_value("cover_letter_box")
 st.session_state.setdefault("cover_letter", "")
 
 if st.session_state.get("cover_letter"):
@@ -3081,3 +3105,4 @@ with fc3:
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         open_policy("footer", "terms")
+
