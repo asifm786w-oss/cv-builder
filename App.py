@@ -113,6 +113,67 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+import hashlib
+import json
+import streamlit as st
+
+# -------------------------
+# WIDGET STATE TRIPWIRE
+# -------------------------
+STATE_TRIPWIRE = True  # set False to disable
+
+def _tw_fingerprint(v) -> str:
+    try:
+        if isinstance(v, (bytes, bytearray)):
+            return f"b:{len(v)}:{hashlib.sha256(v).hexdigest()[:10]}"
+        if isinstance(v, str):
+            return f"s:{len(v)}:{hashlib.sha256(v.encode('utf-8','ignore')).hexdigest()[:10]}"
+        if v is None:
+            return "None"
+        dumped = json.dumps(v, default=str, sort_keys=True)
+        return f"j:{len(dumped)}:{hashlib.sha256(dumped.encode('utf-8','ignore')).hexdigest()[:10]}"
+    except Exception:
+        return f"u:{type(v).__name__}"
+
+def tripwire_capture_widgets(tag: str = "run_start") -> None:
+    if not STATE_TRIPWIRE:
+        return
+    snap = {}
+    for k, v in st.session_state.items():
+        if isinstance(k, str) and is_widget_key(k):
+            snap[k] = _tw_fingerprint(v)
+    st.session_state["_tw_prev_widgets"] = snap
+    st.session_state["_tw_prev_tag"] = tag
+
+def tripwire_check_widgets(tag: str = "run_end") -> None:
+    if not STATE_TRIPWIRE:
+        return
+
+    prev = st.session_state.get("_tw_prev_widgets") or {}
+    curr = {}
+    for k, v in st.session_state.items():
+        if isinstance(k, str) and is_widget_key(k):
+            curr[k] = _tw_fingerprint(v)
+
+    removed = sorted([k for k in prev.keys() if k not in curr])
+    changed_to_none = sorted([k for k in curr.keys() if curr[k] == "None" and prev.get(k) != "None"])
+
+    # Only scream when a real wipe occurs
+    if removed or changed_to_none:
+        with st.expander("🚨 State wipe detected (widget keys)", expanded=True):
+            st.error("One or more widget keys disappeared or became None during the last interaction.")
+            st.caption(f"From: {st.session_state.get('_tw_prev_tag')} → To: {tag}")
+            if removed:
+                st.write("Removed widget keys:", removed[:120])
+            if changed_to_none:
+                st.write("Widget keys changed to None:", changed_to_none[:120])
+
+            st.info(
+                "This proves a state wipe is happening (clear/pop/overwrite). "
+                "Next step is to search for session_state.clear(), pop() loops, or reset functions."
+            )
+
 # ============================================================
 # CONSTANTS (ONE PLACE ONLY)
 # ============================================================
@@ -1694,7 +1755,7 @@ def is_valid_email(email: str) -> bool:
 st.session_state.setdefault("auth_modal_open", False)
 st.session_state.setdefault("auth_modal_tab", "Sign in")
 st.session_state.setdefault("auth_modal_epoch", 0)
-
+tripwire_capture_widgets("run_start")
 def _is_logged_in_user(u) -> bool:
     return bool(u and isinstance(u, dict) and u.get("email"))
 
@@ -3514,3 +3575,6 @@ with fc3:
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         open_policy("footer", "terms")
+
+
+tripwire_check_widgets("run_end")
