@@ -1938,8 +1938,11 @@ if show_policy_page():
 FORM_KEYS_TO_PRESERVE = [
     # Section 1
     "full_name", "title", "email", "phone", "location", "summary",
-
-    # CV upload / parsing (IMPORTANT: do NOT include widget keys like "cv_uploader")
+    
+	# CV personal details (these are the ones your UI is using)
+    "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
+    
+	# CV upload / parsing (IMPORTANT: do NOT include widget keys like "cv_uploader")
     "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
     "_last_cv_fingerprint", "cv_upload_bytes", "cv_upload_name",
 
@@ -1991,7 +1994,9 @@ def restore_form_state():
             continue
         st.session_state[k] = v
 
-
+if st.session_state.get("_just_returned_from_policy"):
+    restore_form_state()
+    st.session_state["_just_returned_from_policy"] = False
 
 
 # =========================
