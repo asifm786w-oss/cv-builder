@@ -232,6 +232,12 @@ SYSTEM_PREFIXES = (
     "_cooldown_",
     "__pending__",   # staged values
 )
+import uuid
+
+if "_SESSION_UUID" not in st.session_state:
+    st.session_state["_SESSION_UUID"] = str(uuid.uuid4())
+
+st.sidebar.caption(f"Session: {st.session_state['_SESSION_UUID']}")
 
 def is_widget_key(k: str) -> bool:
     if k in WIDGET_EXACT_KEYS:
