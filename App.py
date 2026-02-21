@@ -3452,9 +3452,6 @@ if generate_clicked:
 # MAIN CV BUILDER FLOW (CALLERS ONLY)
 # =========================
 
-# 1) CV upload + AI autofill
-section_cv_upload()
-
 # 2) Personal details (+ improve summary)
 section_personal_details()
 
