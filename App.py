@@ -2444,7 +2444,7 @@ for ln in raw.splitlines():
 _seen = set()
 skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
-experiences = section_experience()
+
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
