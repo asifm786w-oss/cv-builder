@@ -238,14 +238,21 @@ def is_widget_key(k: str) -> bool:
     return any(k.startswith(p) for p in WIDGET_PREFIXES)
 
 def is_protected_key(k: str) -> bool:
-    # Never allow widget state to be cleared
     if is_widget_key(k):
         return True
-
-    if k in PROTECTED_EXACT_KEYS:
-        return True
-
-    return any(k.startswith(p) for p in SYSTEM_PREFIXES)
+    return k.startswith((
+        "cv_",
+        "skills_",
+        "job_title_",
+        "company_",
+        "description_",
+        "degree_",
+        "institution_",
+        "edu_",
+        "references",
+        "template_label",
+        "job_description",
+    ))
 
 def snapshot_protected_state(label=None):
     snap = {}
@@ -263,9 +270,16 @@ def snapshot_protected_state(label=None):
 def restore_protected_state(snap: dict) -> None:
     if not isinstance(snap, dict):
         return
+
     for k, v in snap.items():
+        # ❗ DO NOT touch widget keys
         if is_widget_key(k):
             continue
+
+        # ❗ DO NOT overwrite existing state (critical)
+        if k in st.session_state:
+            continue
+
         st.session_state[k] = v
 
 def _safe_set(k, v):
