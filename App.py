@@ -179,6 +179,10 @@ DEFAULT_SESSION_KEYS = {
 
     # job search cache
     "adzuna_results": [],
+
+    # CV upload cache (stable across reruns)
+    "cv_upload_bytes": None,
+    "cv_upload_name": None,
 }
 
 for k, v in DEFAULT_SESSION_KEYS.items():
@@ -206,6 +210,9 @@ PROTECTED_EXACT_KEYS = {
 
     # structure
     "num_experiences", "parsed_num_experiences", "num_education", "education_items",
+
+    # cached upload payload
+    "cv_upload_bytes", "cv_upload_name",
 }
 
 PROTECTED_PREFIXES = (
@@ -697,24 +704,19 @@ def render_policy_modal(scope: str) -> None:
 
         if st.button("Close", key=f"{scope}_policy_close"):
             close_policy(scope)
-            st.rerun()
 
     _dlg()
 
 # ============================================================
 # CV FILE READER (ONE COPY ONLY)
 # ============================================================
-def _read_uploaded_cv_to_text(uploaded_cv) -> str:
-    """Read PDF/DOCX/TXT into text."""
-    if uploaded_cv is None:
-        return ""
-
-    name = (getattr(uploaded_cv, "name", "") or "").lower()
-    ext = os.path.splitext(name)[1]
-
-    data: bytes = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
+def _read_uploaded_cv_bytes_to_text(name: str, data: bytes) -> str:
+    """Read PDF/DOCX/TXT bytes into text."""
     if not data:
         return ""
+
+    name = (name or "").lower()
+    ext = os.path.splitext(name)[1]
 
     if ext == ".txt":
         try:
@@ -1265,15 +1267,12 @@ def show_consent_gate() -> None:
     with c1:
         if st.button("Cookie Policy", key="gate_open_cookies"):
             open_policy("gate", "cookies")
-            st.rerun()
     with c2:
         if st.button("Privacy Policy", key="gate_open_privacy"):
             open_policy("gate", "privacy")
-            st.rerun()
     with c3:
         if st.button("Terms of Use", key="gate_open_terms"):
             open_policy("gate", "terms")
-            st.rerun()
 
     agree = st.checkbox(
         "I agree to the Cookie Policy, Privacy Policy and Terms of Use",
@@ -1301,6 +1300,7 @@ def show_consent_gate() -> None:
         st.session_state["chk_policy_agree"] = False
         st.rerun()
 
+    render_policy_modal("gate")
     st.info("Please accept to continue using the site.")
     st.stop()
 
@@ -1967,6 +1967,12 @@ uploaded_cv = st.file_uploader(
     key="cv_uploader",
 )
 
+if uploaded_cv is not None:
+    cached_bytes = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
+    if cached_bytes:
+        st.session_state["cv_upload_bytes"] = cached_bytes
+        st.session_state["cv_upload_name"] = getattr(uploaded_cv, "name", "uploaded_cv")
+
 fill_clicked = locked_action_button(
     "Fill the form from this CV (AI)",
     key="btn_fill_from_cv",
@@ -2032,10 +2038,13 @@ def _apply_parsed_fallback(parsed: dict):
 
 
 
-if uploaded_cv is not None and fill_clicked:
-    raw_text = _read_uploaded_cv_to_text(uploaded_cv)
+if fill_clicked:
+    cv_upload_bytes = st.session_state.get("cv_upload_bytes")
+    cv_upload_name = st.session_state.get("cv_upload_name")
+
+    raw_text = _read_uploaded_cv_bytes_to_text(cv_upload_name, cv_upload_bytes)
     if not (raw_text or "").strip():
-        st.warning("No readable text found in that file.")
+        st.warning("Please upload a readable PDF, DOCX, or TXT CV first.")
         st.stop()
 
     cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
@@ -3057,21 +3066,18 @@ st.caption(
 # ==============================================
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 
+render_policy_modal("footer")
+
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
         open_policy("footer", "accessibility")
-        st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
         open_policy("footer", "cookies")
-        st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
         open_policy("footer", "privacy")
-        st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         open_policy("footer", "terms")
-        st.rerun()
-
