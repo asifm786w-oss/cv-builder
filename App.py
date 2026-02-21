@@ -1939,12 +1939,13 @@ FORM_KEYS_TO_PRESERVE = [
     # Section 1
     "full_name", "title", "email", "phone", "location", "summary",
 
-    # CV upload / parsing
+    # CV upload / parsing (IMPORTANT: do NOT include widget keys like "cv_uploader")
     "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
-    "_last_cv_fingerprint", "cv_uploader",
+    "_last_cv_fingerprint", "cv_upload_bytes", "cv_upload_name",
 
     # Education/experience/skills structures you use
-    "skills", "experiences", "education_items", "references",
+    "skills", "experiences", "education_items", "references", "skills_text",
+    "num_experiences", "num_education", "parsed_num_experiences",
 
     # Target job / cover letter
     "job_description", "_last_jd_fp", "job_summary_ai",
@@ -1952,17 +1953,42 @@ FORM_KEYS_TO_PRESERVE = [
 
     # Template
     "template_label",
+
+    # ✅ Consent / policies
+    "accepted_policies", "accepted_policies_at",
+    "chk_policy_agree", "accepted_policies_this_session",
+    "consent_gate_open", "staged_values",
+
+    # ✅ Policy modal state (adjust to match your actual keys)
+    "footer_policy_open", "footer_policy_slug",
+    "policy_open", "policy_slug", "_just_returned_from_policy",
 ]
 
-def snapshot_form_state():
-    st.session_state["_form_snapshot"] = {
-        k: v for k, v in st.session_state.items()
-        if not k.startswith("_")
+def _is_widget_key_like(k: str) -> bool:
+    # Anything that is a widget key or looks like one should not be restored.
+    # Buttons, uploaders, inputs, radios etc.
+    return k.endswith("_btn") or k.endswith("_button") or k.endswith("_uploader") or k in {
+        "sb_logout_btn", "cv_uploader", "auth_btn_login", "auth_btn_register"
     }
+
+def snapshot_form_state():
+    snap = {}
+    for k in FORM_KEYS_TO_PRESERVE:
+        if k in st.session_state:
+            if _is_widget_key_like(k):
+                continue
+            snap[k] = st.session_state[k]
+    st.session_state["_form_snapshot"] = snap
 
 def restore_form_state():
     snap = st.session_state.get("_form_snapshot", {})
+    if not isinstance(snap, dict):
+        return
+
     for k, v in snap.items():
+        # never restore widget keys
+        if _is_widget_key_like(k):
+            continue
         st.session_state[k] = v
 
 
@@ -4437,7 +4463,11 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
+def open_policy(scope: str, slug: str) -> None:
+    snapshot_form_state()
+    st.session_state["_just_returned_from_policy"] = True
 
+    # ... your existing modal-open state set logic ...
 # ==============================================
 # FOOTER POLICY BUTTONS (snapshot before navigate)
 # ============================================================
