@@ -470,6 +470,15 @@ def cv_sync_widget_to_draft(k: str):
     if wk in st.session_state:
         cv_set(k, st.session_state.get(wk))
 
+def cv_widget_key(k: str) -> str:
+    return f"w_{k}"  # widget keys never equal stored keys
+
+def cv_sync_draft_to_widget(k: str):
+    wk = cv_widget_key(k)
+    if wk not in st.session_state:
+        st.session_state[wk] = cv_get(k, "")
+
+
 def _apply_parsed_fallback(parsed: dict) -> None:
     """
     Fallback mapping if _apply_parsed_cv_to_session isn't available.
