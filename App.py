@@ -385,6 +385,56 @@ def safe_set_if_missing(key: str, value, *, strip: bool = True):
         if value is not None:
             st.session_state[key] = value
 
+def _apply_parsed_fallback(parsed: dict) -> None:
+    """
+    Fallback mapping if _apply_parsed_cv_to_session isn't available.
+    Only sets missing fields (never overwrites user edits).
+    """
+    if not isinstance(parsed, dict):
+        return
+
+    # --- skills ---
+    skills = parsed.get("skills")
+    if isinstance(skills, list):
+        joined = "\n".join(f"• {str(s).strip()}" for s in skills if str(s).strip())
+        if joined.strip():
+            safe_set_if_missing("skills_text", joined)
+    elif isinstance(skills, str) and skills.strip():
+        safe_set_if_missing("skills_text", skills.strip())
+
+    # --- experiences ---
+    exps = parsed.get("experiences") or parsed.get("experience") or []
+    if isinstance(exps, list) and exps:
+        n = max(1, min(5, len(exps)))
+        st.session_state["parsed_num_experiences"] = n
+        safe_set_if_missing("num_experiences", n)
+
+        for i in range(n):
+            e = exps[i] or {}
+            safe_set_if_missing(f"job_title_{i}", e.get("job_title") or e.get("title") or "")
+            safe_set_if_missing(f"company_{i}", e.get("company") or e.get("employer") or "")
+            safe_set_if_missing(f"exp_location_{i}", e.get("location") or "")
+            safe_set_if_missing(f"start_date_{i}", e.get("start_date") or e.get("start") or "")
+            safe_set_if_missing(f"end_date_{i}", e.get("end_date") or e.get("end") or "")
+            desc = e.get("description") or ""
+            if isinstance(desc, list):
+                desc = "\n".join([str(x).strip() for x in desc if str(x).strip()])
+            safe_set_if_missing(f"description_{i}", desc or "")
+
+    # --- education ---
+    edu = parsed.get("education") or parsed.get("educations") or []
+    if isinstance(edu, list) and edu:
+        n = max(1, min(5, len(edu)))
+        safe_set_if_missing("num_education", n)
+
+        for i in range(n):
+            r = edu[i] or {}
+            safe_set_if_missing(f"degree_{i}", r.get("degree") or r.get("qualification") or "")
+            safe_set_if_missing(f"institution_{i}", r.get("institution") or r.get("school") or "")
+            safe_set_if_missing(f"edu_location_{i}", r.get("location") or r.get("city") or "")
+            safe_set_if_missing(f"edu_start_{i}", r.get("start_date") or r.get("start") or "")
+            safe_set_if_missing(f"edu_end_{i}", r.get("end_date") or r.get("end") or "")
+
 # ---------- Word limit helper (you call this in multiple places) ----------
 def enforce_word_limit(text: str, max_words: int, label: str = "") -> str:
     words = (text or "").split()
