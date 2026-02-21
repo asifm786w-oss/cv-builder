@@ -214,6 +214,10 @@ PROTECTED_EXACT_KEYS = {
     # cached upload payload
     "cv_upload_bytes", "cv_upload_name",
 }
+# Keys that belong to Streamlit widgets and must never be programmatically restored
+NON_RESTORABLE_KEYS = {
+    "cv_uploader",   # file_uploader widget key
+}
 
 PROTECTED_PREFIXES = (
     # personal
@@ -233,30 +237,26 @@ def is_protected_key(k: str) -> bool:
 
 # ---------- Snapshot / restore (extra safety; useful around clears) ----------
 def snapshot_protected_state(label=None):
-    """
-    Snapshot protected session state so AI actions / reruns
-    never wipe user input.
-    Label is optional (for debugging/logging only).
-    """
     snap = {}
-
     for k, v in st.session_state.items():
+        if k in NON_RESTORABLE_KEYS:
+            continue
         if k in PROTECTED_EXACT_KEYS or any(k.startswith(p) for p in PROTECTED_PREFIXES):
             snap[k] = v
 
-    # keep a copy in session too (optional, for debug)
-	
     st.session_state["_protected_snapshot"] = snap
     if label:
         st.session_state["_protected_snapshot_label"] = label
-
     return snap
 
 def restore_protected_state(snap: dict) -> None:
     if not isinstance(snap, dict):
         return
     for k, v in snap.items():
-        st.session_state[k] = v
+        if k in NON_RESTORABLE_KEYS:
+            continue
+        st.session_state[k] = v	
+	
 
 def _safe_set(k, v):
     if v is None:
