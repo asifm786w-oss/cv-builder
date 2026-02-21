@@ -114,66 +114,6 @@ st.markdown(
 )
 
 
-import hashlib
-import json
-import streamlit as st
-
-# -------------------------
-# WIDGET STATE TRIPWIRE
-# -------------------------
-STATE_TRIPWIRE = True  # set False to disable
-
-def _tw_fingerprint(v) -> str:
-    try:
-        if isinstance(v, (bytes, bytearray)):
-            return f"b:{len(v)}:{hashlib.sha256(v).hexdigest()[:10]}"
-        if isinstance(v, str):
-            return f"s:{len(v)}:{hashlib.sha256(v.encode('utf-8','ignore')).hexdigest()[:10]}"
-        if v is None:
-            return "None"
-        dumped = json.dumps(v, default=str, sort_keys=True)
-        return f"j:{len(dumped)}:{hashlib.sha256(dumped.encode('utf-8','ignore')).hexdigest()[:10]}"
-    except Exception:
-        return f"u:{type(v).__name__}"
-
-def tripwire_capture_widgets(tag: str = "run_start") -> None:
-    if not STATE_TRIPWIRE:
-        return
-    snap = {}
-    for k, v in st.session_state.items():
-        if isinstance(k, str) and is_widget_key(k):
-            snap[k] = _tw_fingerprint(v)
-    st.session_state["_tw_prev_widgets"] = snap
-    st.session_state["_tw_prev_tag"] = tag
-
-def tripwire_check_widgets(tag: str = "run_end") -> None:
-    if not STATE_TRIPWIRE:
-        return
-
-    prev = st.session_state.get("_tw_prev_widgets") or {}
-    curr = {}
-    for k, v in st.session_state.items():
-        if isinstance(k, str) and is_widget_key(k):
-            curr[k] = _tw_fingerprint(v)
-
-    removed = sorted([k for k in prev.keys() if k not in curr])
-    changed_to_none = sorted([k for k in curr.keys() if curr[k] == "None" and prev.get(k) != "None"])
-
-    # Only scream when a real wipe occurs
-    if removed or changed_to_none:
-        with st.expander("🚨 State wipe detected (widget keys)", expanded=True):
-            st.error("One or more widget keys disappeared or became None during the last interaction.")
-            st.caption(f"From: {st.session_state.get('_tw_prev_tag')} → To: {tag}")
-            if removed:
-                st.write("Removed widget keys:", removed[:120])
-            if changed_to_none:
-                st.write("Widget keys changed to None:", changed_to_none[:120])
-
-            st.info(
-                "This proves a state wipe is happening (clear/pop/overwrite). "
-                "Next step is to search for session_state.clear(), pop() loops, or reset functions."
-            )
-
 # ============================================================
 # CONSTANTS (ONE PLACE ONLY)
 # ============================================================
@@ -331,16 +271,9 @@ def snapshot_protected_state(label=None):
 def restore_protected_state(snap: dict) -> None:
     if not isinstance(snap, dict):
         return
-
     for k, v in snap.items():
-        # ❗ DO NOT touch widget keys
         if is_widget_key(k):
             continue
-
-        # ❗ DO NOT overwrite existing state (critical)
-        if k in st.session_state:
-            continue
-
         st.session_state[k] = v
 
 def _safe_set(k, v):
@@ -1326,7 +1259,7 @@ def is_valid_email(email: str) -> bool:
 st.session_state.setdefault("auth_modal_open", False)
 st.session_state.setdefault("auth_modal_tab", "Sign in")
 st.session_state.setdefault("auth_modal_epoch", 0)
-tripwire_capture_widgets("run_start")
+
 def _is_logged_in_user(u) -> bool:
     return bool(u and isinstance(u, dict) and u.get("email"))
 
@@ -2196,84 +2129,10 @@ def section_cv_upload():
         st.success("CV parsed. Applying to the form...")
         st.rerun()
 		
-# =========================
-# CV Upload + AI Autofill (ONE BLOCK ONLY)
-# =========================
-st.subheader("Upload an existing CV (optional)")
-st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
-
-uploaded_cv = st.file_uploader(
-    "Upload your current CV (PDF, DOCX or TXT)",
-    type=["pdf", "docx", "txt"],
-    key="cv_uploader",
-)
-
-# Persist bytes+name across reruns
-if uploaded_cv is not None:
-    data = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
-    if data:
-        st.session_state["cv_upload_bytes"] = data
-        st.session_state["cv_upload_name"] = getattr(uploaded_cv, "name", "uploaded_cv")
-
-fill_clicked = locked_action_button(
-    "Fill the form from this CV (AI)",
-    key="btn_fill_from_cv",
-    feature_label="CV upload & parsing",
-    counter_key="upload_parses",
-    require_login=True,
-    default_tab="Sign in",
-    cooldown_name="upload_parse",
-    cooldown_seconds=5,
-)
-
-if fill_clicked:
-    cv_upload_bytes = st.session_state.get("cv_upload_bytes")
-    cv_upload_name = st.session_state.get("cv_upload_name")
-
-    if not cv_upload_bytes:
-        st.warning("Upload a CV first.")
-        st.stop()
-
-    raw_text = _read_uploaded_cv_bytes_to_text(cv_upload_name, cv_upload_bytes)
-    if not (raw_text or "").strip():
-        st.warning("Please upload a readable PDF, DOCX, or TXT CV first.")
-        st.stop()
-
-    with st.spinner("Reading and analysing your CV..."):
-        parsed = extract_cv_data(raw_text)
-
-    if not isinstance(parsed, dict):
-        st.error("AI parser returned an unexpected format.")
-        st.stop()
-
-    # Apply parsed -> prefer your canonical apply function if it exists
-    if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
-        globals()["_apply_parsed_cv_to_session"](parsed)
-    else:
-        _apply_parsed_fallback(parsed)
-
-    # ✅ Fill Section 1 keys (only if missing; never overwrite user edits)
-    safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
-    safe_set_if_missing("cv_email", parsed.get("email") or "")
-    safe_set_if_missing("cv_phone", parsed.get("phone") or "")
-    safe_set_if_missing("cv_location", parsed.get("location") or "")
-    safe_set_if_missing(
-        "cv_title",
-        parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or ""
-    )
-    safe_set_if_missing(
-        "cv_summary",
-        parsed.get("summary") or parsed.get("professional_summary") or ""
-    )
-
-    # Let experience section optionally set counts once
-    st.session_state["_just_autofilled_from_cv"] = True
-
-    st.success("Form fields updated from your CV. Scroll down to review and edit.")
-    st.rerun()
 
 apply_pending_autofill_if_any()
 
+section_cv_upload()   # ✅ THIS LINE IS MISSING IN YOUR CODE
 # -------------------------
 # 1. Personal details
 # -------------------------
@@ -2297,8 +2156,6 @@ st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
 
 if btn_summary:
-    snap = snapshot_protected_state("before_ai_summary")
-
     if not gate_premium("improve your professional summary"):
         st.stop()
 
@@ -2339,13 +2196,16 @@ if btn_summary:
             improved = enforce_word_limit(improved, MAX_PANEL_WORDS, label="Professional summary")
 
             stage_value("cv_summary", improved)
-            restore_protected_state(snap)
 
             st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
             increment_usage(email_for_usage, "summary_uses")
 
             st.success("AI summary applied.")
             st.rerun()
+
+        except Exception as e:
+            st.error(f"AI error (summary improvement): {e}")
+            st.stop()
 
         except Exception as e:
             restore_protected_state(snap)
@@ -2473,6 +2333,7 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 if st.session_state.get("_just_autofilled_from_cv", False):
     parsed_n = int(st.session_state.get("parsed_num_experiences", 1) or 1)
     st.session_state["num_experiences"] = max(1, min(5, parsed_n))
+    st.session_state["_just_autofilled_from_cv"] = False  # ✅ consume it once
 
 if "num_experiences" not in st.session_state or st.session_state["num_experiences"] is None:
     st.session_state["num_experiences"] = st.session_state.get("parsed_num_experiences", 1)
@@ -3428,5 +3289,3 @@ with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         open_policy("footer", "terms")
 
-
-tripwire_check_widgets("run_end")
