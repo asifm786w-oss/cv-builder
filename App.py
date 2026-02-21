@@ -39,7 +39,7 @@ from ai_v2 import (
     generate_job_summary,
 )
 
-)
+
 from auth import (
     init_db,
     create_user,
