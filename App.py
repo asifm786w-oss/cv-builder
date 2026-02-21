@@ -430,7 +430,45 @@ def state_debug_report(tag: str = "run") -> None:
             )
             st.stop()
 
+def cv_draft() -> dict:
+    st.session_state.setdefault("_cv_draft", {})
+    return st.session_state["_cv_draft"]
 
+def cv_wkey(k: str) -> str:
+    # widget key (safe from pruning because we can rehydrate)
+    return f"w_{k}"
+
+def cv_get(k: str, default=""):
+    return cv_draft().get(k, default)
+
+def cv_set(k: str, v):
+    if v is None:
+        return
+    if isinstance(v, str):
+        v = v.strip()
+    cv_draft()[k] = v
+
+def cv_set_if_missing(k: str, v):
+    cur = cv_get(k, "")
+    if isinstance(cur, str) and cur.strip():
+        return
+    if cur not in (None, "", [], {}):
+        return
+    if v is None:
+        return
+    if isinstance(v, str) and not v.strip():
+        return
+    cv_set(k, v)
+
+def cv_rehydrate_widget(k: str):
+    wk = cv_wkey(k)
+    if wk not in st.session_state:
+        st.session_state[wk] = cv_get(k, "")
+
+def cv_sync_widget_to_draft(k: str):
+    wk = cv_wkey(k)
+    if wk in st.session_state:
+        cv_set(k, st.session_state.get(wk))
 
 def _apply_parsed_fallback(parsed: dict) -> None:
     """
@@ -2173,17 +2211,23 @@ def apply_pending_autofill_if_any():
     if not isinstance(parsed, dict):
         return
 
+    # Let your existing mapper run if it exists (but it might still write cv_* keys)
     if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
         globals()["_apply_parsed_cv_to_session"](parsed)
     else:
         _apply_parsed_fallback(parsed)
 
-    safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
-    safe_set_if_missing("cv_email", parsed.get("email") or "")
-    safe_set_if_missing("cv_phone", parsed.get("phone") or "")
-    safe_set_if_missing("cv_location", parsed.get("location") or "")
-    safe_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
-    safe_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
+    # ✅ Persist into draft (wipe-proof)
+    cv_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
+    cv_set_if_missing("cv_email", parsed.get("email") or "")
+    cv_set_if_missing("cv_phone", parsed.get("phone") or "")
+    cv_set_if_missing("cv_location", parsed.get("location") or "")
+    cv_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
+    cv_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
+
+    # Force widget rehydrate next render
+    for k in ["cv_full_name","cv_email","cv_phone","cv_location","cv_title","cv_summary"]:
+        st.session_state.pop(cv_wkey(k), None)
 
     st.session_state["_just_autofilled_from_cv"] = True
 
@@ -2236,15 +2280,17 @@ def section_cv_upload():
             st.error("AI parser returned an unexpected format.")
             st.stop()
 
-        # IMPORTANT: stage parsed for NEXT run (don’t write to widgets in same run)
+        # ✅ stage parsed for next run
         st.session_state["_pending_cv_parsed"] = parsed
 
-        st.success("CV parsed. Applying to the form...")
+        st.success("CV parsed. Applying to the form…")
         st.rerun()
 		
 
 apply_pending_autofill_if_any()
 section_cv_upload()   # ✅ THIS LINE IS MISSING IN YOUR CODE
+for k in ["cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"]:
+    cv_sync_draft_to_widget(k)
 
 # -------------------------
 # 1. Personal details
@@ -2252,16 +2298,16 @@ section_cv_upload()   # ✅ THIS LINE IS MISSING IN YOUR CODE
 st.header("1. Personal details")
 
 for k in ["cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"]:
-    safe_init_key(k, "")
-    apply_staged_value(k)
+    cv_rehydrate_widget(k)
 
-cv_full_name = st.text_input("Full name *", key="cv_full_name")
-cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key="cv_title")
-cv_email     = st.text_input("Email *", key="cv_email")
-cv_phone     = st.text_input("Phone", key="cv_phone")
-cv_location  = st.text_input("Location (City, Country)", key="cv_location")
+cv_full_name = st.text_input("Full name *", key=cv_wkey("cv_full_name")); cv_sync_widget_to_draft("cv_full_name")
+cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key=cv_wkey("cv_title")); cv_sync_widget_to_draft("cv_title")
+cv_email     = st.text_input("Email *", key=cv_wkey("cv_email")); cv_sync_widget_to_draft("cv_email")
+cv_phone     = st.text_input("Phone", key=cv_wkey("cv_phone")); cv_sync_widget_to_draft("cv_phone")
+cv_location  = st.text_input("Location (City, Country)", key=cv_wkey("cv_location")); cv_sync_widget_to_draft("cv_location")
 
-cv_summary_text = st.text_area("Professional summary", height=120, key="cv_summary")
+cv_summary_text = st.text_area("Professional summary", height=120, key=cv_wkey("cv_summary"))
+cv_sync_widget_to_draft("cv_summary")
 
 MAX_PANEL_WORDS = globals().get("MAX_PANEL_WORDS", 100)
 st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
