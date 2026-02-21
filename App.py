@@ -2051,21 +2051,15 @@ Please ensure your details are reviewed before downloading.
     st.markdown("</div>", unsafe_allow_html=True)
 
 def apply_pending_autofill_if_any():
-    """
-    Applies parsed CV data BEFORE widgets render.
-    Never overwrites existing widget values.
-    """
     parsed = st.session_state.pop("_pending_cv_parsed", None)
     if not isinstance(parsed, dict):
         return
 
-    # Prefer your apply function if it exists
     if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
         globals()["_apply_parsed_cv_to_session"](parsed)
     else:
         _apply_parsed_fallback(parsed)
 
-    # Section 1 fields (only if missing)
     safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
     safe_set_if_missing("cv_email", parsed.get("email") or "")
     safe_set_if_missing("cv_phone", parsed.get("phone") or "")
@@ -2086,6 +2080,7 @@ def section_cv_upload():
         key="cv_uploader",
     )
 
+    # Persist bytes+name across reruns
     if uploaded_cv is not None:
         data = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
         if data:
@@ -2123,7 +2118,7 @@ def section_cv_upload():
             st.error("AI parser returned an unexpected format.")
             st.stop()
 
-        # ✅ Store parsed for next run (non-widget)
+        # IMPORTANT: stage parsed for NEXT run (don’t write to widgets in same run)
         st.session_state["_pending_cv_parsed"] = parsed
 
         st.success("CV parsed. Applying to the form...")
@@ -2131,8 +2126,8 @@ def section_cv_upload():
 		
 
 apply_pending_autofill_if_any()
-
 section_cv_upload()   # ✅ THIS LINE IS MISSING IN YOUR CODE
+
 # -------------------------
 # 1. Personal details
 # -------------------------

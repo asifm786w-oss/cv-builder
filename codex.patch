@@ -1,0 +1,1225 @@
+diff --git a/App.py b/App.py
+index 6cd39e4ac900b86d66a053ac175dbede9ea4dd29..34d1787bbc4736acb63cbc59c23f8188d276553c 100644
+--- a/App.py
++++ b/App.py
+@@ -270,77 +270,189 @@ def snapshot_protected_state(label=None):
+ 
+ def restore_protected_state(snap: dict) -> None:
+     if not isinstance(snap, dict):
+         return
+     for k, v in snap.items():
+         if is_widget_key(k):
+             continue
+         st.session_state[k] = v
+ 
+ def _safe_set(k, v):
+     if v is None:
+         return
+     if isinstance(v, str) and not v.strip():
+         return
+     cur = st.session_state.get(k)
+     if cur is None or (isinstance(cur, str) and not cur.strip()):
+         st.session_state[k] = v.strip() if isinstance(v, str) else v
+ 
+ # ---------- Safe session ops ----------
+ def safe_pop_state(k: str) -> None:
+     if is_protected_key(k):
+         return
+     st.session_state.pop(k, None)
+ 
+ def safe_clear_state(keys: list[str]) -> None:
++    state_debug_capture("safe_clear_state:before")
+     for k in keys:
+         if is_widget_key(k):
+             continue
+         safe_pop_state(k)
++    state_debug_capture("safe_clear_state:after")
+ 
+ def safe_init_key(key: str, default=""):
+     if key not in st.session_state or st.session_state[key] is None:
+         st.session_state[key] = default
+ 
+ def stage_value(key: str, value):
+     st.session_state[f"__pending__{key}"] = value
+ 
+ def apply_staged_value(key: str):
+     pk = f"__pending__{key}"
+     if pk in st.session_state:
+         st.session_state[key] = st.session_state.pop(pk)
+ 
+ def safe_set_if_missing(key: str, value, *, strip: bool = True):
+     cur = st.session_state.get(key)
+     cur_s = (cur or "").strip() if isinstance(cur, str) else cur
+     if cur is None or cur_s == "":
+         if isinstance(value, str) and strip:
+             value = value.strip()
+         if value is not None:
+             st.session_state[key] = value
+ 
+ 
++# ---------- State forensic debugger ----------
++STATE_DEBUG_STATIC_KEYS = {
++    "cv_full_name", "cv_email", "cv_phone", "cv_location", "cv_title", "cv_summary",
++    "skills_text", "references", "job_description", "template_label",
++    "num_experiences", "num_education",
++    "_just_autofilled_from_cv", "_last_cv_fingerprint", "_pending_cv_parsed",
++}
++STATE_DEBUG_PREFIXES = (
++    "job_title_", "company_", "description_", "start_date_", "end_date_",
++    "degree_", "institution_", "edu_start_", "edu_end_", "cv_",
++)
++
++
++def _state_debug_should_track(key: str) -> bool:
++    return key in STATE_DEBUG_STATIC_KEYS or key.startswith(STATE_DEBUG_PREFIXES)
++
++
++def _state_debug_is_empty(value) -> bool:
++    if value is None:
++        return True
++    if isinstance(value, str):
++        return value.strip() == ""
++    if isinstance(value, (list, tuple, dict, set)):
++        return len(value) == 0
++    return False
++
++
++def _state_debug_fingerprint(value) -> str:
++    kind = type(value).__name__
++    if isinstance(value, str):
++        txt = value.strip()
++        if not txt:
++            return "str:<empty>"
++        head = txt.replace("\n", " ")[:60]
++        h = hashlib.sha1(txt.encode("utf-8", errors="ignore")).hexdigest()[:8]
++        return f"str:len={len(txt)} hash={h} '{head}'"
++    if isinstance(value, (list, tuple, set)):
++        return f"{kind}:len={len(value)}"
++    if isinstance(value, dict):
++        return f"dict:keys={len(value)}"
++    return f"{kind}:{repr(value)[:80]}"
++
++
++def _state_debug_snapshot() -> dict:
++    snap = {}
++    for k, v in st.session_state.items():
++        if _state_debug_should_track(k):
++            snap[k] = {
++                "empty": _state_debug_is_empty(v),
++                "fp": _state_debug_fingerprint(v),
++            }
++    return snap
++
++
++def state_debug_capture(tag: str) -> None:
++    current = _state_debug_snapshot()
++    prev = st.session_state.get("_state_debug_prev_snapshot") or {}
++
++    removed = sorted([k for k in prev.keys() if k not in current])
++    emptied = sorted([
++        k for k in current.keys() & prev.keys()
++        if prev[k].get("empty") is False and current[k].get("empty") is True
++    ])
++    overwritten = sorted([
++        k for k in current.keys() & prev.keys()
++        if prev[k].get("fp") != current[k].get("fp")
++    ])
++
++    events = st.session_state.get("_state_debug_events", [])
++    events.append({
++        "tag": tag,
++        "removed": removed,
++        "emptied": emptied,
++        "overwritten": overwritten,
++        "ts": datetime.now(timezone.utc).isoformat(),
++    })
++    st.session_state["_state_debug_events"] = events[-30:]
++    st.session_state["_state_debug_prev_snapshot"] = current
++    st.session_state["_state_debug_last_tag"] = tag
++
++
++def state_debug_report(tag: str = "run") -> None:
++    st.session_state["_state_debug_report_tag"] = tag
++    with st.expander("State Debug", expanded=False):
++        st.caption(f"Last capture tag: {st.session_state.get('_state_debug_last_tag', 'n/a')}")
++        events = st.session_state.get("_state_debug_events", [])
++        if not events:
++            st.write("No state debug events yet.")
++        else:
++            for ev in events[-8:]:
++                st.markdown(f"**{ev.get('ts', '')}** `{ev.get('tag', '')}`")
++                st.write({
++                    "keys_removed": ev.get("removed", []),
++                    "non_empty_to_empty": ev.get("emptied", []),
++                    "keys_overwritten": ev.get("overwritten", []),
++                })
++
++    # Wipe Tripwire: any cv_* key going non-empty -> empty in a single transition
++    events = st.session_state.get("_state_debug_events", [])
++    if events:
++        last = events[-1]
++        cv_emptied = [k for k in last.get("emptied", []) if k.startswith("cv_")]
++        if cv_emptied:
++            st.error(
++                "Wipe Tripwire triggered: cv_* key(s) changed from non-empty to empty in one rerun. "
++                f"Keys: {cv_emptied}. Last tag: {last.get('tag', 'unknown')}"
++            )
++            st.stop()
++
++
+ 
+ def _apply_parsed_fallback(parsed: dict) -> None:
+     """
+     Fallback mapping if _apply_parsed_cv_to_session isn't available.
+     Only sets missing fields (never overwrites user edits).
+     """
+     if not isinstance(parsed, dict):
+         return
+ 
+     # --- skills ---
+     skills = parsed.get("skills")
+     if isinstance(skills, list):
+         joined = "\n".join(
+             f"• {str(s).strip()}" for s in skills if str(s).strip()
+         )
+         if joined.strip():
+             safe_set_if_missing("skills_text", joined)
+     elif isinstance(skills, str) and skills.strip():
+         safe_set_if_missing("skills_text", skills.strip())
+ 
+     # --- experiences ---
+     exps = parsed.get("experiences") or parsed.get("experience") or []
+     if isinstance(exps, list) and exps:
+         n = max(1, min(5, len(exps)))
+         st.session_state["parsed_num_experiences"] = n
+@@ -654,105 +766,109 @@ def locked_action_button(
+     return True
+ 
+ def restore_protected_state_if_needed():
+     """
+     Safety no-op restore helper.
+     Keeps backward compatibility with older calls.
+     Does NOT clear or modify session state.
+     """
+     return
+ 
+ def render_public_home():
+     """
+     Safe placeholder for guest / public landing.
+     Keeps app running if the real implementation was removed.
+     """
+     return
+ 
+ 
+ 
+ # =========================
+ # OUTPUT RESET (NO RECURSION)
+ # Replace BOTH of your functions with these versions.
+ # =========================
+ 
+ def reset_outputs_only() -> None:
++    state_debug_capture("reset_outputs_only:before")
+     """
+     Clears only generated/derived outputs.
+     Does NOT touch user inputs (cv_*, skills_text, education fields, etc).
+     MUST NOT call clear_ai_upload_state_only() (prevents recursion).
+     """
+     keys_to_clear = [
+         "final_pdf_bytes",
+         "final_docx_bytes",
+         "download_ready",
+         "generated_cv",
+         "generated_cover_letter",
+         "generated_summary",
+         "suggested_bullets",
+         "ats_score",
+         "job_summary_ai",
+         "selected_template",
+     ]
+ 
+     snap = snapshot_protected_state("reset_outputs_only")
+     for k in keys_to_clear:
+         safe_pop_state(k)
+     restore_protected_state(snap)
++    state_debug_capture("reset_outputs_only:after")
+ 
+ 
+ def clear_ai_upload_state_only() -> None:
++    state_debug_capture("clear_ai_upload_state_only:before")
+     """
+     Clears only upload/parse transient flags and any derived outputs.
+     (prevents recursion).
+     """
+     snap = snapshot_protected_state("clear_ai_upload_state_only")
+ 
+     keys_to_clear = [
+         "_cv_parsed",
+         "_cv_autofill_enabled",
+         "_just_autofilled_from_cv",
+         "_last_cv_fingerprint",
+     ]
+ 
+     for k in keys_to_clear:
+         safe_pop_state(k)
+ 
+     for k in [
+         "final_pdf_bytes",
+         "final_docx_bytes",
+         "download_ready",
+         "generated_cv",
+         "generated_cover_letter",
+         "generated_summary",
+         "suggested_bullets",
+         "ats_score",
+         "selected_template",
+     ]:
+         safe_pop_state(k)
+ 
+     restore_protected_state(snap)
++    state_debug_capture("clear_ai_upload_state_only:after")
+ 
+ # ============================================================
+ # POLICIES (MODAL ONLY — NO PAGE ROUTING)
+ # ============================================================
+ def ensure_policies_loaded() -> None:
+     if st.session_state.get("_policies_loaded"):
+         return
+ 
+     base = os.path.join(os.path.dirname(__file__), "policies")
+     mapping = {
+         "accessibility": ("Accessibility", "accessibility.md"),
+         "cookies": ("Cookie Policy", "cookie_policy.md"),
+         "privacy": ("Privacy Policy", "privacy_policy.md"),
+         "terms": ("Terms of Use", "terms_of_use.md"),
+     }
+ 
+     policies = {}
+     for slug, (title, filename) in mapping.items():
+         path = os.path.join(base, filename)
+         body = ""
+         try:
+             if os.path.exists(path):
+                 with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                     body = f.read()
+         except Exception:
+@@ -1558,50 +1674,52 @@ def _auth_dialog() -> None:
+           <div style="font-weight:800; font-size:16px; margin-bottom:4px;">
+             Sign in to unlock the tools
+           </div>
+           <div style="opacity:0.85; font-size:13px; line-height:1.5;">
+             Create a modern CV, generate tailored cover letters, and summarise job ads in seconds.
+             Your data stays private to your account.
+           </div>
+         </div>
+         """,
+         unsafe_allow_html=True,
+     )
+ 
+     preferred = st.session_state.get("auth_modal_tab", "Sign in")
+     st.caption(f"Tip: You selected **{preferred}**")
+ 
+     auth_ui()
+ 
+     if st.button("Close", key=f"auth_modal_close_{st.session_state.get('auth_modal_epoch', 0)}"):
+         close_auth_modal()
+ 
+ def render_auth_modal_if_open() -> None:
+     if st.session_state.get("auth_modal_open", False):
+         _auth_dialog()
+ 
+ 
++state_debug_capture("run:start")
++
+ # =========================
+ # ROUTING (EARLY) — ONE VERSION ONLY
+ # =========================
+ def get_user_context():
+     u = st.session_state.get("user") or {}
+     logged_in = _is_logged_in_user(u)
+     email = normalize_email(u.get("email")) if logged_in else None
+     admin = bool(logged_in and u.get("role") in {"owner", "admin"})
+     role = (u.get("role") or "user") if logged_in else "guest"
+     return u, logged_in, email, admin, role
+ 
+ current_user, is_logged_in, user_email, is_admin, user_role = get_user_context()
+ 
+ # Non-blocking overlays / dialogs
+ render_auth_modal_if_open()
+ 
+ # Guest home header (MUST exist ABOVE this call in your file)
+ if not is_logged_in:
+     # make sure render_public_home() is defined before this chunk runs
+     render_public_home()
+ 
+ # Consent gate (only triggers when logged in)
+ show_consent_gate()
+ 
+ # Cache uid for DB ops (logged in only)
+@@ -2029,73 +2147,75 @@ Once downloaded, files cannot be edited inside the app.
+ ### Privacy & refunds
+ 
+ - Upload only information you are comfortable sharing
+ - Files are processed securely
+ - You are responsible for final content accuracy
+ 
+ ⚠️ Payments are non-refundable due to instant digital delivery.
+ """,
+     }
+ 
+     st.markdown(HELP_TEXT[help_topic])
+ 
+     st.markdown(
+         """
+ ---
+ 📩 **Need help or spotted an issue?**  
+ Contact **support@affiliateworldcommissions.com**
+ 
+ Please ensure your details are reviewed before downloading.
+ """
+     )
+ 
+     st.markdown("</div>", unsafe_allow_html=True)
+ 
+ def apply_pending_autofill_if_any():
++    state_debug_capture("apply_pending_autofill_if_any:before")
+     """
+     Applies parsed CV data BEFORE widgets render.
+     Never overwrites existing widget values.
+     """
+     parsed = st.session_state.pop("_pending_cv_parsed", None)
+     if not isinstance(parsed, dict):
+         return
+ 
+     # Prefer your apply function if it exists
+     if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
+         globals()["_apply_parsed_cv_to_session"](parsed)
+     else:
+         _apply_parsed_fallback(parsed)
+ 
+     # Section 1 fields (only if missing)
+     safe_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
+     safe_set_if_missing("cv_email", parsed.get("email") or "")
+     safe_set_if_missing("cv_phone", parsed.get("phone") or "")
+     safe_set_if_missing("cv_location", parsed.get("location") or "")
+     safe_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
+     safe_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
+ 
+     st.session_state["_just_autofilled_from_cv"] = True
++    state_debug_capture("apply_pending_autofill_if_any:after")
+ 
+ 
+ def section_cv_upload():
+     st.subheader("Upload an existing CV (optional)")
+     st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
+ 
+     uploaded_cv = st.file_uploader(
+         "Upload your current CV (PDF, DOCX or TXT)",
+         type=["pdf", "docx", "txt"],
+         key="cv_uploader",
+     )
+ 
+     if uploaded_cv is not None:
+         data = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
+         if data:
+             st.session_state["cv_upload_bytes"] = data
+             st.session_state["cv_upload_name"] = getattr(uploaded_cv, "name", "uploaded_cv")
+ 
+     fill_clicked = locked_action_button(
+         "Fill the form from this CV (AI)",
+         key="btn_fill_from_cv",
+         feature_label="CV upload & parsing",
+         counter_key="upload_parses",
+         require_login=True,
+         default_tab="Sign in",
+@@ -2103,126 +2223,131 @@ def section_cv_upload():
+         cooldown_seconds=5,
+     )
+ 
+     if fill_clicked:
+         cv_upload_bytes = st.session_state.get("cv_upload_bytes")
+         cv_upload_name = st.session_state.get("cv_upload_name")
+ 
+         if not cv_upload_bytes:
+             st.warning("Upload a CV first.")
+             st.stop()
+ 
+         raw_text = _read_uploaded_cv_bytes_to_text(cv_upload_name, cv_upload_bytes)
+         if not (raw_text or "").strip():
+             st.warning("Please upload a readable PDF, DOCX, or TXT CV first.")
+             st.stop()
+ 
+         with st.spinner("Reading and analysing your CV..."):
+             parsed = extract_cv_data(raw_text)
+ 
+         if not isinstance(parsed, dict):
+             st.error("AI parser returned an unexpected format.")
+             st.stop()
+ 
+         # ✅ Store parsed for next run (non-widget)
+         st.session_state["_pending_cv_parsed"] = parsed
++        state_debug_capture("btn_fill_from_cv:parsed_staged")
+ 
+         st.success("CV parsed. Applying to the form...")
++        state_debug_capture("btn_fill_from_cv:before_rerun")
+         st.rerun()
+ 		
+ 
+ apply_pending_autofill_if_any()
+ 
+ section_cv_upload()   # ✅ THIS LINE IS MISSING IN YOUR CODE
+ # -------------------------
+ # 1. Personal details
+ # -------------------------
+ st.header("1. Personal details")
+ 
+ for k in ["cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"]:
+     safe_init_key(k, "")
+     apply_staged_value(k)
+ 
+ cv_full_name = st.text_input("Full name *", key="cv_full_name")
+ cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key="cv_title")
+ cv_email     = st.text_input("Email *", key="cv_email")
+ cv_phone     = st.text_input("Phone", key="cv_phone")
+ cv_location  = st.text_input("Location (City, Country)", key="cv_location")
+ 
+ cv_summary_text = st.text_area("Professional summary", height=120, key="cv_summary")
+ 
+ MAX_PANEL_WORDS = globals().get("MAX_PANEL_WORDS", 100)
+ st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
+ 
+ btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
+ 
+ if btn_summary:
++    state_debug_capture("btn_improve_summary:clicked")
+     if not gate_premium("improve your professional summary"):
+         st.stop()
+ 
+     ok, left = cooldown_ok("improve_summary", 5)
+     if not ok:
+         st.warning(f"⏳ Please wait {left}s before trying again.")
+         st.stop()
+ 
+     if not cv_summary_text.strip():
+         st.error("Please write a professional summary first.")
+         st.stop()
+ 
+     email_for_usage = (st.session_state.get("user") or {}).get("email")
+     if not email_for_usage:
+         st.warning("Please sign in to use AI features.")
+         st.stop()
+ 
+     ok_spend = spend_ai_credit(email_for_usage, source=f"ai_summary_improve:{int(time.time())}", amount=1)
+     if not ok_spend:
+         st.warning("You don’t have enough AI credits for this action.")
+         st.stop()
+ 
+     with st.spinner("Improving your professional summary..."):
+         try:
+             cv_like = {
+                 "full_name": cv_full_name,
+                 "current_title": cv_title,
+                 "location": cv_location,
+                 "existing_summary": cv_summary_text,
+             }
+             instructions = (
+                 "Improve this existing professional summary so it is clearer, "
+                 "more impactful and suitable for a modern UK CV. Do not invent "
+                 "new experience, only polish what is already there."
+             )
+ 
+             improved = generate_tailored_summary(cv_like, instructions)
+             improved = enforce_word_limit(improved, MAX_PANEL_WORDS, label="Professional summary")
+ 
+             stage_value("cv_summary", improved)
++            state_debug_capture("btn_improve_summary:staged")
+ 
+             st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
+             increment_usage(email_for_usage, "summary_uses")
+ 
+             st.success("AI summary applied.")
++            state_debug_capture("btn_improve_summary:before_rerun")
+             st.rerun()
+ 
+         except Exception as e:
+             st.error(f"AI error (summary improvement): {e}")
+             st.stop()
+ 
+         except Exception as e:
+             restore_protected_state(snap)
+             st.error(f"AI error (summary improvement): {e}")
+             st.stop()
+ 
+ 
+ # -------------------------
+ # 2. Skills (bullet points only)
+ # -------------------------
+ def normalize_skills_to_bullets(text: str) -> str:
+     if not text:
+         return ""
+     raw = text.strip()
+     if not raw:
+         return ""
+ 
+     lines = [l.strip() for l in raw.splitlines() if l.strip()]
+     items: list[str] = []
+ 
+@@ -2244,87 +2369,90 @@ def normalize_skills_to_bullets(text: str) -> str:
+                 items.append(p)
+ 
+     seen = set()
+     clean: list[str] = []
+     for it in items:
+         it = it.strip().title()
+         if it and it.lower() not in seen:
+             seen.add(it.lower())
+             clean.append(it)
+ 
+     return "\n".join(f"• {c}" for c in clean)
+ 
+ # apply staged before widget
+ safe_init_key("skills_text", "")
+ apply_staged_value("skills_text")
+ 
+ skills_text = st.text_area(
+     "Skills (one per line)",
+     key="skills_text",
+     help="Use short skill phrases only (1–3 words per line)",
+ )
+ 
+ btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
+ 
+ if btn_skills:
++    state_debug_capture("btn_improve_skills:clicked")
+     snap = snapshot_protected_state("before_ai_skills")
+ 
+     if not gate_premium("improve your skills"):
+         st.stop()
+ 
+     ok, left = cooldown_ok("improve_skills", 5)
+     if not ok:
+         st.warning(f"⏳ Please wait {left}s before trying again.")
+         st.stop()
+ 
+     if not skills_text.strip():
+         st.warning("Please add some skills first.")
+         st.stop()
+ 
+     email_for_usage = (st.session_state.get("user") or {}).get("email")
+     if not email_for_usage:
+         st.warning("Please sign in to use AI features.")
+         st.stop()
+ 
+     ok_spend = spend_ai_credit(email_for_usage, source="ai_skills_improve", amount=1)
+     if not ok_spend:
+         st.warning("You don’t have enough AI credits for this action.")
+         st.stop()
+ 
+     with st.spinner("Improving your skills..."):
+         try:
+             improved = improve_skills(skills_text)
+             improved_bullets = normalize_skills_to_bullets(improved)
+             improved_limited = enforce_word_limit(improved_bullets, MAX_DOC_WORDS, label="Skills (AI)")
+ 
+             stage_value("skills_text", improved_limited)
+             restore_protected_state(snap)
++            state_debug_capture("btn_improve_skills:staged")
+ 
+             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
+             increment_usage(email_for_usage, "bullets_uses")
+ 
+             st.success("AI skills applied.")
++            state_debug_capture("btn_improve_skills:before_rerun")
+             st.rerun()
+ 
+         except Exception as e:
+             restore_protected_state(snap)
+             st.error(f"AI error (skills improvement): {e}")
+ 
+ 
+ # -------------------------
+ # Build skills list for downstream use
+ # -------------------------
+ skills: list[str] = []
+ raw = (st.session_state.get("skills_text") or "").strip()
+ for ln in raw.splitlines():
+     ln = ln.lstrip("•*-–— \t").strip()
+     if not ln:
+         continue
+     if "," in ln:
+         skills.extend([p.strip() for p in ln.split(",") if p.strip()])
+     else:
+         skills.append(ln)
+ _seen = set()
+ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
+ 
+ 
+ # -------------------------
+@@ -2361,120 +2489,124 @@ for i in range(int(num_experiences)):
+     end_key       = f"end_date_{i}"
+     desc_key      = f"description_{i}"
+ 
+     safe_init_key(job_title_key, "")
+     safe_init_key(company_key, "")
+     safe_init_key(loc_key, "")
+     safe_init_key(start_key, "")
+     safe_init_key(end_key, "")
+     safe_init_key(desc_key, "")
+ 
+     apply_staged_value(desc_key)
+ 
+     job_title = st.text_input("Job title", key=job_title_key)
+     company   = st.text_input("Company", key=company_key)
+     exp_loc   = st.text_input("Job location", key=loc_key)
+     start_dt  = st.text_input("Start date (e.g. Jan 2020)", key=start_key)
+     end_dt    = st.text_input("End date (e.g. Present or Jun 2023)", key=end_key)
+ 
+     st.text_area(
+         "Description / key achievements",
+         key=desc_key,
+         help="Use one bullet per line.",
+     )
+ 
+     if st.button("Improve this role (AI)", key=f"btn_role_ai_{i}"):
++        state_debug_capture(f"btn_role_ai_{i}:clicked")
+         if not gate_premium(f"improve Role {i+1} with AI"):
+             st.stop()
+ 
+         ok, left = cooldown_ok(f"improve_role_{i}", 5)
+         if not ok:
+             st.warning(f"⏳ Please wait {left}s before trying again.")
+             st.stop()
+ 
+         # ✅ SNAPSHOT right before doing anything that may rerun / error
+         st.session_state["_snap_before_role_ai"] = snapshot_protected_state()
+ 
+         st.session_state["ai_running_role"] = i
+         st.session_state["ai_run_now"] = True
++        state_debug_capture(f"btn_role_ai_{i}:before_rerun")
+         st.rerun()
+ 
+     if job_title and company:
+         experiences.append(
+             Experience(
+                 job_title=job_title,
+                 company=company,
+                 location=exp_loc or None,
+                 start_date=start_dt or "",
+                 end_date=end_dt or None,
+                 description=(st.session_state.get(desc_key) or None),
+             )
+         )
+ 
+ # ---------- Run AI AFTER render ----------
+ role_to_improve = st.session_state.get("ai_running_role")
+ run_now = st.session_state.pop("ai_run_now", False)
+ 
+ if run_now and role_to_improve is not None:
+     i = int(role_to_improve)
+     st.session_state["ai_running_role"] = None
+ 
+     # ✅ If something clears, we can restore
+     snap = st.session_state.pop("_snap_before_role_ai", None)
+ 
+     desc_key = f"description_{i}"
+     current_text = (st.session_state.get(desc_key) or "").strip()
+     if not current_text:
+         if snap: restore_protected_state(snap)
+         st.warning("Please add text for this role first.")
+         st.stop()
+ 
+     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
+     if not email_for_usage:
+         if snap: restore_protected_state(snap)
+         st.warning("Please sign in to use AI features.")
+         st.stop()
+ 
+     ok_spend = spend_ai_credit(email_for_usage, source=f"ai_role_improve_{i+1}", amount=1)
+     if not ok_spend:
+         if snap: restore_protected_state(snap)
+         st.warning("You don’t have enough AI credits for this action.")
+         st.stop()
+ 
+     with st.spinner(f"Improving Role {i+1} description..."):
+         try:
+             improved = improve_bullets(current_text)
+             improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label=f"Role {i+1} description")
+ 
+             stage_value(desc_key, improved_limited)
++            state_debug_capture(f"role_ai_{i}:staged")
+             if snap:
+                 restore_protected_state(snap)
+ 
+             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
+             increment_usage(email_for_usage, "bullets_uses")
+ 
+             st.success(f"Role {i+1} updated.")
++            state_debug_capture(f"role_ai_{i}:before_rerun")
+             st.rerun()
+ 
+         except Exception as e:
+             if snap: restore_protected_state(snap)
+             st.error(f"AI error: {e}")
+ 
+ st.session_state.pop("_just_autofilled_from_cv", None)
+ 
+ 
+ # -------------------------
+ # 4. Education (multiple entries)
+ # -------------------------
+ st.header("4. Education (multiple entries)")
+ 
+ safe_init_key("num_education", 1)
+ 
+ num_education = st.number_input(
+     "How many education entries do you want to include?",
+     min_value=1,
+     max_value=5,
+     step=1,
+     key="num_education",
+ )
+ 
+ education_items = []
+@@ -2717,54 +2849,56 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
+         if not isinstance(jobs_raw, list):
+             return []
+         # filter to dict items only
+         return [j for j in jobs_raw if isinstance(j, dict)]
+ 
+     if search_clicked and can_use:
+         query_clean = (keywords or "").strip()
+         loc_clean = (location or "").strip()
+ 
+         if not query_clean:
+             st.info("Enter keywords to search (e.g., “marketing manager”).")
+         else:
+             try:
+                 with st.spinner("Searching jobs..."):
+                     jobs_raw = _cached_adzuna_search(query_clean, loc_clean, results=10)
+ 
+                 jobs = _normalize_jobs(jobs_raw)
+ 
+                 # ✅ Spend 1 AI credit only if API returned successfully (even if 0 results)
+                 spent = try_spend(uid, source="job_search", ai=1)
+                 if not spent:
+                     st.warning("You don’t have enough AI credits to perform this search.")
+                     st.stop()
+ 
+                 st.session_state["adzuna_results"] = jobs
++                state_debug_capture("adzuna_search:results_staged")
+ 
+                 if not jobs:
+                     st.info("No results found. Try different keywords or a nearby location.")
+ 
++                state_debug_capture("adzuna_search:before_rerun")
+                 st.rerun()
+ 
+             except AdzunaConfigError:
+                 st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
+             except AdzunaAPIError:
+                 st.error("Job search is temporarily unavailable. Please try again shortly.")
+             except Exception as e:
+                 st.error(f"Job search failed: {e}")
+ 
+     # -----------------------------
+     # Results (each job collapsible)
+     # -----------------------------
+     jobs = st.session_state.get("adzuna_results") or []
+     jobs = _normalize_jobs(jobs)
+ 
+     if jobs:
+         st.divider()
+         st.caption(f"Showing up to {min(len(jobs), 10)} results.")
+ 
+         for idx, job in enumerate(jobs):
+             title = _as_text(job.get("title")) or "Untitled"
+ 
+             # company can be dict or string depending on API
+             company_val = job.get("company")
+             company = _as_text(company_val) or "Unknown company"
+@@ -2787,50 +2921,51 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
+                         if created:
+                             st.caption(f"Posted: {created}")
+                         sal = _format_salary(smin, smax)
+                         if sal:
+                             st.caption(sal)
+                         if url:
+                             st.link_button("Open listing", url)
+ 
+                     with top[1]:
+                         if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
+                             # NOTE: Keep job state names job_* so they never collide with cv_*
+                             st.session_state["job_description"] = desc
+                             st.session_state["_last_jd_fp"] = None
+                             st.session_state.pop("job_summary_ai", None)
+                             st.session_state.pop("cover_letter", None)
+                             st.session_state.pop("cover_letter_box", None)
+ 
+                             st.session_state["selected_job"] = {
+                                 "title": title,
+                                 "company": company,
+                                 "url": url,
+                                 "location": loc,
+                             }
+ 
+                             st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
++                            state_debug_capture("use_job:before_rerun")
+                             st.rerun()
+ 
+                 st.markdown("**Preview description**")
+                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+ 
+ 
+ # -------------------------
+ # 6. Target Job (optional, for AI) — workspace safe:
+ # - DO NOT auto-pop outputs when JD changes
+ # - SNAPSHOT before AI actions
+ # -------------------------
+ st.header("5. Target Job (optional)")
+ 
+ def _fingerprint(text: str) -> str:
+     return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
+ 
+ def get_personal_value(primary_key: str, fallback_key: str) -> str:
+     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
+ 
+ full_name_ss = get_personal_value("full_name", "cv_full_name")
+ email_ss     = get_personal_value("email", "cv_email")
+ title_ss     = get_personal_value("title", "cv_title")
+ phone_ss     = get_personal_value("phone", "cv_phone")
+ location_ss  = get_personal_value("location", "cv_location")
+ 
+@@ -2841,162 +2976,168 @@ job_description = st.text_area(
+     "Paste the job description here",
+     height=200,
+     help="Paste the full job spec from LinkedIn, Indeed, etc.",
+     key="job_description",
+ )
+ 
+ # ✅ inline fingerprint (jd_fp was unused)
+ st.session_state["_last_jd_fp"] = _fingerprint(job_description)  # track it, but DO NOT clear other stuff
+ 
+ st.caption(
+     f"For best results, keep this to {MAX_DOC_WORDS} words or less. "
+     "(Extra words are ignored.)"
+ )
+ 
+ col_jd1, col_jd2 = st.columns(2)
+ with col_jd1:
+     job_summary_clicked = st.button("Suggest tailored summary (AI)", key="btn_job_summary")
+ with col_jd2:
+     ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key="btn_cover")
+ 
+ 
+ # -------------------------
+ # AI job-description summary
+ # -------------------------
+ if job_summary_clicked:
++    state_debug_capture("btn_job_summary:clicked")
+     snap = snapshot_protected_state("before_ai_job_summary")
+ 
+     if not gate_premium("generate a job summary"):
+         st.stop()
+ 
+     if not (full_name_ss and email_ss):
+         st.warning("Complete Section 1 (Full name + Email) first — these are used in outputs.")
+         st.stop()
+ 
+     if not job_description.strip():
+         st.error("Please paste a job description first.")
+         st.stop()
+ 
+     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
+     uid = get_user_id(email_for_usage) if email_for_usage else None
+     if not uid:
+         st.error("Please sign in again.")
+         st.stop()
+ 
+     spent = try_spend(uid, source="job_summary", ai=1)
+     if not spent:
+         st.warning("You don’t have enough AI credits to generate a job summary.")
+         st.stop()
+ 
+     with st.spinner("Generating AI job summary..."):
+         try:
+             jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description")
+             job_summary_text = generate_job_summary(jd_limited)
+ 
+             stage_value("job_summary_ai", job_summary_text)
+             restore_protected_state(snap)
++            state_debug_capture("btn_job_summary:staged")
+             st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
+ 
+             if email_for_usage:
+                 increment_usage(email_for_usage, "job_summary_uses")
+ 
+             st.success("AI job summary generated below.")
++            state_debug_capture("btn_job_summary:before_rerun")
+             st.rerun()
+ 
+         except Exception as e:
+             restore_protected_state(snap)
+             st.error(f"AI error (job summary): {e}")
+             st.stop()
+ 
+ 
+ # Display job summary
+ apply_staged_value("job_summary_ai")
+ job_summary_text = st.session_state.get("job_summary_ai", "")
+ if job_summary_text:
+     st.markdown("**AI job summary for this role (read-only):**")
+     st.write(job_summary_text)
+ 
+ 
+ # -------------------------
+ # AI cover letter generation
+ # -------------------------
+ if ai_cover_letter_clicked:
++    state_debug_capture("btn_cover_letter:clicked")
+     snap = snapshot_protected_state("before_ai_cover_letter")
+ 
+     if not gate_premium("generate a cover letter"):
+         st.stop()
+ 
+     if not (full_name_ss and email_ss):
+         st.warning("Complete Section 1 (Full name + Email) first — added to cover letter.")
+         st.stop()
+ 
+     if not job_description.strip():
+         st.error("Please paste a job description first.")
+         st.stop()
+ 
+     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
+     uid = get_user_id(email_for_usage) if email_for_usage else None
+     if not uid:
+         st.error("Please sign in again.")
+         st.stop()
+ 
+     spent = try_spend(uid, source="cover_letter", ai=1)
+     if not spent:
+         st.warning("You don’t have enough AI credits to generate a cover letter.")
+         st.stop()
+ 
+     with st.spinner("Generating cover letter..."):
+         try:
+             # ✅ Keep education source consistent:
+             # prefer local education_items (built this run), else session fallback
+             edu_for_ai = education_items if "education_items" in locals() else st.session_state.get("education_items", [])
+ 
+             cover_input = {
+                 "full_name": full_name_ss,
+                 "current_title": title_ss,
+                 "skills": skills,
+                 "experiences": [exp.dict() for exp in experiences],
+                 "education": edu_for_ai,
+                 "location": location_ss,
+             }
+ 
+             jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description (AI input)")
+             job_summary = st.session_state.get("job_summary_ai", "") or ""
+ 
+             cover_text = generate_cover_letter_ai(cover_input, jd_limited, job_summary)
+             cleaned = clean_cover_letter_body(cover_text)
+             final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
+ 
+             stage_value("cover_letter", final_letter)
+             stage_value("cover_letter_box", final_letter)
+             restore_protected_state(snap)
++            state_debug_capture("btn_cover_letter:staged")
+ 
+             st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
+             if email_for_usage:
+                 increment_usage(email_for_usage, "cover_uses")
+ 
+             st.success("AI cover letter generated below. You can edit it before downloading.")
++            state_debug_capture("btn_cover_letter:before_rerun")
+             st.rerun()
+ 
+         except Exception as e:
+             restore_protected_state(snap)
+             st.error(f"AI error (cover letter): {e}")
+             st.stop()
+ 
+ 
+ # -------------------------
+ # Cover letter editor + downloads
+ # -------------------------
+ apply_staged_value("cover_letter")
+ apply_staged_value("cover_letter_box")
+ st.session_state.setdefault("cover_letter", "")
+ 
+ if st.session_state.get("cover_letter"):
+     st.subheader("✏️ Cover letter")
+ 
+     edited = st.text_area(
+         "You can edit this before using it:",
+         key="cover_letter_box",
+         height=260,
+     )
+     st.session_state["cover_letter"] = edited
+ 
+@@ -3050,50 +3191,51 @@ TEMPLATE_MAP = {
+ }
+ 
+ safe_init_key("template_label", "Blue")
+ 
+ template_label = st.selectbox(
+     "Choose a CV template",
+     options=list(TEMPLATE_MAP.keys()),
+     key="template_label",
+     index=(
+         list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
+         if st.session_state["template_label"] in TEMPLATE_MAP
+         else 0
+     ),
+ )
+ 
+ # -------------------------
+ # Generate CV (spend 1 credit)
+ # -------------------------
+ generate_clicked = locked_action_button(
+     "Generate CV (PDF + Word)",
+     feature_label="generate and download your CV",
+     key="btn_generate_cv",
+ )
+ 
+ if generate_clicked:
++    state_debug_capture("btn_generate_cv:clicked")
+     snapshot_protected_state("before_generate_cv")  # ✅ SNAPSHOT
+ 
+     # clears only derived outputs (must be your SAFE version)
+     clear_ai_upload_state_only()
+ 
+     email_for_usage = (st.session_state.get("user") or {}).get("email")
+ 
+     cv_full_name = get_cv_field("cv_full_name")
+     cv_title     = get_cv_field("cv_title")
+     cv_email     = get_cv_field("cv_email")
+     cv_phone     = get_cv_field("cv_phone")
+     cv_location  = get_cv_field("cv_location")
+     raw_summary  = get_cv_field("cv_summary", "")
+ 
+     if not cv_full_name or not cv_email:
+         st.error("Please fill in at least your full name and email.")
+         st.stop()
+ 
+     if not email_for_usage:
+         st.error("Please sign in again.")
+         open_auth_modal("Sign in")
+         st.stop()
+ 
+     uid = get_user_id(email_for_usage)
+     if not uid:
+@@ -3183,109 +3325,112 @@ with col_monthly:
+         "- Monthly allowance: **20 CV + 30 AI**\n"
+         "- PDF + Word downloads\n"
+         "- Email support\n"
+         "- Cancel anytime\n"
+         "\n"
+     )
+ 
+     if st.button("Start Monthly Subscription", key="start_monthly_sub"):
+         if not email_for_checkout:
+             st.warning("Please sign in first.")
+             st.stop()
+         if not PRICE_MONTHLY:
+             st.error("Missing STRIPE_PRICE_MONTHLY in Railway Variables.")
+             st.stop()
+         if not stripe.api_key:
+             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
+             st.stop()
+ 
+         try:
+             url = create_subscription_checkout_session(
+                 PRICE_MONTHLY,
+                 pack="monthly",
+                 customer_email=email_for_checkout,
+             )
+             st.session_state["checkout_url_monthly"] = url
++            state_debug_capture("start_monthly_sub:before_rerun")
+             st.rerun()
+         except Exception as e:
+             st.error(f"Stripe error: {e}")
+ 
+     # ✅ render link outside click handler so it persists
+     if st.session_state.get("checkout_url_monthly"):
+         st.link_button("Continue to secure checkout", st.session_state["checkout_url_monthly"])
+ 
+ with col_pro:
+     st.subheader("Pro")
+     st.markdown(
+         "**£5.99 / month**\n\n"
+         "- Monthly allowance: **50 CV + 90 AI**\n"
+         "- PDF + Word downloads\n"
+         "- Priority support\n"
+         "- Cancel anytime\n"
+         "\n"
+     )
+ 
+     if st.button("Start Pro Subscription", key="start_pro_sub"):
+         if not email_for_checkout:
+             st.warning("Please sign in first.")
+             st.stop()
+         if not PRICE_PRO:
+             st.error("Missing STRIPE_PRICE_PRO in Railway Variables.")
+             st.stop()
+         if not stripe.api_key:
+             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
+             st.stop()
+ 
+         try:
+             url = create_subscription_checkout_session(
+                 PRICE_PRO,
+                 pack="pro",
+                 customer_email=email_for_checkout,
+             )
+             st.session_state["checkout_url_pro"] = url
++            state_debug_capture("start_pro_sub:before_rerun")
+             st.rerun()
+         except Exception as e:
+             st.error(f"Stripe error: {e}")
+ 
+     # ✅ render link outside click handler so it persists
+     if st.session_state.get("checkout_url_pro"):
+         st.link_button("Continue to secure checkout", st.session_state["checkout_url_pro"])
+ 
+ st.markdown("---")
+ st.subheader("Enterprise (organisations & programmes)")
+ st.markdown(
+     "- For organisations running employability or workforce programmes\n"
+     "- Provide access for participants without individual charges\n"
+     "- Suitable for charities, training providers, community organisations and public-sector programmes\n"
+     "- Option to pilot locally in Walsall, then scale regionally/nationally\n"
+     "- Includes onboarding and support\n"
+     "\n"
+     "**Enquire:** support@affiliateworldcommissions.com\n"
+ )
+ 
+ st.caption(
+     "Subscriptions fund the platform and prevent abuse. "
+     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
+ )
+ 
+ 
++state_debug_report("run:report")
++
+ # ==============================================
+ # FOOTER POLICY BUTTONS (MODAL ONLY - NO SNAPSHOT)
+ # ==============================================
+ st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
+ 
+ render_policy_modal("footer")
+ 
+ fc1, fc2, fc3, fc4 = st.columns(4)
+ with fc1:
+     if st.button("Accessibility", key="footer_accessibility"):
+         open_policy("footer", "accessibility")
+ with fc2:
+     if st.button("Cookie Policy", key="footer_cookies"):
+         open_policy("footer", "cookies")
+ with fc3:
+     if st.button("Privacy Policy", key="footer_privacy"):
+         open_policy("footer", "privacy")
+ with fc4:
+     if st.button("Terms of Use", key="footer_terms"):
+         open_policy("footer", "terms")
+-
