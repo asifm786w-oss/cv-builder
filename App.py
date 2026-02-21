@@ -1,6 +1,5 @@
 # ============================================================
-# APP START (CLEAN) — DROP IN FROM TOP OF FILE TO END OF CSS
-# ============================================================
+# APP START (CLEAN) — DROP IN FROM TOP OF FILE TO END OF CSS# ============================================================
 
 import os
 import io
@@ -22,14 +21,14 @@ from openai import OpenAI
 
 from db import get_conn, get_db_connection, fetchone, fetchall, execute
 
-from utils import verify_postgres_connection
-from models import CV, Experience, Education
 from utils import (
+    verify_postgres_connection,
     render_cv_pdf_bytes,
     render_cover_letter_pdf_bytes,
     render_cv_docx_bytes,
     render_cover_letter_docx_bytes,
 )
+from models import CV, Experience, Education
 from ai_v2 import (
     generate_tailored_summary,
     generate_cover_letter_ai,
@@ -191,9 +190,11 @@ DEFAULT_SESSION_KEYS = {
 for k, v in DEFAULT_SESSION_KEYS.items():
     st.session_state.setdefault(k, v)
 
-# DB init stays here (once)
-init_db()
-verify_postgres_connection()
+# DB init stays here (once-per-session; Streamlit reruns on every interaction)
+if not st.session_state.get("_db_ready"):
+    init_db()
+    verify_postgres_connection()
+    st.session_state["_db_ready"] = True
 
 PROTECTED_EXACT_KEYS = {
     # auth/user
@@ -237,8 +238,13 @@ def is_widget_key(k: str) -> bool:
     return any(k.startswith(p) for p in WIDGET_PREFIXES)
 
 def is_protected_key(k: str) -> bool:
+    # Never allow widget state to be cleared
+    if is_widget_key(k):
+        return True
+
     if k in PROTECTED_EXACT_KEYS:
         return True
+
     return any(k.startswith(p) for p in SYSTEM_PREFIXES)
 
 def snapshot_protected_state(label=None):
@@ -261,7 +267,7 @@ def restore_protected_state(snap: dict) -> None:
         if is_widget_key(k):
             continue
         st.session_state[k] = v
-	
+
 def _safe_set(k, v):
     if v is None:
         return
@@ -279,6 +285,8 @@ def safe_pop_state(k: str) -> None:
 
 def safe_clear_state(keys: list[str]) -> None:
     for k in keys:
+        if is_widget_key(k):
+            continue
         safe_pop_state(k)
 
 def safe_init_key(key: str, default=""):
@@ -450,7 +458,10 @@ def spend_credits(*args, **kwargs) -> bool:
         cv_amount = kwargs.get("cv_amount", kwargs.get("cv", 0))
         ai_amount = kwargs.get("ai_amount", kwargs.get("ai", 0))
 
-        return spend_credits_on_conn(conn, user_id, source=source, cv_amount=int(cv_amount or 0), ai_amount=int(ai_amount or 0))
+        return spend_credits_on_conn(
+            conn, user_id, source=source,
+            cv_amount=int(cv_amount or 0), ai_amount=int(ai_amount or 0)
+        )
 
     # ---- style #2 (no conn provided) ----
     if len(args) < 1:
@@ -466,7 +477,10 @@ def spend_credits(*args, **kwargs) -> bool:
         return False
 
     with get_conn() as conn:
-        return spend_credits_on_conn(conn, user_id, source=source, cv_amount=int(cv_amount or 0), ai_amount=int(ai_amount or 0))
+        return spend_credits_on_conn(
+            conn, user_id, source=source,
+            cv_amount=int(cv_amount or 0), ai_amount=int(ai_amount or 0)
+        )
 
 
 def try_spend(user_id: int, *, source: str, cv: int = 0, ai: int = 0) -> bool:
@@ -539,7 +553,6 @@ def restore_protected_state_if_needed():
     Keeps backward compatibility with older calls.
     Does NOT clear or modify session state.
     """
-    # If you later decide to use snapshots, you can extend this.
     return
 
 def render_public_home():
@@ -562,31 +575,21 @@ def reset_outputs_only() -> None:
     MUST NOT call clear_ai_upload_state_only() (prevents recursion).
     """
     keys_to_clear = [
-        # generated doc bytes / downloads
         "final_pdf_bytes",
         "final_docx_bytes",
         "download_ready",
-
-        # cached 'generated' outputs
         "generated_cv",
         "generated_cover_letter",
         "generated_summary",
         "suggested_bullets",
         "ats_score",
-
-        # job-derived outputs (optional clears)
         "job_summary_ai",
-        # keep cover_letter if you want; comment out if you don't want cleared
-        # "cover_letter",
-        # "cover_letter_box",
-
-        # template output (NOT template_label)
         "selected_template",
     ]
 
     snap = snapshot_protected_state("reset_outputs_only")
     for k in keys_to_clear:
-        safe_pop_state(k) if "safe_pop_state" in globals() else st.session_state.pop(k, None)
+        safe_pop_state(k)
     restore_protected_state(snap)
 
 
@@ -598,18 +601,15 @@ def clear_ai_upload_state_only() -> None:
     snap = snapshot_protected_state("clear_ai_upload_state_only")
 
     keys_to_clear = [
-        # upload/parse internal flags (NOT user fields)
         "_cv_parsed",
         "_cv_autofill_enabled",
         "_just_autofilled_from_cv",
         "_last_cv_fingerprint",
     ]
 
-    # clear upload flags
     for k in keys_to_clear:
-        safe_pop_state(k) if "safe_pop_state" in globals() else st.session_state.pop(k, None)
+        safe_pop_state(k)
 
-    # also clear outputs (inline, no function call to avoid recursion)
     for k in [
         "final_pdf_bytes",
         "final_docx_bytes",
@@ -621,13 +621,12 @@ def clear_ai_upload_state_only() -> None:
         "ats_score",
         "selected_template",
     ]:
-        safe_pop_state(k) if "safe_pop_state" in globals() else st.session_state.pop(k, None)
+        safe_pop_state(k)
 
     restore_protected_state(snap)
 
 # ============================================================
 # POLICIES (MODAL ONLY — NO PAGE ROUTING)
-# If you route pages, you’ll keep hitting state surprises.
 # ============================================================
 def ensure_policies_loaded() -> None:
     if st.session_state.get("_policies_loaded"):
@@ -664,6 +663,12 @@ def close_policy(scope: str) -> None:
     st.session_state[f"{scope}_policy_open"] = False
     st.session_state[f"{scope}_policy_slug"] = None
 
+def _policy_rerun():
+    try:
+        st.rerun()
+    except Exception:
+        st.experimental_rerun()
+
 def render_policy_modal(scope: str) -> None:
     open_key = f"{scope}_policy_open"
     slug_key = f"{scope}_policy_slug"
@@ -688,16 +693,15 @@ def render_policy_modal(scope: str) -> None:
         else:
             st.info("Policy content not found in this deployment.")
 
-        # Back/Close controls (no forced rerun)
         b1, b2 = st.columns(2)
         with b1:
             if st.button("← Back", key=f"{scope}_policy_back"):
                 close_policy(scope)
-                st.stop()
+                _policy_rerun()
         with b2:
             if st.button("Close", key=f"{scope}_policy_close"):
                 close_policy(scope)
-                st.stop()
+                _policy_rerun()
 
 # ============================================================
 # CV FILE READER (ONE COPY ONLY)
@@ -1125,10 +1129,6 @@ div[role="dialog"] .stButton button{
 # run early every script start
 restore_protected_state_if_needed()
 
-
-import re
-import io
-import streamlit as st
 
 # =========================
 # EMAIL VALIDATION
@@ -1682,11 +1682,9 @@ def render_mulyba_brand_header(is_logged_in: bool):
         with c1:
             if st.button("🔐 Sign in", key="brand_signin_btn"):
                 open_auth_modal("Sign in")
-                st.rerun()
         with c2:
             if st.button("✨ Create", key="brand_create_btn"):
                 open_auth_modal("Create account")
-                st.rerun()
 
 with st.sidebar:
     # always re-pull
@@ -2026,8 +2024,6 @@ def _apply_parsed_fallback(parsed: dict):
             safe_set_if_missing(f"edu_location_{i}", r.get("location") or r.get("city") or "")
             safe_set_if_missing(f"edu_start_{i}", r.get("start_date") or r.get("start") or "")
             safe_set_if_missing(f"edu_end_{i}", r.get("end_date") or r.get("end") or "")
-
-
 
 
 if fill_clicked:
@@ -2454,15 +2450,17 @@ for i in range(int(num_education)):
             )
         )
 
-# keep education_items in session (but don't overwrite if you use it elsewhere)
-st.session_state["education_items"] = st.session_state.get("education_items") or []
-# (You can decide later if you want to store built objects or dicts; leaving as-is)
+# ✅ store what you just built (instead of overwriting it with old state)
+try:
+    st.session_state["education_items"] = [e.dict() for e in education_items]
+except Exception:
+    st.session_state["education_items"] = [getattr(e, "__dict__", {}) for e in education_items]
 
 
 # -------------------------
 # 5. References (optional)
 # -------------------------
-st.header("6. References (optional)")
+st.header("5. References (optional)")
 safe_init_key("references", "")
 
 references = st.text_area(
@@ -2475,163 +2473,12 @@ references = st.text_area(
 )
 
 
-# =========================
-# Job Search (Adzuna) — workspace safe changes:
-# - DOES NOT pop cover letter / summary on "Use this job"
-# =========================
-from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
-
-@st.cache_data(ttl=300, show_spinner=False)
-def _cached_adzuna_search(query: str, location: str, results: int = 10):
-    return search_jobs(query=query, location=location, results=results)
-
-def _format_salary(smin, smax) -> str:
-    if smin is None and smax is None:
-        return ""
-    try:
-        if smin is not None and smax is not None:
-            return f"Salary: £{int(smin):,} - £{int(smax):,}"
-        if smin is not None:
-            return f"Salary: from £{int(smin):,}"
-        return f"Salary: up to £{int(smax):,}"
-    except Exception:
-        return "Salary: available"
-
-expanded = bool(st.session_state.get("adzuna_results"))
-with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
-    st.session_state.setdefault("adzuna_results", [])
-
-    session_user = st.session_state.get("user") or {}
-    email = (session_user.get("email") or "").strip().lower()
-
-    can_use = True
-    if not email:
-        st.warning("Please sign in to use Job Search.")
-        can_use = False
-
-    uid = None
-    credits = {"cv": 0, "ai": 0}
-
-    if can_use:
-        uid = get_user_id(email)
-        if not uid:
-            st.warning("Couldn’t find your account. Please sign out and sign in again.")
-            can_use = False
-        else:
-            credits = get_credits_by_user_id(uid)
-            if int(credits.get("ai", 0) or 0) <= 0:
-                st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
-                can_use = False
-
-    with st.container(border=True):
-        col1, col2, col3 = st.columns([3, 3, 1.4])
-        with col1:
-            keywords = st.text_input("Keywords", key="adzuna_keywords", placeholder="e.g. marketing manager / software engineer", disabled=not can_use)
-        with col2:
-            location = st.text_input("Location", key="adzuna_location", placeholder="e.g. Walsall or WS2", disabled=not can_use)
-        with col3:
-            st.write("")
-            st.write("")
-            search_clicked = st.button("Search", type="primary", key="adzuna_search_btn", use_container_width=True, disabled=not can_use)
-
-        st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
-
-    def _as_text(x):
-        if x is None: return ""
-        if isinstance(x, str): return x
-        if isinstance(x, dict):
-            return x.get("display_name") or x.get("name") or x.get("area") or x.get("label") or str(x)
-        return str(x)
-
-    def _normalize_jobs(jobs_raw):
-        if jobs_raw is None:
-            return []
-        if isinstance(jobs_raw, dict):
-            jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
-        if not isinstance(jobs_raw, list):
-            return []
-        return [j for j in jobs_raw if isinstance(j, dict)]
-
-    if search_clicked and can_use:
-        query_clean = (keywords or "").strip()
-        loc_clean = (location or "").strip()
-
-        if not query_clean:
-            st.info("Enter keywords to search (e.g., “marketing manager”).")
-        else:
-            try:
-                with st.spinner("Searching jobs..."):
-                    jobs_raw = _cached_adzuna_search(query_clean, loc_clean, results=10)
-
-                jobs = _normalize_jobs(jobs_raw)
-
-                spent = try_spend(uid, source="job_search", ai=1)
-                if not spent:
-                    st.warning("You don’t have enough AI credits to perform this search.")
-                    st.stop()
-
-                st.session_state["adzuna_results"] = jobs
-                if not jobs:
-                    st.info("No results found. Try different keywords or a nearby location.")
-                st.rerun()
-
-            except AdzunaConfigError:
-                st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
-            except AdzunaAPIError:
-                st.error("Job search is temporarily unavailable. Please try again shortly.")
-            except Exception as e:
-                st.error(f"Job search failed: {e}")
-
-    jobs = _normalize_jobs(st.session_state.get("adzuna_results") or [])
-
-    if jobs:
-        st.divider()
-        st.caption(f"Showing up to {min(len(jobs), 10)} results.")
-
-        for idx, job in enumerate(jobs):
-            title = _as_text(job.get("title")) or "Untitled"
-            company = _as_text(job.get("company")) or "Unknown company"
-            loc = _as_text(job.get("location") or job.get("candidate_required_location") or job.get("area")) or "Unknown location"
-            created = _as_text(job.get("created") or job.get("created_at") or "")
-            url = _as_text(job.get("redirect_url") or job.get("url") or "")
-            smin = job.get("salary_min")
-            smax = job.get("salary_max")
-            desc = _as_text(job.get("description") or "")
-
-            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
-                with st.container(border=True):
-                    top = st.columns([4, 1])
-                    with top[0]:
-                        if created:
-                            st.caption(f"Posted: {created}")
-                        sal = _format_salary(smin, smax)
-                        if sal:
-                            st.caption(sal)
-                        if url:
-                            st.link_button("Open listing", url)
-                    with top[1]:
-                        if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
-                            st.session_state["job_description"] = desc
-                            st.session_state["_last_jd_fp"] = None
-
-                            # Workspace-safe: DO NOT clear summary/cover automatically
-                            st.session_state["selected_job"] = {"title": title, "company": company, "url": url, "location": loc}
-
-                            st.success("Job loaded into Target Job.")
-                            st.rerun()
-
-                st.markdown("**Preview description**")
-                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
-
-
 # -------------------------
 # 5. Target Job (optional, for AI) — workspace safe:
 # - DO NOT auto-pop outputs when JD changes
 # - SNAPSHOT before AI actions
 # -------------------------
 st.header("5. Target Job (optional)")
-
-import hashlib
 
 def _fingerprint(text: str) -> str:
     return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
@@ -2655,8 +2502,8 @@ job_description = st.text_area(
     key="job_description",
 )
 
-jd_fp = _fingerprint(job_description)
-st.session_state["_last_jd_fp"] = jd_fp  # track it, but DO NOT clear other stuff
+# ✅ inline fingerprint (jd_fp was unused)
+st.session_state["_last_jd_fp"] = _fingerprint(job_description)  # track it, but DO NOT clear other stuff
 
 st.caption(
     f"For best results, keep this to {MAX_DOC_WORDS} words or less. "
@@ -2757,12 +2604,16 @@ if ai_cover_letter_clicked:
 
     with st.spinner("Generating cover letter..."):
         try:
+            # ✅ Keep education source consistent:
+            # prefer local education_items (built this run), else session fallback
+            edu_for_ai = education_items if "education_items" in locals() else st.session_state.get("education_items", [])
+
             cover_input = {
                 "full_name": full_name_ss,
                 "current_title": title_ss,
                 "skills": skills,
                 "experiences": [exp.dict() for exp in experiences],
-                "education": st.session_state.get("education_items", []),
+                "education": edu_for_ai,
                 "location": location_ss,
             }
 
@@ -2869,12 +2720,9 @@ template_label = st.selectbox(
     ),
 )
 
-
 # -------------------------
 # Generate CV (spend 1 credit)
 # -------------------------
-# IMPORTANT: keep call signature consistent with your definition.
-# If your locked_action_button supports feature_label, use it.
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
     feature_label="generate and download your CV",
@@ -2889,7 +2737,6 @@ if generate_clicked:
 
     email_for_usage = (st.session_state.get("user") or {}).get("email")
 
-    # Pull CV fields ONLY from cv_* keys
     cv_full_name = get_cv_field("cv_full_name")
     cv_title     = get_cv_field("cv_title")
     cv_email     = get_cv_field("cv_email")
@@ -2973,6 +2820,10 @@ col_free, col_monthly, col_pro = st.columns(3)
 
 email_for_checkout = (st.session_state.get("user") or {}).get("email")
 
+# ✅ persistent checkout urls (survive reruns)
+st.session_state.setdefault("checkout_url_monthly", None)
+st.session_state.setdefault("checkout_url_pro", None)
+
 with col_free:
     st.subheader("Free")
     st.markdown(
@@ -2991,7 +2842,7 @@ with col_monthly:
         "- PDF + Word downloads\n"
         "- Email support\n"
         "- Cancel anytime\n"
-        "\n"       
+        "\n"
     )
 
     if st.button("Start Monthly Subscription", key="start_monthly_sub"):
@@ -3011,9 +2862,14 @@ with col_monthly:
                 pack="monthly",
                 customer_email=email_for_checkout,
             )
-            st.link_button("Continue to secure checkout", url)
+            st.session_state["checkout_url_monthly"] = url
+            st.rerun()
         except Exception as e:
             st.error(f"Stripe error: {e}")
+
+    # ✅ render link outside click handler so it persists
+    if st.session_state.get("checkout_url_monthly"):
+        st.link_button("Continue to secure checkout", st.session_state["checkout_url_monthly"])
 
 with col_pro:
     st.subheader("Pro")
@@ -3023,7 +2879,7 @@ with col_pro:
         "- PDF + Word downloads\n"
         "- Priority support\n"
         "- Cancel anytime\n"
-        "\n"        
+        "\n"
     )
 
     if st.button("Start Pro Subscription", key="start_pro_sub"):
@@ -3043,9 +2899,14 @@ with col_pro:
                 pack="pro",
                 customer_email=email_for_checkout,
             )
-            st.link_button("Continue to secure checkout", url)
+            st.session_state["checkout_url_pro"] = url
+            st.rerun()
         except Exception as e:
             st.error(f"Stripe error: {e}")
+
+    # ✅ render link outside click handler so it persists
+    if st.session_state.get("checkout_url_pro"):
+        st.link_button("Continue to secure checkout", st.session_state["checkout_url_pro"])
 
 st.markdown("---")
 st.subheader("Enterprise (organisations & programmes)")
