@@ -2545,7 +2545,28 @@ Please ensure your details are reviewed before downloading.
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+uploaded_cv = st.file_uploader(
+    "Upload your current CV (PDF, DOCX or TXT)",
+    type=["pdf", "docx", "txt"],
+    key="cv_uploader",
+)
 
+if uploaded_cv is not None:
+    data = uploaded_cv.getvalue()
+    if data:
+        st.session_state["cv_upload_bytes"] = data
+        st.session_state["cv_upload_name"] = uploaded_cv.name
+
+fill_clicked = locked_action_button(
+    "Fill the form from this CV (AI)",
+    key="btn_fill_from_cv",
+    feature_label="CV upload & parsing",
+    counter_key="upload_parses",
+    require_login=True,
+    default_tab="Sign in",
+    cooldown_name="upload_parse",
+    cooldown_seconds=5,
+)
 
 if fill_clicked:
     cv_upload_bytes = st.session_state.get("cv_upload_bytes")
@@ -2566,7 +2587,6 @@ if fill_clicked:
         st.error("AI parser returned an unexpected format.")
         st.stop()
 
-    # only reset outputs if a new CV
     if cv_fp != last_fp:
         reset_outputs_only()
         st.session_state["_last_cv_fingerprint"] = cv_fp
