@@ -2595,11 +2595,7 @@ Please ensure your details are reviewed before downloading.
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-uploaded_cv = st.file_uploader(
-    "Upload your current CV (PDF, DOCX or TXT)",
-    type=["pdf", "docx", "txt"],
-    key="cv_uploader",
-)
+
 
 if uploaded_cv is not None:
     data = uploaded_cv.getvalue()
