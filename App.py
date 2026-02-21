@@ -386,7 +386,7 @@ def safe_set_if_missing(key: str, value, *, strip: bool = True):
             st.session_state[key] = value
 
 def _apply_parsed_fallback(parsed: dict) -> None:
-    """
+	    """
     Fallback mapping if _apply_parsed_cv_to_session isn't available.
     Only sets missing fields (never overwrites user edits).
     """
@@ -2595,6 +2595,22 @@ Please ensure your details are reviewed before downloading.
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+
+
+st.subheader("Upload an existing CV (optional)")
+st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
+
+uploaded_cv = st.file_uploader(
+    "Upload your current CV (PDF, DOCX or TXT)",
+    type=["pdf", "docx", "txt"],
+    key="cv_uploader",
+)
+
+if uploaded_cv is not None:
+    data = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
+    if data:
+        st.session_state["cv_upload_bytes"] = data
+        st.session_state["cv_upload_name"] = getattr(uploaded_cv, "name", "uploaded_cv")
 
 fill_clicked = locked_action_button(
     "Fill the form from this CV (AI)",
