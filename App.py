@@ -34,8 +34,11 @@ from ai_v2 import (
     generate_tailored_summary,
     generate_cover_letter_ai,
     improve_bullets,
+    improve_skills,
     extract_cv_data,
     generate_job_summary,
+)
+
 )
 from auth import (
     init_db,
@@ -192,56 +195,58 @@ for k, v in DEFAULT_SESSION_KEYS.items():
 init_db()
 verify_postgres_connection()
 
-# ============================================================
-# PROTECTED STATE (NEVER CLEAR MID-SESSION)
-# ============================================================
 PROTECTED_EXACT_KEYS = {
     # auth/user
     "user", "user_id", "accepted_policies", "chk_policy_agree",
 
-    # CV inputs
-    "skills_text", "references", "job_description", "template_label",
+    # caches/results
+    "adzuna_results", "selected_job",
 
-    # job search
-    "adzuna_keywords", "adzuna_location", "adzuna_results", "selected_job",
-
-    # AI outputs you want to persist
+    # AI outputs to persist (non-widget)
     "job_summary_ai", "cover_letter", "cover_letter_box",
 
-    # structure
-    "num_experiences", "parsed_num_experiences", "num_education", "education_items",
+    # structure / derived state (non-widget)
+    "education_items", "parsed_num_experiences",
 
-    # cached upload payload
+    # cached upload payload (non-widget)
     "cv_upload_bytes", "cv_upload_name",
 }
-# Keys that belong to Streamlit widgets and must never be programmatically restored
-NON_RESTORABLE_KEYS = {
-    "cv_uploader",   # file_uploader widget key
+
+# Widget keys must never be restored from snapshots.
+WIDGET_EXACT_KEYS = {
+    "cv_uploader",
+    "skills_text", "references", "job_description", "template_label",
+    "num_experiences", "num_education",
+    "adzuna_keywords", "adzuna_location",
 }
 
-PROTECTED_PREFIXES = (
-    # personal
+WIDGET_PREFIXES = (
     "cv_",
-
-    # experience
     "job_title_", "company_", "exp_location_", "start_date_", "end_date_", "description_",
-
-    # education
     "degree_", "institution_", "edu_location_", "edu_start_", "edu_end_",
 )
+
+SYSTEM_PREFIXES = (
+    "_cooldown_",
+    "__pending__",   # staged values
+)
+
+def is_widget_key(k: str) -> bool:
+    if k in WIDGET_EXACT_KEYS:
+        return True
+    return any(k.startswith(p) for p in WIDGET_PREFIXES)
 
 def is_protected_key(k: str) -> bool:
     if k in PROTECTED_EXACT_KEYS:
         return True
-    return any(k.startswith(p) for p in PROTECTED_PREFIXES)
+    return any(k.startswith(p) for p in SYSTEM_PREFIXES)
 
-# ---------- Snapshot / restore (extra safety; useful around clears) ----------
 def snapshot_protected_state(label=None):
     snap = {}
     for k, v in st.session_state.items():
-        if k in NON_RESTORABLE_KEYS:
+        if is_widget_key(k):
             continue
-        if k in PROTECTED_EXACT_KEYS or any(k.startswith(p) for p in PROTECTED_PREFIXES):
+        if is_protected_key(k):
             snap[k] = v
 
     st.session_state["_protected_snapshot"] = snap
@@ -253,11 +258,10 @@ def restore_protected_state(snap: dict) -> None:
     if not isinstance(snap, dict):
         return
     for k, v in snap.items():
-        if k in NON_RESTORABLE_KEYS:
+        if is_widget_key(k):
             continue
-        st.session_state[k] = v	
+        st.session_state[k] = v
 	
-
 def _safe_set(k, v):
     if v is None:
         return
@@ -308,30 +312,6 @@ def enforce_word_limit(text: str, max_words: int, label: str = "") -> str:
         )
         return " ".join(words[: int(max_words)])
     return text or ""
-
-# ---------- Output-only resets (aliases to match your calls) ----------
-def reset_outputs_only() -> None:
-    """
-    Clear ONLY derived/transient outputs.
-    Never clears user inputs.
-    """
-    snap = snapshot_protected_state()   # ✅ now returns dict
-    safe_clear_state([
-        "_cv_parsed",
-        "_cv_autofill_enabled",
-        "_just_autofilled_from_cv",
-        "_last_cv_fingerprint",
-        "generated_cv",
-        "generated_cover_letter",
-        "generated_summary",
-        "suggested_bullets",
-        "ats_score",
-        "final_pdf_bytes",
-        "final_docx_bytes",
-        "selected_template",
-        "download_ready",
-    ])
-    restore_protected_state(snap)       # ✅ restores properly
 
 # ---------- User ID helpers (NO recursion, no globals tricks) ----------
 def get_user_id_by_email(email: str) -> int | None:
@@ -613,7 +593,7 @@ def reset_outputs_only() -> None:
 def clear_ai_upload_state_only() -> None:
     """
     Clears only upload/parse transient flags and any derived outputs.
-    DOES NOT call reset_outputs_only() (prevents recursion).
+    (prevents recursion).
     """
     snap = snapshot_protected_state("clear_ai_upload_state_only")
 
@@ -3105,4 +3085,3 @@ with fc3:
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
         open_policy("footer", "terms")
-
