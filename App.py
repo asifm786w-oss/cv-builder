@@ -386,7 +386,7 @@ def safe_set_if_missing(key: str, value, *, strip: bool = True):
             st.session_state[key] = value
 
 def _apply_parsed_fallback(parsed: dict) -> None:
-	    """
+    """
     Fallback mapping if _apply_parsed_cv_to_session isn't available.
     Only sets missing fields (never overwrites user edits).
     """
@@ -396,7 +396,9 @@ def _apply_parsed_fallback(parsed: dict) -> None:
     # --- skills ---
     skills = parsed.get("skills")
     if isinstance(skills, list):
-        joined = "\n".join(f"• {str(s).strip()}" for s in skills if str(s).strip())
+        joined = "\n".join(
+            f"• {str(s).strip()}" for s in skills if str(s).strip()
+        )
         if joined.strip():
             safe_set_if_missing("skills_text", joined)
     elif isinstance(skills, str) and skills.strip():
@@ -418,7 +420,7 @@ def _apply_parsed_fallback(parsed: dict) -> None:
             safe_set_if_missing(f"end_date_{i}", e.get("end_date") or e.get("end") or "")
             desc = e.get("description") or ""
             if isinstance(desc, list):
-                desc = "\n".join([str(x).strip() for x in desc if str(x).strip()])
+                desc = "\n".join(str(x).strip() for x in desc if str(x).strip())
             safe_set_if_missing(f"description_{i}", desc or "")
 
     # --- education ---
