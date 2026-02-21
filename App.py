@@ -1,44 +1,40 @@
-# ============================================================
-# APP START (CLEAN) — DROP IN FROM TOP OF FILE TO END OF CSS# ============================================================
-
-import os
+import streamlit as st
 import io
 import csv
-import re
-import time
+import os
 import hashlib
+import time
 import traceback
-from datetime import datetime, timezone
-
-import streamlit as st
 import requests
-import stripe
 import psycopg2
+import stripe
 import psycopg2.extras
-from psycopg2.extras import RealDictCursor
+import datetime
+from db import get_conn
 
-from openai import OpenAI
 
 from db import get_conn, get_db_connection, fetchone, fetchall, execute
+from psycopg2.extras import RealDictCursor
+from openai import OpenAI
+from adzuna_client import search_jobs
+from datetime import datetime, timezone
 
+
+from utils import verify_postgres_connection
+from models import CV, Experience, Education
 from utils import (
-    verify_postgres_connection,
     render_cv_pdf_bytes,
     render_cover_letter_pdf_bytes,
     render_cv_docx_bytes,
     render_cover_letter_docx_bytes,
 )
-from models import CV, Experience, Education
 from ai_v2 import (
     generate_tailored_summary,
     generate_cover_letter_ai,
     improve_bullets,
-    improve_skills,
     extract_cv_data,
     generate_job_summary,
 )
-
-
 from auth import (
     init_db,
     create_user,
@@ -59,6 +55,7 @@ from auth import (
     delete_user,
 )
 
+
 from email_utils import send_password_reset_email
 
 
@@ -72,9 +69,9 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# -------------------------
-# CSS
-# -------------------------
+
+st.set_page_config(layout="centered")
+
 st.markdown(
     """
     <style>
@@ -110,21 +107,18 @@ st.markdown(
     }
     </style>
     """,
-    unsafe_allow_html=True,
+    unsafe_allow_html=True
 )
 
 
-# ============================================================
-# CONSTANTS (ONE PLACE ONLY)
-# ============================================================
-MAX_PANEL_WORDS = 100
-MAX_DOC_WORDS = 300
-MAX_LETTER_WORDS = 300
-COOLDOWN_SECONDS = 5
 
-# ============================================================
+
+
+
+
+# -------------------------
 # GLOBAL PLAN + REFERRAL CONFIG
-# ============================================================
+# -------------------------
 REFERRAL_CAP = 10
 BONUS_PER_REFERRAL_CV = 5
 BONUS_PER_REFERRAL_AI = 5
@@ -151,477 +145,518 @@ USAGE_KEYS_DEFAULTS = {
 AI_USAGE_KEYS = {"summary_uses", "cover_uses", "bullets_uses", "job_summary_uses"}
 CV_USAGE_KEYS = {"cv_generations"}
 
-# -------------------------
-# STRIPE / URLS
-# -------------------------
-stripe.api_key = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
-PRICE_MONTHLY = (os.getenv("STRIPE_PRICE_MONTHLY") or "").strip()
-PRICE_PRO = (os.getenv("STRIPE_PRICE_PRO") or "").strip()
+COOLDOWN_SECONDS = 5
 
-APP_URL = (os.getenv("APP_URL") or "").strip() or "http://localhost:8501"
 
-# ============================================================
-# SESSION STATE DEFAULTS (EARLY, ONE PLACE)
-# ============================================================
+
+def get_personal_value(primary_key: str, fallback_key: str) -> str:
+    return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
+
+
+def get_user_by_email(email: str) -> dict | None:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+
+    return fetchone(
+        """
+        SELECT *
+        FROM users
+        WHERE LOWER(email) = LOWER(%s)
+        LIMIT 1
+        """,
+        (email,),
+    )
+
+
+def get_user_row_by_id(user_id: int) -> dict | None:
+    return fetchone(
+        """
+        SELECT *
+        FROM users
+        WHERE id = %s
+        LIMIT 1
+        """,
+        (int(user_id),),
+    )
+
+
+def get_user_id(email: str) -> int | None:
+    u = get_user_by_email(email)
+    return int(u["id"]) if u and u.get("id") is not None else None
+
+
+def refresh_session_user_from_db() -> None:
+    u = st.session_state.get("user") or {}
+    uid = u.get("id")
+    if not uid:
+        return
+
+    db_u = get_user_row_by_id(int(uid))
+    if not db_u:
+        return
+
+    for k in ("role",):
+        if k in u and k not in db_u:
+            db_u[k] = u[k]
+
+    st.session_state["user"] = dict(db_u)
+  
+
+
+def improve_skills(skills_text: str) -> str:
+    """
+    Skills-only AI improvement.
+    Uses the same AI pipeline as improve_bullets(), then your normalizer
+    will convert output into clean 1–3 word skill bullets.
+    """
+    return improve_bullets(skills_text)
+
+def clear_ai_upload_state_only():
+    """
+    Remove only AI/upload/parse leftovers so they don't leak into CV output.
+    DO NOT touch cv_* keys (your form fields).
+    """
+    for k in list(st.session_state.keys()):
+        if k.startswith(("ai_", "upload_", "parsed_", "adzuna_", "job_")):
+            st.session_state.pop(k, None)
+
+
+
+def get_cv_field(key: str, fallback=None):
+    """Read CV-only session state first, else fall back to existing variable/value."""
+    v = st.session_state.get(key, None)
+    return fallback if (v is None or v == "") else v
+
+
+def set_cv_defaults_from_existing(full_name=None, title=None, email=None, phone=None, location=None, summary=None):
+    """
+    One-time migration: if you already had values in old variables, copy them into cv_* keys.
+    Won't overwrite if cv_* already set.
+    """
+    defaults = {
+        "cv_full_name": full_name,
+        "cv_title": title,
+        "cv_email": email,
+        "cv_phone": phone,
+        "cv_location": location,
+        "cv_summary": summary,
+    }
+    for k, v in defaults.items():
+        if (st.session_state.get(k) is None or st.session_state.get(k) == "") and v:
+            st.session_state[k] = v
+
+
+
+
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")  # set in Railway (sk_test_... or sk_live_...)
+
+PRICE_MONTHLY = os.getenv("STRIPE_PRICE_MONTHLY")  # price_...
+PRICE_PRO     = os.getenv("STRIPE_PRICE_PRO")      # price_...
+
+APP_URL = os.getenv("APP_URL", "")  # set to https://your-app.up.railway.app
+if not APP_URL:
+    # safe fallback so app still runs locally
+    APP_URL = "http://localhost:8501"
+
+# =========================
+# POLICIES: DB HELPERS (psycopg2) - accepted_policies is INTEGER 0/1
+# =========================
+
+
+from db import fetchone, execute
+
+
+def has_accepted_policies(email: str) -> bool:
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+
+    row = fetchone(
+        """
+        SELECT accepted_policies, accepted_policies_at
+        FROM users
+        WHERE LOWER(email) = LOWER(%s)
+        LIMIT 1
+        """,
+        (email,),
+    )
+    if not row:
+        return False
+
+    return bool(row.get("accepted_policies") or row.get("accepted_policies_at"))
+
+
+def mark_policies_accepted(email: str) -> None:
+    email = (email or "").strip().lower()
+    if not email:
+        return
+
+    execute(
+        """
+        UPDATE users
+        SET accepted_policies = TRUE,
+            accepted_policies_at = COALESCE(accepted_policies_at, NOW())
+        WHERE LOWER(email) = LOWER(%s)
+        """,
+        (email,),
+    )
+
+
+
+
+def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
+    app_url = (os.getenv("APP_URL") or "http://localhost:8501").rstrip("/")
+    success_url = os.getenv("SUCCESS_URL") or f"{app_url}/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url  = os.getenv("CANCEL_URL")  or f"{app_url}/pricing"
+
+    session = stripe.checkout.Session.create(
+        mode="subscription",
+        customer_email=customer_email,
+        line_items=[{"price": price_id, "quantity": 1}],
+        allow_promotion_codes=True,
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={"pack": pack, "app_user_email": customer_email},
+    )
+    return session.url
+
+
+def ensure_user_row(email: str) -> int:
+    email = (email or "").strip().lower()
+    if not email:
+        raise ValueError("Missing email")
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO users (email)
+            VALUES (%s)
+            ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
+            RETURNING id
+        """, (email,))
+        uid = cur.fetchone()[0]
+        conn.commit()
+        return uid
+
+
+
+
+from psycopg2.extras import RealDictCursor
+
+def migrate_user_credits_to_ledger_once(email: str) -> None:
+    """
+    Move legacy users.cv_credits / users.ai_credits into the ledger once.
+    Safe to call on every boot/login.
+    Skips only if THIS migration has already run for the user.
+    """
+    email = (email or "").strip().lower()
+    if not email:
+        return
+
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            # 1) Get user id + legacy balances (tolerate missing cols by defaulting to 0)
+            # If your users table does not have cv_credits/ai_credits, just treat as 0.
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    COALESCE(cv_credits, 0) AS cv_credits,
+                    COALESCE(ai_credits, 0) AS ai_credits
+                FROM users
+                WHERE email = %s
+                """,
+                (email,),
+            )
+            u = cur.fetchone()
+            if not u:
+                return
+
+            user_id = int(u["id"])
+            cv_old = int(u.get("cv_credits") or 0)
+            ai_old = int(u.get("ai_credits") or 0)
+
+            # Nothing to migrate
+            if cv_old <= 0 and ai_old <= 0:
+                return
+
+            # 2) Skip only if the migration grant already exists for this user
+            cur.execute(
+                """
+                SELECT 1
+                FROM credit_grants
+                WHERE user_id = %s AND source = 'migration_users_columns'
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            if cur.fetchone():
+                return
+
+            # 3) Write migration grant
+            cur.execute(
+                """
+                INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+                VALUES (%s, 'migration_users_columns', %s, %s, NULL)
+                """,
+                (user_id, cv_old, ai_old),
+            )
+
+            # 4) Zero out legacy columns (prevents double counting / confusion)
+            cur.execute(
+                """
+                UPDATE users
+                SET cv_credits = 0,
+                    ai_credits = 0
+                WHERE id = %s
+                """,
+                (user_id,),
+            )
+
+        conn.commit()
+
+# ---- session state defaults (MUST be early) ----
 DEFAULT_SESSION_KEYS = {
     "user": None,
-    "user_id": None,
-
     "accepted_policies": False,
+    "policy_view": None,
     "chk_policy_agree": False,
-
-    # policy modal state
-    "footer_policy_open": False,
-    "footer_policy_slug": None,
-    "gate_policy_open": False,
-    "gate_policy_slug": None,
-
-    # policy content cache
-    "_policies_loaded": False,
-    "_policies": {},
-
-    # job search cache
-    "adzuna_results": [],
-
-    # CV upload cache (stable across reruns)
-    "cv_upload_bytes": None,
-    "cv_upload_name": None,
+    "_form_snapshot": {},
+    "_just_returned_from_policy": False,
 }
 
 for k, v in DEFAULT_SESSION_KEYS.items():
-    st.session_state.setdefault(k, v)
-
-# DB init stays here (once-per-session; Streamlit reruns on every interaction)
-if not st.session_state.get("_db_ready"):
-    init_db()
-    verify_postgres_connection()
-    st.session_state["_db_ready"] = True
-
-PROTECTED_EXACT_KEYS = {
-    # auth/user
-    "user", "user_id", "accepted_policies", "chk_policy_agree",
-
-    # caches/results
-    "adzuna_results", "selected_job",
-
-    # AI outputs to persist (non-widget)
-    "job_summary_ai", "cover_letter", "cover_letter_box",
-
-    # structure / derived state (non-widget)
-    "education_items", "parsed_num_experiences",
-
-    # cached upload payload (non-widget)
-    "cv_upload_bytes", "cv_upload_name",
-}
-
-# Widget keys must never be restored from snapshots.
-WIDGET_EXACT_KEYS = {
-    "cv_uploader",
-    "skills_text", "references", "job_description", "template_label",
-    "num_experiences", "num_education",
-    "adzuna_keywords", "adzuna_location",
-}
-
-WIDGET_PREFIXES = (
-    "cv_",
-    "job_title_", "company_", "exp_location_", "start_date_", "end_date_", "description_",
-    "degree_", "institution_", "edu_location_", "edu_start_", "edu_end_",
-)
-
-SYSTEM_PREFIXES = (
-    "_cooldown_",
-    "__pending__",   # staged values
-)
-import uuid
-
-if "_SESSION_UUID" not in st.session_state:
-    st.session_state["_SESSION_UUID"] = str(uuid.uuid4())
-
-st.sidebar.caption(f"Session: {st.session_state['_SESSION_UUID']}")
-
-def is_widget_key(k: str) -> bool:
-    if k in WIDGET_EXACT_KEYS:
-        return True
-    return any(k.startswith(p) for p in WIDGET_PREFIXES)
-
-def is_protected_key(k: str) -> bool:
-    if is_widget_key(k):
-        return True
-    return k.startswith((
-        "cv_",
-        "skills_",
-        "job_title_",
-        "company_",
-        "description_",
-        "degree_",
-        "institution_",
-        "edu_",
-        "references",
-        "template_label",
-        "job_description",
-    ))
-
-def snapshot_protected_state(label=None):
-    snap = {}
-    for k, v in st.session_state.items():
-        if is_widget_key(k):
-            continue
-        if is_protected_key(k):
-            snap[k] = v
-
-    st.session_state["_protected_snapshot"] = snap
-    if label:
-        st.session_state["_protected_snapshot_label"] = label
-    return snap
-
-def restore_protected_state(snap: dict) -> None:
-    if not isinstance(snap, dict):
-        return
-    for k, v in snap.items():
-        if is_widget_key(k):
-            continue
+    if k not in st.session_state:
         st.session_state[k] = v
 
-def _safe_set(k, v):
-    if v is None:
-        return
-    if isinstance(v, str) and not v.strip():
-        return
-    cur = st.session_state.get(k)
-    if cur is None or (isinstance(cur, str) and not cur.strip()):
-        st.session_state[k] = v.strip() if isinstance(v, str) else v
-
-# ---------- Safe session ops ----------
-def safe_pop_state(k: str) -> None:
-    if is_protected_key(k):
-        return
-    st.session_state.pop(k, None)
-
-def safe_clear_state(keys: list[str]) -> None:
-    state_debug_capture("safe_clear_state:before")
-    for k in keys:
-        if is_widget_key(k):
-            continue
-        safe_pop_state(k)
-    state_debug_capture("safe_clear_state:after")
-
-def safe_init_key(key: str, default=""):
-    if key not in st.session_state or st.session_state[key] is None:
-        st.session_state[key] = default
-
-def stage_value(key: str, value):
-    st.session_state[f"__pending__{key}"] = value
-
-def apply_staged_value(key: str):
-    pk = f"__pending__{key}"
-    if pk in st.session_state:
-        st.session_state[key] = st.session_state.pop(pk)
-
-def safe_set_if_missing(key: str, value, *, strip: bool = True):
-    cur = st.session_state.get(key)
-    cur_s = (cur or "").strip() if isinstance(cur, str) else cur
-    if cur is None or cur_s == "":
-        if isinstance(value, str) and strip:
-            value = value.strip()
-        if value is not None:
-            st.session_state[key] = value
 
 
-# ---------- State forensic debugger ----------
-STATE_DEBUG_STATIC_KEYS = {
-    "cv_full_name", "cv_email", "cv_phone", "cv_location", "cv_title", "cv_summary",
-    "skills_text", "references", "job_description", "template_label",
-    "num_experiences", "num_education",
-    "_just_autofilled_from_cv", "_last_cv_fingerprint", "_pending_cv_parsed",
-}
-STATE_DEBUG_PREFIXES = (
-    "job_title_", "company_", "description_", "start_date_", "end_date_",
-    "degree_", "institution_", "edu_start_", "edu_end_", "cv_",
-)
-
-
-def _state_debug_should_track(key: str) -> bool:
-    return key in STATE_DEBUG_STATIC_KEYS or key.startswith(STATE_DEBUG_PREFIXES)
-
-
-def _state_debug_is_empty(value) -> bool:
-    if value is None:
-        return True
-    if isinstance(value, str):
-        return value.strip() == ""
-    if isinstance(value, (list, tuple, dict, set)):
-        return len(value) == 0
-    return False
-
-
-def _state_debug_fingerprint(value) -> str:
-    kind = type(value).__name__
-    if isinstance(value, str):
-        txt = value.strip()
-        if not txt:
-            return "str:<empty>"
-        head = txt.replace("\n", " ")[:60]
-        h = hashlib.sha1(txt.encode("utf-8", errors="ignore")).hexdigest()[:8]
-        return f"str:len={len(txt)} hash={h} '{head}'"
-    if isinstance(value, (list, tuple, set)):
-        return f"{kind}:len={len(value)}"
-    if isinstance(value, dict):
-        return f"dict:keys={len(value)}"
-    return f"{kind}:{repr(value)[:80]}"
-
-
-def _state_debug_snapshot() -> dict:
-    snap = {}
-    for k, v in st.session_state.items():
-        if _state_debug_should_track(k):
-            snap[k] = {
-                "empty": _state_debug_is_empty(v),
-                "fp": _state_debug_fingerprint(v),
-            }
-    return snap
-
-
-def state_debug_capture(tag: str) -> None:
-    current = _state_debug_snapshot()
-    prev = st.session_state.get("_state_debug_prev_snapshot") or {}
-
-    removed = sorted([k for k in prev.keys() if k not in current])
-    emptied = sorted([
-        k for k in current.keys() & prev.keys()
-        if prev[k].get("empty") is False and current[k].get("empty") is True
-    ])
-    overwritten = sorted([
-        k for k in current.keys() & prev.keys()
-        if prev[k].get("fp") != current[k].get("fp")
-    ])
-
-    events = st.session_state.get("_state_debug_events", [])
-    events.append({
-        "tag": tag,
-        "removed": removed,
-        "emptied": emptied,
-        "overwritten": overwritten,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    })
-    st.session_state["_state_debug_events"] = events[-30:]
-    st.session_state["_state_debug_prev_snapshot"] = current
-    st.session_state["_state_debug_last_tag"] = tag
-
-
-def state_debug_report(tag: str = "run") -> None:
-    st.session_state["_state_debug_report_tag"] = tag
-    with st.expander("State Debug", expanded=False):
-        st.caption(f"Last capture tag: {st.session_state.get('_state_debug_last_tag', 'n/a')}")
-        events = st.session_state.get("_state_debug_events", [])
-        if not events:
-            st.write("No state debug events yet.")
-        else:
-            for ev in events[-8:]:
-                st.markdown(f"**{ev.get('ts', '')}** `{ev.get('tag', '')}`")
-                st.write({
-                    "keys_removed": ev.get("removed", []),
-                    "non_empty_to_empty": ev.get("emptied", []),
-                    "keys_overwritten": ev.get("overwritten", []),
-                })
-
-    # Wipe Tripwire: any cv_* key going non-empty -> empty in a single transition
-    events = st.session_state.get("_state_debug_events", [])
-    if events:
-        last = events[-1]
-        cv_emptied = [k for k in last.get("emptied", []) if k.startswith("cv_")]
-        if cv_emptied:
-            st.error(
-                "Wipe Tripwire triggered: cv_* key(s) changed from non-empty to empty in one rerun. "
-                f"Keys: {cv_emptied}. Last tag: {last.get('tag', 'unknown')}"
-            )
-            st.stop()
-
-def cv_draft() -> dict:
-    st.session_state.setdefault("_cv_draft", {})
-    return st.session_state["_cv_draft"]
-
-def cv_wkey(k: str) -> str:
-    # widget key (safe from pruning because we can rehydrate)
-    return f"w_{k}"
-
-def cv_get(k: str, default=""):
-    return cv_draft().get(k, default)
-
-def cv_set(k: str, v):
-    if v is None:
-        return
-    if isinstance(v, str):
-        v = v.strip()
-    cv_draft()[k] = v
-
-def cv_set_if_missing(k: str, v):
-    cur = cv_get(k, "")
-    if isinstance(cur, str) and cur.strip():
-        return
-    if cur not in (None, "", [], {}):
-        return
-    if v is None:
-        return
-    if isinstance(v, str) and not v.strip():
-        return
-    cv_set(k, v)
-
-def cv_rehydrate_widget(k: str):
-    wk = cv_wkey(k)
-    if wk not in st.session_state:
-        st.session_state[wk] = cv_get(k, "")
-
-def cv_sync_widget_to_draft(k: str):
-    wk = cv_wkey(k)
-    if wk in st.session_state:
-        cv_set(k, st.session_state.get(wk))
-
-def cv_widget_key(k: str) -> str:
-    return f"w_{k}"  # widget keys never equal stored keys
-
-def cv_sync_draft_to_widget(k: str):
-    wk = cv_widget_key(k)
-    if wk not in st.session_state:
-        st.session_state[wk] = cv_get(k, "")
-
-
-def _apply_parsed_fallback(parsed: dict) -> None:
+def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
     """
-    Fallback mapping if _apply_parsed_cv_to_session isn't available.
-    Only sets missing fields (never overwrites user edits).
+    Per-user cooldown for a given action_key.
+    Returns (ok, seconds_left).
     """
-    if not isinstance(parsed, dict):
+    now = time.monotonic()
+    last = st.session_state.get(f"_cooldown_{action_key}", 0.0)
+    remaining = seconds - (now - last)
+    if remaining > 0:
+        return False, int(remaining) + 1
+    st.session_state[f"_cooldown_{action_key}"] = now
+    return True, 0
+
+PRESERVE_KEYS = [
+    # personal details
+    "full_name", "title", "email", "phone", "location", "summary",
+    # job summariser (rename/add your actual keys)
+    "job_desc", "job_summary", "job_summary_uses",
+    # CV parsed bits
+    "_cv_parsed", "_cv_autofill_enabled", "_last_cv_fingerprint",
+    # any other section keys you use
+]
+
+def restore_form_state_if_needed():
+    """
+    Restore snapshot after returning from policy pages.
+    MUST run before widgets render or Streamlit will ignore changes.
+    """
+    if not st.session_state.get("_has_form_snapshot"):
         return
 
-    # --- skills ---
-    skills = parsed.get("skills")
-    if isinstance(skills, list):
-        joined = "\n".join(
-            f"• {str(s).strip()}" for s in skills if str(s).strip()
-        )
-        if joined.strip():
-            safe_set_if_missing("skills_text", joined)
-    elif isinstance(skills, str) and skills.strip():
-        safe_set_if_missing("skills_text", skills.strip())
+    snap = st.session_state.get("_form_snapshot") or {}
+    for k, v in snap.items():
+        # Only restore if empty/missing to avoid overriding user edits
+        if k not in st.session_state or st.session_state.get(k) in (None, ""):
+            st.session_state[k] = v
 
-    # --- experiences ---
-    exps = parsed.get("experiences") or parsed.get("experience") or []
-    if isinstance(exps, list) and exps:
-        n = max(1, min(5, len(exps)))
-        st.session_state["parsed_num_experiences"] = n
-        safe_set_if_missing("num_experiences", n)
+    # one-time restore
+    st.session_state["_has_form_snapshot"] = False
 
-        for i in range(n):
-            e = exps[i] or {}
-            safe_set_if_missing(f"job_title_{i}", e.get("job_title") or e.get("title") or "")
-            safe_set_if_missing(f"company_{i}", e.get("company") or e.get("employer") or "")
-            safe_set_if_missing(f"exp_location_{i}", e.get("location") or "")
-            safe_set_if_missing(f"start_date_{i}", e.get("start_date") or e.get("start") or "")
-            safe_set_if_missing(f"end_date_{i}", e.get("end_date") or e.get("end") or "")
-            desc = e.get("description") or ""
-            if isinstance(desc, list):
-                desc = "\n".join(str(x).strip() for x in desc if str(x).strip())
-            safe_set_if_missing(f"description_{i}", desc or "")
 
-    # --- education ---
-    edu = parsed.get("education") or parsed.get("educations") or []
-    if isinstance(edu, list) and edu:
-        n = max(1, min(5, len(edu)))
-        safe_set_if_missing("num_education", n)
 
-        for i in range(n):
-            r = edu[i] or {}
-            safe_set_if_missing(f"degree_{i}", r.get("degree") or r.get("qualification") or "")
-            safe_set_if_missing(f"institution_{i}", r.get("institution") or r.get("school") or "")
-            safe_set_if_missing(f"edu_location_{i}", r.get("location") or r.get("city") or "")
-            safe_set_if_missing(f"edu_start_{i}", r.get("start_date") or r.get("start") or "")
-            safe_set_if_missing(f"edu_end_{i}", r.get("end_date") or r.get("end") or "")
+def freeze_defaults():
+    # Never overwrite user-entered or AI-generated data
+    for k in [
+        "skills_text",
+        "summary",
+        "num_experiences",
+        "template_label",
+    ]:
+        if k in st.session_state and st.session_state[k] is None:
+            st.session_state[k] = ""
 
-    # --- skills ---
-    skills = parsed.get("skills")
-    if isinstance(skills, list):
-        joined = "\n".join(
-            f"• {str(s).strip()}" for s in skills if str(s).strip()
-        )
-        if joined.strip():
-            safe_set_if_missing("skills_text", joined)
-    elif isinstance(skills, str) and skills.strip():
-        safe_set_if_missing("skills_text", skills.strip())
 
-    # --- experiences ---
-    exps = parsed.get("experiences") or parsed.get("experience") or []
-    if isinstance(exps, list) and exps:
-        n = max(1, min(5, len(exps)))
-        st.session_state["parsed_num_experiences"] = n
-        safe_set_if_missing("num_experiences", n)
 
-        for i in range(n):
-            e = exps[i] or {}
-            safe_set_if_missing(f"job_title_{i}", e.get("job_title") or e.get("title") or "")
-            safe_set_if_missing(f"company_{i}", e.get("company") or e.get("employer") or "")
-            safe_set_if_missing(f"exp_location_{i}", e.get("location") or "")
-            safe_set_if_missing(f"start_date_{i}", e.get("start_date") or e.get("start") or "")
-            safe_set_if_missing(f"end_date_{i}", e.get("end_date") or e.get("end") or "")
-            desc = e.get("description") or ""
-            if isinstance(desc, list):
-                desc = "\n".join(str(x).strip() for x in desc if str(x).strip())
-            safe_set_if_missing(f"description_{i}", desc or "")
+def get_active_plan_by_user_id(user_id: int) -> str:
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute("""
+            SELECT plan
+            FROM subscriptions
+            WHERE user_id = %s AND status = 'active'
+            ORDER BY id DESC
+            LIMIT 1
+        """, (user_id,))
+        row = cur.fetchone()
+        return (row[0] if row else "free")
 
-    # --- education ---
-    edu = parsed.get("education") or parsed.get("educations") or []
-    if isinstance(edu, list) and edu:
-        n = max(1, min(5, len(edu)))
-        safe_set_if_missing("num_education", n)
 
-        for i in range(n):
-            r = edu[i] or {}
-            safe_set_if_missing(f"degree_{i}", r.get("degree") or r.get("qualification") or "")
-            safe_set_if_missing(f"institution_{i}", r.get("institution") or r.get("school") or "")
-            safe_set_if_missing(f"edu_location_{i}", r.get("location") or r.get("city") or "")
-            safe_set_if_missing(f"edu_start_{i}", r.get("start_date") or r.get("start") or "")
-            safe_set_if_missing(f"edu_end_{i}", r.get("end_date") or r.get("end") or "")
+def backup_skills_state():
+    """Keep the last non-empty skills text so reruns can't wipe it to defaults."""
+    val = st.session_state.get("skills_text")
+    if isinstance(val, str) and val.strip():
+        st.session_state["_skills_backup"] = val
 
-# ---------- Word limit helper (you call this in multiple places) ----------
-def enforce_word_limit(text: str, max_words: int, label: str = "") -> str:
-    words = (text or "").split()
-    if len(words) > int(max_words):
-        st.warning(
-            f"{label or 'Text'} is limited to {max_words} words. "
-            f"Currently {len(words)}; extra words are ignored."
-        )
-        return " ".join(words[: int(max_words)])
-    return text or ""
 
-# ---------- User ID helpers (NO recursion, no globals tricks) ----------
+def render_auth_modal_if_open():
+    if not st.session_state.get("auth_modal_open", False):
+        return
+    _auth_dialog()  # your existing dialog function
+
+
+def restore_skills_state():
+    """
+    Restore skills_text only when it is missing/blank.
+    Skips restoring during CV autofill/policy-return transitions to avoid stomping state.
+    """
+
+    # If we just autofilled or just returned from policy, don't touch skills this run.
+    if st.session_state.get("_skip_restore_skills_once"):
+        st.session_state["_skip_restore_skills_once"] = False
+        return
+
+    val = st.session_state.get("skills_text")
+
+    # Only restore if empty/None
+    if not (val is None or (isinstance(val, str) and not val.strip())):
+        return
+
+    # 1) last backup (most recent user/AI version)
+    backup = st.session_state.get("_skills_backup")
+    if isinstance(backup, str) and backup.strip():
+        st.session_state["skills_text"] = backup
+        return
+
+    # 2) parsed CV (if available)
+    parsed = st.session_state.get("_cv_parsed")
+    if isinstance(parsed, dict):
+        skills_data = parsed.get("skills")
+        if isinstance(skills_data, list) and skills_data:
+            merged = ", ".join(str(s).strip() for s in skills_data if str(s).strip())
+            if merged.strip():
+                st.session_state["skills_text"] = merged
+                return
+        elif isinstance(skills_data, str) and skills_data.strip():
+            st.session_state["skills_text"] = skills_data.strip()
+            return
+
+    # If nothing to restore, leave it empty (don't invent defaults)
+    st.session_state["skills_text"] = ""
+
 def get_user_id_by_email(email: str) -> int | None:
     email = (email or "").strip().lower()
     if not email:
         return None
+
     row = fetchone(
-        "SELECT id FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1",
+        """
+        SELECT id
+        FROM users
+        WHERE LOWER(email) = LOWER(%s)
+        LIMIT 1
+        """,
         (email,),
     )
-    if not row:
-        return None
-    try:
-        return int(row["id"])
-    except Exception:
-        return None
+    return int(row["id"]) if row and row.get("id") is not None else None
 
-def get_user_id(email: str) -> int | None:
-    return get_user_id_by_email(email)
 
-# ============================================================
-# LEDGER CREDITS — SINGLE SOURCE OF TRUTH (NO NAME CLASH)
-# - supports BOTH styles:
-#     spend_credits(conn, uid, source=..., cv_amount=1)
-#     spend_credits(uid, source=..., cv=1)
-# - fixes: unexpected keyword 'cv_amount'
-# - prevents recursion bugs
-# ============================================================
+def normalize_skills_state():
+    if st.session_state.get("skills_text") is None:
+        st.session_state["skills_text"] = ""
+
+    parsed = st.session_state.get("_cv_parsed")
+    if isinstance(parsed, dict):
+        skills_data = parsed.get("skills")
+        if st.session_state.get("skills_text", "").strip() == "":
+            if isinstance(skills_data, list) and skills_data:
+                st.session_state["skills_text"] = ", ".join(
+                    [str(s).strip() for s in skills_data if str(s).strip()]
+                )
+            elif isinstance(skills_data, str) and skills_data.strip():
+                st.session_state["skills_text"] = skills_data.strip()
+
+
+def tripwire_none_experience_keys():
+    keys = ["num_experiences", "job_title_0", "company_0", "description_0"]
+    bad = {
+        k: st.session_state.get(k)
+        for k in keys
+        if k in st.session_state and st.session_state.get(k) is None
+    }
+    if bad:
+        st.sidebar.error(f"🚨 Experience keys set to None: {bad}")
+        st.sidebar.code("".join(traceback.format_stack(limit=25)))
+
+
+if st.session_state.get("debug_mode", False):
+    tripwire_none_experience_keys()
+
+
+def _apply_parsed_cv_to_session(parsed: dict, max_edu: int = 5):
+    # NOTE: keep your existing personal details / skills / experience mapping above this.
+
+    # -------------------------
+    # EDUCATION mapping
+    # -------------------------
+    edu_list = (
+        parsed.get("education")
+        or parsed.get("educations")
+        or parsed.get("education_history")
+        or []
+    )
+
+    if not isinstance(edu_list, list):
+        edu_list = []
+
+    cleaned = []
+    for e in edu_list:
+        if not isinstance(e, dict):
+            continue
+
+        degree = (e.get("degree") or e.get("qualification") or e.get("title") or "").strip()
+        institution = (e.get("institution") or e.get("school") or e.get("university") or "").strip()
+        location = (e.get("location") or e.get("city") or "").strip()
+        start = (e.get("start_date") or e.get("start") or "").strip()
+        end = (e.get("end_date") or e.get("end") or "").strip()
+
+        if degree or institution:
+            cleaned.append(
+                {
+                    "degree": degree,
+                    "institution": institution,
+                    "location": location,
+                    "start": start,
+                    "end": end,
+                }
+            )
+
+    cleaned = cleaned[:max_edu]
+
+    st.session_state["num_education"] = max(1, len(cleaned))
+
+    for i in range(st.session_state["num_education"]):
+        row = cleaned[i] if i < len(cleaned) else {}
+        st.session_state[f"degree_{i}"] = row.get("degree", "")
+        st.session_state[f"institution_{i}"] = row.get("institution", "")
+        st.session_state[f"edu_location_{i}"] = row.get("location", "")
+        st.session_state[f"edu_start_{i}"] = row.get("start", "")
+        st.session_state[f"edu_end_{i}"] = row.get("end", "")
+
+    st.session_state["education_items"] = cleaned
 
 def get_credits_by_user_id(user_id: int) -> dict:
     user_id = int(user_id)
+
     row = fetchone(
         """
         SELECT
@@ -640,58 +675,80 @@ def get_credits_by_user_id(user_id: int) -> dict:
         """,
         (user_id, user_id, user_id, user_id),
     ) or {}
+
     return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
 
 
-def _get_credits_by_user_id_on_conn(conn, user_id: int) -> dict:
-    user_id = int(user_id)
-    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+def get_user_credits(email: str) -> dict:
+    email = (email or "").strip().lower()
+    if not email:
+        return {"cv": 0, "ai": 0}
+
+    uid = get_user_id_by_email(email)
+    if not uid:
+        return {"cv": 0, "ai": 0}
+
+    return get_credits_by_user_id(int(uid))
+
+
+
+
+def grant_starter_credits(user_id: int) -> None:
+    """
+    Grants starter credits once per user.
+    Safe due to UNIQUE(source).
+    """
+    with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
             """
-            SELECT
-              GREATEST(
-                COALESCE((SELECT SUM(cv_amount) FROM credit_grants
-                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
-                -
-                COALESCE((SELECT SUM(cv_amount) FROM credit_spends WHERE user_id=%s), 0),
-              0) AS cv,
-              GREATEST(
-                COALESCE((SELECT SUM(ai_amount) FROM credit_grants
-                          WHERE user_id=%s AND (expires_at IS NULL OR expires_at > NOW())), 0)
-                -
-                COALESCE((SELECT SUM(ai_amount) FROM credit_spends WHERE user_id=%s), 0),
-              0) AS ai
+            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+            VALUES (%s, %s, %s, %s, NULL)
+            ON CONFLICT (source) DO NOTHING
             """,
-            (user_id, user_id, user_id, user_id),
+            (
+                user_id,
+                f"starter_grant:{user_id}",
+                5,
+                5,
+            ),
         )
-        row = cur.fetchone() or {}
-        return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
+        conn.commit()
+
+def spend_ai_credit(email: str, source: str, amount: int = 1) -> bool:
+    email = (email or "").strip().lower()
+    if not email:
+        return False
+
+    # get uid
+    row = fetchone("SELECT id FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1", (email,))
+    if not row:
+        return False
+
+    uid = int(row["id"])
+    return spend_credits(uid, source=source, ai_amount=int(amount))
 
 
-def spend_credits_on_conn(conn, user_id: int, *, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
-    """
-    Atomic spend USING THE SAME CONNECTION.
-    """
+def spend_credits(user_id: int, source: str, cv_amount: int = 0, ai_amount: int = 0) -> bool:
     user_id = int(user_id)
     cv_amount = int(cv_amount or 0)
     ai_amount = int(ai_amount or 0)
-    source = (source or "").strip()
-    if not source:
-        return False
 
-    try:
-        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+    # transaction: must use a single connection
+    with get_conn() as conn:
+        cur = conn.cursor()
+        try:
+            # lock user row
             cur.execute("SELECT id FROM users WHERE id=%s FOR UPDATE", (user_id,))
             if not cur.fetchone():
                 conn.rollback()
                 return False
 
-            bal = _get_credits_by_user_id_on_conn(conn, user_id)
+            bal = get_credits_by_user_id(user_id)
 
-            if cv_amount > 0 and bal["cv"] < cv_amount:
+            if cv_amount and bal["cv"] < cv_amount:
                 conn.rollback()
                 return False
-            if ai_amount > 0 and bal["ai"] < ai_amount:
+            if ai_amount and bal["ai"] < ai_amount:
                 conn.rollback()
                 return False
 
@@ -703,292 +760,265 @@ def spend_credits_on_conn(conn, user_id: int, *, source: str, cv_amount: int = 0
                 (user_id, source, cv_amount, ai_amount),
             )
 
-        conn.commit()
-        return True
-    except Exception:
-        conn.rollback()
-        raise
+            conn.commit()
+            return True
+        except Exception:
+            conn.rollback()
+            raise
 
 
-def spend_credits(*args, **kwargs) -> bool:
+
+def _clear_education_persistence_for_new_cv():
     """
-    Backwards-compatible dispatcher.
-
-    Accepts:
-      1) spend_credits(conn, uid, source="x", cv_amount=1, ai_amount=0)
-      2) spend_credits(uid, source="x", cv=1, ai=0)
-
-    Also accepts cv_amount/ai_amount even in style #2, so old calls won't crash.
+    Clear education persistence so a new CV upload doesn't get overwritten by old backups.
     """
-    # ---- detect if first arg is a DB connection ----
-    if len(args) >= 2 and hasattr(args[0], "cursor"):
-        conn = args[0]
-        user_id = int(args[1])
-        source = (kwargs.get("source") or "").strip()
+    for k in list(st.session_state.keys()):
+        if k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_"):
+            st.session_state.pop(k, None)
 
-        cv_amount = kwargs.get("cv_amount", kwargs.get("cv", 0))
-        ai_amount = kwargs.get("ai_amount", kwargs.get("ai", 0))
-
-        return spend_credits_on_conn(
-            conn, user_id, source=source,
-            cv_amount=int(cv_amount or 0), ai_amount=int(ai_amount or 0)
-        )
-
-    # ---- style #2 (no conn provided) ----
-    if len(args) < 1:
-        return False
-
-    user_id = int(args[0])
-    source = (kwargs.get("source") or "").strip()
-
-    cv_amount = kwargs.get("cv_amount", kwargs.get("cv", 0))
-    ai_amount = kwargs.get("ai_amount", kwargs.get("ai", 0))
-
-    if not source:
-        return False
-
-    with get_conn() as conn:
-        return spend_credits_on_conn(
-            conn, user_id, source=source,
-            cv_amount=int(cv_amount or 0), ai_amount=int(ai_amount or 0)
-        )
+    st.session_state.pop("num_education", None)
+    st.session_state.pop("education_items", None)
+    st.session_state.pop("_edu_backup", None)
 
 
-def try_spend(user_id: int, *, source: str, cv: int = 0, ai: int = 0) -> bool:
+def restore_experience_from_parsed():
+    """Restore experience fields from last parsed CV if they went blank after reruns."""
+    if not st.session_state.get("_cv_autofill_enabled"):
+        return
+
+    parsed = st.session_state.get("_cv_parsed")
+    if not isinstance(parsed, dict):
+        return
+
+    exps = parsed.get("experiences") or []
+    if not isinstance(exps, list) or not exps:
+        return
+
+    count = min(len(exps), 5)
+
+    if st.session_state.get("num_experiences") in (None, 0, ""):
+        st.session_state["num_experiences"] = count
+
+    for i in range(count):
+        exp = exps[i] or {}
+
+        def _restore(key, value):
+            if st.session_state.get(key) in (None, "") and isinstance(value, str) and value.strip():
+                st.session_state[key] = value
+
+        _restore(f"job_title_{i}", exp.get("job_title", "") or "")
+        _restore(f"company_{i}", exp.get("company", "") or "")
+        _restore(f"exp_location_{i}", exp.get("location", "") or "")
+        _restore(f"start_date_{i}", exp.get("start_date", "") or "")
+        _restore(f"end_date_{i}", exp.get("end_date", "") or "")
+
+        desc = exp.get("description", "") or ""
+        if isinstance(desc, list):
+            desc = "\n".join([str(x) for x in desc if str(x).strip()])
+        _restore(f"description_{i}", desc)
+
+
+def _reset_outputs_on_new_cv():
     """
-    UI-friendly helper.
+    Clears derived/generated outputs when a new CV is uploaded.
     """
-    user_id = int(user_id)
-    source = (source or "").strip()
-    if not source:
-        return False
-    return bool(spend_credits(user_id, source=source, cv=int(cv or 0), ai=int(ai or 0)))
-
-
-def spend_ai_credit(email: str, *, source: str, amount: int = 1) -> bool:
-    """
-    Email → uid → spend AI credits (1 by default)
-    """
-    email = (email or "").strip().lower()
-    if not email:
-        return False
-    uid = get_user_id_by_email(email)
-    if not uid:
-        return False
-    return try_spend(int(uid), source=source, ai=int(amount or 1))
-
-# ---------- locked_action_button (compatible with BOTH of your call styles) ----------
-def locked_action_button(
-    label: str,
-    *,
-    key: str,
-    feature_label: str | None = None,   # your newer usage
-    action_label: str | None = None,    # your older usage
-    counter_key: str | None = None,
-    require_login: bool = True,
-    default_tab: str = "Sign in",
-    cooldown_name: str | None = None,
-    cooldown_seconds: int = 5,
-    disabled: bool = False,
-    **_ignored,  # absorbs unexpected kwargs safely
-) -> bool:
-    """
-    Gate + cooldown only.
-    IMPORTANT: does NOT clear state.
-    """
-    clicked = st.button(label, key=key, disabled=disabled)
-    if not clicked:
-        return False
-
-    # login gate
-    if require_login:
-        u = st.session_state.get("user") or {}
-        if not (isinstance(u, dict) and (u.get("email") or "").strip()):
-            st.toast(f"🔒 Sign in to {feature_label or action_label or 'use this feature'}", icon="🔒")
-            if "open_auth_modal" in globals():
-                open_auth_modal(default_tab)
-            st.stop()
-
-    # cooldown gate
-    if cooldown_name:
-        ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
-        if not ok:
-            st.warning(f"⏳ Please wait {left}s before trying again.")
-            st.stop()
-
-    return True
-
-def restore_protected_state_if_needed():
-    """
-    Safety no-op restore helper.
-    Keeps backward compatibility with older calls.
-    Does NOT clear or modify session state.
-    """
-    return
-
-def render_public_home():
-    """
-    Safe placeholder for guest / public landing.
-    Keeps app running if the real implementation was removed.
-    """
-    return
-
-
-
-# =========================
-# OUTPUT RESET (NO RECURSION)
-# Replace BOTH of your functions with these versions.
-# =========================
-
-def reset_outputs_only() -> None:
-    state_debug_capture("reset_outputs_only:before")
-    """
-    Clears only generated/derived outputs.
-    Does NOT touch user inputs (cv_*, skills_text, education fields, etc).
-    MUST NOT call clear_ai_upload_state_only() (prevents recursion).
-    """
-    keys_to_clear = [
-        "final_pdf_bytes",
-        "final_docx_bytes",
-        "download_ready",
-        "generated_cv",
-        "generated_cover_letter",
-        "generated_summary",
-        "suggested_bullets",
-        "ats_score",
-        "job_summary_ai",
-        "selected_template",
-    ]
-
-    snap = snapshot_protected_state("reset_outputs_only")
-    for k in keys_to_clear:
-        safe_pop_state(k)
-    restore_protected_state(snap)
-    state_debug_capture("reset_outputs_only:after")
-
-
-def clear_ai_upload_state_only() -> None:
-    state_debug_capture("clear_ai_upload_state_only:before")
-    """
-    Clears only upload/parse transient flags and any derived outputs.
-    (prevents recursion).
-    """
-    snap = snapshot_protected_state("clear_ai_upload_state_only")
-
     keys_to_clear = [
         "_cv_parsed",
         "_cv_autofill_enabled",
-        "_just_autofilled_from_cv",
-        "_last_cv_fingerprint",
-    ]
-
-    for k in keys_to_clear:
-        safe_pop_state(k)
-
-    for k in [
-        "final_pdf_bytes",
-        "final_docx_bytes",
-        "download_ready",
         "generated_cv",
         "generated_cover_letter",
         "generated_summary",
         "suggested_bullets",
         "ats_score",
+        "final_pdf_bytes",
+        "final_docx_bytes",
         "selected_template",
-    ]:
-        safe_pop_state(k)
+        "download_ready",
+    ]
+    for k in keys_to_clear:
+        st.session_state.pop(k, None)
 
-    restore_protected_state(snap)
-    state_debug_capture("clear_ai_upload_state_only:after")
 
-# ============================================================
-# POLICIES (MODAL ONLY — NO PAGE ROUTING)
-# ============================================================
-def ensure_policies_loaded() -> None:
-    if st.session_state.get("_policies_loaded"):
+def normalize_experience_state(max_roles: int = 5):
+    if st.session_state.get("num_experiences") is None:
+        st.session_state["num_experiences"] = st.session_state.get("parsed_num_experiences", 1)
+
+    for i in range(max_roles):
+        for k in ["job_title", "company", "exp_location", "start_date", "end_date", "description"]:
+            key = f"{k}_{i}"
+            if key in st.session_state and st.session_state[key] is None:
+                st.session_state[key] = ""
+
+        st.session_state.setdefault(f"job_title_{i}", "")
+        st.session_state.setdefault(f"company_{i}", "")
+        st.session_state.setdefault(f"exp_location_{i}", "")
+        st.session_state.setdefault(f"start_date_{i}", "")
+        st.session_state.setdefault(f"end_date_{i}", "")
+        st.session_state.setdefault(f"description_{i}", "")
+
+
+# -------------------------
+# Word limit helpers
+# -------------------------
+MAX_PANEL_WORDS = 100
+MAX_DOC_WORDS = 300
+MAX_LETTER_WORDS = 300
+
+
+def limit_words(text: str, max_words: int) -> str:
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words])
+
+
+def clean_cover_letter_body(text: str) -> str:
+    cleaned_lines = []
+    for line in text.splitlines():
+        s = line.strip()
+        if s.startswith("[") and s.endswith("]"):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
+
+
+def enforce_word_limit(text: str, max_words: int, label: str = "") -> str:
+    words = text.split()
+    if len(words) > max_words:
+        st.warning(
+            f"{label.capitalize()} is limited to {max_words} words. "
+            f"Currently {len(words)}; extra words will be ignored in the download."
+        )
+        return " ".join(words[:max_words])
+    return text
+
+
+def backup_education_state(max_rows: int = 5):
+    edu_rows = []
+    for i in range(max_rows):
+        row = {
+            "degree": (st.session_state.get(f"degree_{i}", "") or "").strip(),
+            "institution": (st.session_state.get(f"institution_{i}", "") or "").strip(),
+            "location": (st.session_state.get(f"edu_location_{i}", "") or "").strip(),
+            "start": (st.session_state.get(f"edu_start_{i}", "") or "").strip(),
+            "end": (st.session_state.get(f"edu_end_{i}", "") or "").strip(),
+        }
+        if any(row.values()):
+            edu_rows.append(row)
+
+    if edu_rows:
+        st.session_state["_edu_backup"] = edu_rows
+
+
+def restore_education_state(max_rows: int = 5):
+    if st.session_state.pop("_skip_restore_education_once", False):
         return
 
-    base = os.path.join(os.path.dirname(__file__), "policies")
-    mapping = {
-        "accessibility": ("Accessibility", "accessibility.md"),
-        "cookies": ("Cookie Policy", "cookie_policy.md"),
-        "privacy": ("Privacy Policy", "privacy_policy.md"),
-        "terms": ("Terms of Use", "terms_of_use.md"),
+    backup = st.session_state.get("_edu_backup")
+    if not isinstance(backup, list) or not backup:
+        return
+
+    for i in range(max_rows):
+        if (st.session_state.get(f"degree_{i}", "") or "").strip() or (st.session_state.get(f"institution_{i}", "") or "").strip():
+            return
+
+    for i, row in enumerate(backup[:max_rows]):
+        st.session_state[f"degree_{i}"] = row.get("degree", "")
+        st.session_state[f"institution_{i}"] = row.get("institution", "")
+        st.session_state[f"edu_location_{i}"] = row.get("location", "")
+        st.session_state[f"edu_start_{i}"] = row.get("start", "")
+        st.session_state[f"edu_end_{i}"] = row.get("end", "")
+
+# -------------------------
+# Resend helper (kept local)
+# -------------------------
+RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
+
+
+def _send_password_reset_email_local_DO_NOT_USE(email: str, token: str) -> None:
+    key = (os.getenv("RESEND_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("RESEND_API_KEY is missing in environment variables.")
+
+    from_email = (os.getenv("FROM_EMAIL") or "").strip() or "onboarding@resend.dev"
+    app_url = (os.getenv("APP_URL") or "").strip()
+
+    if app_url:
+        reset_link = f"{app_url.rstrip('/')}/?reset_token={token}"
+        body_html = f"""
+        <p>Click to reset your password:</p>
+        <p><a href="{reset_link}">{reset_link}</a></p>
+        <p>If the link doesn’t work, use this reset token: <b>{token}</b></p>
+        """
+    else:
+        body_html = f"""
+        <p>Your password reset token is:</p>
+        <p><b>{token}</b></p>
+        """
+
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
     }
 
-    policies = {}
-    for slug, (title, filename) in mapping.items():
-        path = os.path.join(base, filename)
-        body = ""
-        try:
-            if os.path.exists(path):
-                with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                    body = f.read()
-        except Exception:
-            body = ""
-        policies[slug] = {"title": title, "body": body}
+    payload = {
+        "from": from_email,
+        "to": [email],
+        "subject": "Reset your password",
+        "html": body_html,
+    }
 
-    st.session_state["_policies_loaded"] = True
-    st.session_state["_policies"] = policies
+    r = requests.post(
+        "https://api.resend.com/emails",
+        headers=headers,
+        json=payload,
+        timeout=20,
+    )
 
-def open_policy(scope: str, slug: str) -> None:
-    st.session_state[f"{scope}_policy_open"] = True
-    st.session_state[f"{scope}_policy_slug"] = slug
+    if r.status_code >= 400:
+        raise RuntimeError(f"Resend failed: {r.status_code} {r.text}")
 
-def close_policy(scope: str) -> None:
-    st.session_state[f"{scope}_policy_open"] = False
-    st.session_state[f"{scope}_policy_slug"] = None
 
-def _policy_rerun():
-    try:
-        st.rerun()
-    except Exception:
-        st.experimental_rerun()
+def _get_openai_client() -> OpenAI:
+    api_key = os.getenv("OPENAI_API_KEY")
 
-def render_policy_modal(scope: str) -> None:
-    open_key = f"{scope}_policy_open"
-    slug_key = f"{scope}_policy_slug"
-
-    st.session_state.setdefault(open_key, False)
-    st.session_state.setdefault(slug_key, None)
-
-    if not st.session_state.get(open_key):
-        return
-
-    ensure_policies_loaded()
-
-    slug = st.session_state.get(slug_key) or "privacy"
-    pol = (st.session_state.get("_policies") or {}).get(slug) or {}
-    title = pol.get("title") or "Policy"
-    body = pol.get("body") or ""
-
-    @st.dialog(title)
-    def _dlg():
-        if body.strip():
-            st.markdown(body)
+    if not api_key:
+        if "OPENAI_API_KEY" in st.secrets:
+            api_key = st.secrets["OPENAI_API_KEY"]
+        elif "OPENAI_KEY" in st.secrets:
+            api_key = st.secrets["OPENAI_KEY"]
+        elif "openai_api_key" in st.secrets:
+            api_key = st.secrets["openai_api_key"]
+        elif "openai_key" in st.secrets:
+            api_key = st.secrets["openai_key"]
         else:
-            st.info("Policy content not found in this deployment.")
+            for value in st.secrets.values():
+                if isinstance(value, str) and value.startswith("sk-"):
+                    api_key = value
+                    break
 
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button("← Back", key=f"{scope}_policy_back"):
-                close_policy(scope)
-                _policy_rerun()
-        with b2:
-            if st.button("Close", key=f"{scope}_policy_close"):
-                close_policy(scope)
-                _policy_rerun()
+    if not api_key:
+        raise RuntimeError(
+            "No OpenAI API key found. Set OPENAI_API_KEY env var or add it to Streamlit secrets."
+        )
 
-# ============================================================
-# CV FILE READER (ONE COPY ONLY)
-# ============================================================
-def _read_uploaded_cv_bytes_to_text(name: str, data: bytes) -> str:
-    """Read PDF/DOCX/TXT bytes into text."""
-    if not data:
+    return OpenAI(api_key=api_key)
+
+
+def _is_logged_in_user(u) -> bool:
+    return bool(u and isinstance(u, dict) and u.get("email"))
+
+
+def _read_uploaded_cv_to_text(uploaded_cv) -> str:
+    if uploaded_cv is None:
         return ""
 
-    name = (name or "").lower()
+    name = (uploaded_cv.name or "").lower()
     ext = os.path.splitext(name)[1]
+    data: bytes = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
+
+    if not data:
+        return ""
 
     if ext == ".txt":
         try:
@@ -997,12 +1027,20 @@ def _read_uploaded_cv_bytes_to_text(name: str, data: bytes) -> str:
             return data.decode("latin-1", errors="ignore")
 
     if ext == ".docx":
-        import docx
+        try:
+            import docx
+        except ImportError:
+            raise RuntimeError("Missing dependency: python-docx (pip install python-docx)")
+
         doc = docx.Document(io.BytesIO(data))
         return "\n".join(p.text for p in doc.paragraphs if p.text)
 
     if ext == ".pdf":
-        from pypdf import PdfReader
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise RuntimeError("Missing dependency: pypdf (pip install pypdf)")
+
         reader = PdfReader(io.BytesIO(data))
         parts = []
         for page in reader.pages:
@@ -1013,17 +1051,352 @@ def _read_uploaded_cv_bytes_to_text(name: str, data: bytes) -> str:
 
     return ""
 
-# ============================================================
-# COOLDOWN (ONE COPY ONLY)
-# ============================================================
-def cooldown_ok(action_key: str, seconds: int = COOLDOWN_SECONDS):
-    now = time.monotonic()
-    last = st.session_state.get(f"_cooldown_{action_key}", 0.0)
-    remaining = seconds - (now - last)
-    if remaining > 0:
-        return False, int(remaining) + 1
-    st.session_state[f"_cooldown_{action_key}"] = now
-    return True, 0
+
+def locked_action_button(
+    label: str,
+    *,
+    key: str,
+    feature_label: str = "This feature",
+    counter_key: str | None = None,
+    cost: int = 1,
+    require_login: bool = True,
+    default_tab: str = "Sign in",
+    cooldown_name: str | None = None,
+    cooldown_seconds: int = 5,
+    disabled: bool = False,
+    **_ignore,
+) -> bool:
+    user = st.session_state.get("user")
+    is_logged_in = _is_logged_in_user(user)
+
+    clicked = st.button(label, key=key, disabled=disabled)
+    if not clicked:
+        return False
+
+    if require_login and not is_logged_in:
+        st.warning("Sign in to unlock this feature.")
+        open_auth_modal(default_tab)
+        st.stop()
+
+    if cooldown_name:
+        ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
+        if not ok:
+            st.warning(f"⏳ Please wait {left}s before trying again.")
+            st.stop()
+
+    if counter_key:
+        if not has_free_quota(counter_key, cost, feature_label):
+            st.stop()
+
+    return True
+
+
+# ------------------------------------------------------------
+# Ledger-only usage counters (no credits decrement here)
+# ------------------------------------------------------------
+from db import fetchone, execute
+
+
+def increment_usage_counter(email: str, counter_key: str, amount: int = 1) -> None:
+    email = (email or "").strip().lower()
+    amount = int(amount or 1)
+
+    if counter_key not in {
+        "upload_parses",
+        "summary_uses",
+        "cover_uses",
+        "bullets_uses",
+        "cv_generations",
+        "job_summary_uses",
+    }:
+        return
+
+    execute(
+        f"""
+        UPDATE users
+        SET {counter_key} = COALESCE({counter_key}, 0) + %s
+        WHERE LOWER(email) = LOWER(%s)
+        """,
+        (amount, email),
+    )
+
+
+# ------------------------------------------------------------
+# Stripe event idempotency + ledger grants (NO raw cursors)
+# ------------------------------------------------------------
+def has_stripe_event(stripe_event_id: str) -> bool:
+    stripe_event_id = (stripe_event_id or "").strip()
+    if not stripe_event_id:
+        return False
+
+    row = fetchone(
+        "SELECT 1 AS ok FROM stripe_events WHERE event_id = %s LIMIT 1",
+        (stripe_event_id,),
+    )
+    return bool(row)
+
+
+def record_stripe_event(stripe_event_id: str) -> None:
+    stripe_event_id = (stripe_event_id or "").strip()
+    if not stripe_event_id:
+        return
+
+    execute(
+        """
+        INSERT INTO stripe_events (event_id)
+        VALUES (%s)
+        ON CONFLICT (event_id) DO NOTHING
+        """,
+        (stripe_event_id,),
+    )
+
+
+def create_credit_grant(
+    user_id: int,
+    cv_amount: int = 0,
+    ai_amount: int = 0,
+    source: str = "manual",
+    expires_in_days: int | None = None,
+) -> bool:
+    """
+    Ledger grant. Idempotency should be handled by UNIQUE(source).
+    Returns True if inserted, False if duplicate.
+    """
+    user_id = int(user_id)
+    cv_amount = int(cv_amount or 0)
+    ai_amount = int(ai_amount or 0)
+    source = (source or "").strip()
+    if not source:
+        raise ValueError("Missing source for credit grant")
+
+    if expires_in_days is None:
+        row = fetchone(
+            """
+            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+            VALUES (%s, %s, %s, %s, NULL)
+            ON CONFLICT (source) DO NOTHING
+            RETURNING id
+            """,
+            (user_id, source, cv_amount, ai_amount),
+        )
+    else:
+        days = int(expires_in_days)
+        row = fetchone(
+            """
+            INSERT INTO credit_grants (user_id, source, cv_amount, ai_amount, expires_at)
+            VALUES (%s, %s, %s, %s, NOW() + (%s || ' days')::interval)
+            ON CONFLICT (source) DO NOTHING
+            RETURNING id
+            """,
+            (user_id, source, cv_amount, ai_amount, days),
+        )
+
+    return bool(row)
+
+
+# =========================
+# CREDITS LEDGER (grants/spends) + SUBSCRIPTIONS + REPAIRS
+# =========================
+def ensure_credit_tables(conn) -> None:
+    """
+    Creates / repairs credit_grants, credit_spends, subscriptions tables.
+    Safe to run on every boot.
+    """
+    with conn.cursor() as cur:
+        # -------------------------
+        # credit_grants
+        # -------------------------
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS credit_grants (
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            cv_amount INTEGER NOT NULL DEFAULT 0,
+            ai_amount INTEGER NOT NULL DEFAULT 0,
+            expires_at TIMESTAMP NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        );
+        """)
+
+        # Add missing columns (safe)
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS user_id INTEGER;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS source TEXT;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS cv_amount INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS ai_amount INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL;")
+        cur.execute("ALTER TABLE credit_grants ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();")
+
+        # Repair: if Railway UI created id without sequence/default, force it
+        cur.execute("CREATE SEQUENCE IF NOT EXISTS credit_grants_id_seq;")
+        cur.execute("""
+            ALTER TABLE credit_grants
+            ALTER COLUMN id SET DEFAULT nextval('credit_grants_id_seq');
+        """)
+        cur.execute("""
+            SELECT setval(
+                'credit_grants_id_seq',
+                COALESCE((SELECT MAX(id) FROM credit_grants), 0) + 1,
+                false
+            );
+        """)
+
+        # -------------------------
+        # credit_spends
+        # -------------------------
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS credit_spends (
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            cv_amount INTEGER NOT NULL DEFAULT 0,
+            ai_amount INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT now()
+        );
+        """)
+
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS user_id INTEGER;")
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS source TEXT;")
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS cv_amount INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS ai_amount INTEGER NOT NULL DEFAULT 0;")
+        cur.execute("ALTER TABLE credit_spends ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();")
+
+        cur.execute("CREATE SEQUENCE IF NOT EXISTS credit_spends_id_seq;")
+        cur.execute("""
+            ALTER TABLE credit_spends
+            ALTER COLUMN id SET DEFAULT nextval('credit_spends_id_seq');
+        """)
+        cur.execute("""
+            SELECT setval(
+                'credit_spends_id_seq',
+                COALESCE((SELECT MAX(id) FROM credit_spends), 0) + 1,
+                false
+            );
+        """)
+
+        # -------------------------
+        # subscriptions
+        # -------------------------
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            id BIGSERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            stripe_customer_id TEXT NULL,
+            stripe_subscription_id TEXT NULL,
+            plan TEXT NOT NULL DEFAULT 'free',
+            status TEXT NOT NULL DEFAULT 'inactive',
+            current_period_end TIMESTAMP NULL,
+            cancel_at_period_end BOOLEAN NOT NULL DEFAULT false,
+            created_at TIMESTAMP NOT NULL DEFAULT now(),
+            updated_at TIMESTAMP NOT NULL DEFAULT now()
+        );
+        """)
+
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS user_id INTEGER;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_customer_id TEXT NULL;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS stripe_subscription_id TEXT NULL;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'free';")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'inactive';")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS current_period_end TIMESTAMP NULL;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS cancel_at_period_end BOOLEAN NOT NULL DEFAULT false;")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT now();")
+        cur.execute("ALTER TABLE subscriptions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT now();")
+
+    conn.commit()
+
+
+
+
+# =========================
+# 4) STREAMLIT: show "Pro active until X" + ledger credits
+# Replace your sidebar "get_user_credits(email)" calls with this pattern
+# =========================
+
+def get_active_subscription_for_user(user_id: int):
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT plan, status, current_period_end, cancel_at_period_end
+                FROM subscriptions
+                WHERE user_id = %s
+                  AND status IN ('active', 'trialing')
+                ORDER BY current_period_end DESC NULLS LAST
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            return cur.fetchone()
+
+def sync_session_plan_and_credits() -> None:
+    session_user = st.session_state.get("user") or {}
+    email = session_user.get("email")
+    if not email:
+        return
+
+    uid = get_user_id(email)
+    if not uid:
+        return
+
+    credits = get_credits_by_user_id(int(uid))
+   
+
+
+def _as_utc_dt(ts):
+    if not ts:
+        return None
+    if getattr(ts, "tzinfo", None) is None:
+        return ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc)
+
+
+def format_dt(ts) -> str:
+    ts = _as_utc_dt(ts)
+    if not ts:
+        return ""
+    return ts.strftime("%d %b %Y")
+
+
+def sync_session_plan_and_credits() -> None:
+    session_user = st.session_state.get("user") or {}
+    email = (session_user.get("email") or "").strip().lower()
+    if not email:
+        return
+
+    # Optional: keep session user aligned with DB
+    try:
+        refresh_session_user_from_db()
+    except Exception:
+        pass
+
+    session_user = st.session_state.get("user") or {}
+    uid = session_user.get("id") or get_user_id(email)
+    if not uid:
+        return
+
+    credits = get_user_credits(email)  # must return {"cv": int, "ai": int}
+    sub = get_active_subscription_for_user(int(uid))  # can return None
+
+    now_utc = datetime.now(timezone.utc)
+
+    plan_code = (session_user.get("plan") or "free").strip().lower()
+    plan_display = plan_code
+
+    if sub:
+        period_end = _as_utc_dt(sub.get("current_period_end"))
+        sub_plan = (sub.get("plan") or plan_code or "free").strip().lower()
+
+        if period_end and period_end > now_utc:
+            plan_code = sub_plan
+            plan_display = f"{sub_plan} (active until {format_dt(period_end)})"
+        else:
+            plan_display = plan_code
+
+    st.session_state["user"]["plan"] = plan_code
+    st.session_state["user"]["plan_display"] = plan_display
+
+    # ✅ persist credits into session so sidebar/UI doesn’t show 0
+    st.session_state["user"]["cv_remaining"] = int(credits.get("cv", 0) or 0)
+    st.session_state["user"]["ai_remaining"] = int(credits.get("ai", 0) or 0)
 
 
 # -------------------------
@@ -1402,13 +1775,9 @@ div[role="dialog"] .stButton button{
     unsafe_allow_html=True,
 )
 
-# run early every script start
-restore_protected_state_if_needed()
 
+import re
 
-# =========================
-# EMAIL VALIDATION
-# =========================
 EMAIL_RE = re.compile(
     r"^(?=.{3,254}$)[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
@@ -1419,11 +1788,230 @@ def normalize_email(email: str) -> str:
     return (email or "").strip().lower()
 
 def is_valid_email(email: str) -> bool:
-    return bool(EMAIL_RE.match(normalize_email(email)))
+    email = normalize_email(email)
+    return bool(EMAIL_RE.match(email))
+
+# =========================
+# POLICY PAGE VIEW
+# =========================
+def show_policy_page() -> bool:
+    view = st.session_state.get("policy_view")
+    if not view:
+        return False
+
+    title_map = {
+        "accessibility": "Accessibility",
+        "cookies": "Cookie Policy",
+        "privacy": "Privacy Policy",
+        "terms": "Terms of Use",
+    }
+
+    file_map = {
+        "accessibility": "policies/accessibility.md",
+        "cookies": "policies/cookie_policy.md",
+        "privacy": "policies/privacy_policy.md",
+        "terms": "policies/terms_of_use.md",
+    }
+
+    st.title(title_map.get(view, "Policy"))
+    body = _read_policy_file(file_map.get(view, ""))
+
+    if body.strip():
+        st.markdown(body)
+    else:
+        st.info("Policy content not found in this deployment. Add the markdown file under /policies.")
+
+    if st.button("← Back", key="btn_policy_back"):
+        st.session_state["policy_view"] = None
+        st.session_state["_just_returned_from_policy"] = True
+
+        # restore only if you have a snapshot saved
+        try:
+            restore_form_state()
+        except Exception:
+            pass
+
+        st.rerun()
+
+    return True
+
+# =========================
+# POLICY FILE READER
+# =========================
+def _read_policy_file(rel_path: str) -> str:
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+        fp = os.path.join(here, rel_path)
+        if os.path.exists(fp):
+            with open(fp, "r", encoding="utf-8", errors="ignore") as f:
+                return f.read()
+    except Exception:
+        pass
+    return ""
+
+# =========================
+# INIT (run once, early)
+# =========================
+init_db()
+verify_postgres_connection()
+
+st.session_state.setdefault("user", None)
+st.session_state.setdefault("accepted_policies", False)
+st.session_state.setdefault("policy_view", None)
+st.session_state.setdefault("guest_started_builder", False)
+
+# ✅ If we are viewing a policy page, render ONLY that and stop
+if show_policy_page():
+    st.stop()
 
 
 # =========================
-# AUTH MODAL STATE (DEFINE ONCE)
+# FORM SNAPSHOT / RESTORE
+# =========================
+
+FORM_KEYS_TO_PRESERVE = [
+    # Section 1
+    "full_name", "title", "email", "phone", "location", "summary",
+
+    # CV upload / parsing
+    "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
+    "_last_cv_fingerprint", "cv_uploader",
+
+    # Education/experience/skills structures you use
+    "skills", "experiences", "education_items", "references",
+
+    # Target job / cover letter
+    "job_description", "_last_jd_fp", "job_summary_ai",
+    "cover_letter", "cover_letter_box", "selected_job",
+
+    # Template
+    "template_label",
+]
+
+def snapshot_form_state():
+    st.session_state["_form_snapshot"] = {
+        k: v for k, v in st.session_state.items()
+        if not k.startswith("_")
+    }
+
+def restore_form_state():
+    snap = st.session_state.get("_form_snapshot", {})
+    for k, v in snap.items():
+        st.session_state[k] = v
+
+
+
+
+# =========================
+# RESTORE SNAPSHOT ON RETURN
+# =========================
+if st.session_state.get("_just_returned_from_policy"):
+    restore_form_state()
+    st.session_state["_just_returned_from_policy"] = False
+
+
+
+# =========================
+# CONSENT GATE (POST-LOGIN ONLY) - FAIL CLOSED
+# =========================
+def show_consent_gate() -> None:
+    user = st.session_state.get("user")
+    if not (isinstance(user, dict) and user.get("email")):
+        return
+
+    email = (user.get("email") or "").strip().lower()
+    if not email:
+        return
+
+    # Always re-check DB as source of truth
+    try:
+        accepted_in_db = has_accepted_policies(email)  # already returns bool
+    except Exception:
+        import traceback
+        st.error("Policy check failed. See details below.")
+        st.code(traceback.format_exc())
+        st.stop()
+
+
+    # Keep session in sync (prevents weird skips)
+    st.session_state["accepted_policies"] = bool(accepted_in_db)
+
+    if accepted_in_db:
+        return
+
+    # ---- UI (unchanged) ----
+    st.markdown(
+        """
+        <div style="
+            border-radius: 12px;
+            padding: 18px 20px;
+            margin-top: 20px;
+            background: #111827;
+            border: 1px solid #1f2937;
+            color: rgba(255,255,255,0.95);
+        ">
+            <h3 style="margin-top:0;">Before you continue</h3>
+            <p style="font-size:14px; line-height:1.5;">
+                We use cookies and process your data to run this CV builder,
+                improve the service, and keep your account secure.
+                Please open and read the following policies:
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        if st.button("Cookie Policy", key="btn_policy_cookies"):
+            snapshot_form_state()
+            st.session_state["policy_view"] = "cookies"
+            st.rerun()
+    with c2:
+        if st.button("Privacy Policy", key="btn_policy_privacy"):
+            snapshot_form_state()
+            st.session_state["policy_view"] = "privacy"
+            st.rerun()
+    with c3:
+        if st.button("Terms of Use", key="btn_policy_terms"):
+            snapshot_form_state()
+            st.session_state["policy_view"] = "terms"
+            st.rerun()
+
+    agree = st.checkbox(
+        "I agree to the Cookie Policy, Privacy Policy and Terms of Use",
+        key="chk_policy_agree",
+    )
+
+    if st.button("Accept and continue", key="btn_policy_accept"):
+        if not agree:
+            st.warning("Please tick the checkbox to accept.")
+            st.stop()
+
+        try:
+            mark_policies_accepted(email)
+        except Exception as e:
+            st.error(f"Could not save your acceptance. Please try again. ({repr(e)})")
+            st.stop()
+
+        # Re-check DB after write (authoritative)
+        try:
+            st.session_state["accepted_policies"] = has_accepted_policies(email)
+        except Exception as e:
+            # If DB read fails after write, still block to be safe
+            st.error(f"Saved acceptance, but could not verify. Please refresh. ({repr(e)})")
+            st.stop()
+
+        st.rerun()
+
+    st.info("Please accept to continue using the site.")
+    st.stop()
+
+
+
+
+# =========================
+# AUTH MODAL (friendly box) - define ONCE
 # =========================
 st.session_state.setdefault("auth_modal_open", False)
 st.session_state.setdefault("auth_modal_tab", "Sign in")
@@ -1452,267 +2040,6 @@ def gate_premium(action_label: str = "use this feature", tab: str = "Sign in") -
     open_auth_modal(tab)
     return False
 
-def set_logged_in_user(user: dict) -> None:
-    """
-    Sets session user ONLY. Does not touch CV state.
-    """
-    if not (isinstance(user, dict) and user.get("email")):
-        return
-
-    st.session_state["user"] = user
-
-    # keep these consistent
-    st.session_state["accepted_policies"] = bool(user.get("accepted_policies"))
-    st.session_state["chk_policy_agree"] = False
-
-    # close auth modal
-    st.session_state["auth_modal_open"] = False
-    st.rerun()
-
-def do_logout() -> None:
-    """
-    Logout should NOT wipe CV draft state (your requirement).
-    It should only remove identity + gating flags.
-    """
-    st.session_state["user"] = None
-    st.session_state["user_id"] = None
-
-    st.session_state["accepted_policies"] = False
-    st.session_state["chk_policy_agree"] = False
-
-    st.session_state["auth_modal_open"] = False
-    st.session_state["auth_modal_tab"] = "Sign in"
-    st.session_state["auth_modal_epoch"] = st.session_state.get("auth_modal_epoch", 0) + 1
-
-    st.rerun()
-
-
-# =========================
-# CONSENT GATE (POST-LOGIN ONLY) - FAIL CLOSED
-# Policy readouts are MODAL ONLY (no accept inside policy modal)
-# =========================
-def show_consent_gate() -> None:
-    user = st.session_state.get("user")
-    if not (isinstance(user, dict) and user.get("email")):
-        return
-
-    email = normalize_email(user.get("email"))
-    if not email:
-        return
-
-    try:
-        accepted_in_db = bool(has_accepted_policies(email))
-    except Exception as e:
-        st.error(f"Policy check failed. Please refresh and try again. ({repr(e)})")
-        st.stop()
-
-    st.session_state["accepted_policies"] = accepted_in_db
-    if accepted_in_db:
-        return
-
-    st.markdown(
-        """
-        <div style="
-            border-radius: 12px;
-            padding: 18px 20px;
-            margin-top: 20px;
-            background: #111827;
-            border: 1px solid #1f2937;
-            color: rgba(255,255,255,0.95);
-        ">
-            <h3 style="margin-top:0;">Before you continue</h3>
-            <p style="font-size:14px; line-height:1.5;">
-                We use cookies and process your data to run this CV builder,
-                improve the service, and keep your account secure.
-                Please open and read the following policies:
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        if st.button("Cookie Policy", key="gate_open_cookies"):
-            open_policy("gate", "cookies")
-    with c2:
-        if st.button("Privacy Policy", key="gate_open_privacy"):
-            open_policy("gate", "privacy")
-    with c3:
-        if st.button("Terms of Use", key="gate_open_terms"):
-            open_policy("gate", "terms")
-
-    agree = st.checkbox(
-        "I agree to the Cookie Policy, Privacy Policy and Terms of Use",
-        key="chk_policy_agree",
-    )
-
-    if st.button("Accept and continue", key="btn_policy_accept"):
-        if not agree:
-            st.warning("Please tick the checkbox to accept.")
-            st.stop()
-
-        try:
-            mark_policies_accepted(email)
-        except Exception as e:
-            st.error(f"Could not save your acceptance. Please try again. ({repr(e)})")
-            st.stop()
-
-        # update session
-        u = st.session_state.get("user") or {}
-        if isinstance(u, dict):
-            u["accepted_policies"] = True
-            st.session_state["user"] = u
-
-        st.session_state["accepted_policies"] = True
-        st.session_state["chk_policy_agree"] = False
-        st.rerun()
-
-    render_policy_modal("gate")
-    st.info("Please accept to continue using the site.")
-    st.stop()
-
-
-# =========================
-# AUTH UI
-# =========================
-def auth_ui():
-    tab_login, tab_register, tab_forgot = st.tabs(
-        ["Sign in", "Create account", "Forgot password"]
-    )
-
-    # ---- LOGIN TAB ----
-    with tab_login:
-        login_email = st.text_input("Email", key="auth_login_email")
-        login_password = st.text_input("Password", type="password", key="auth_login_password")
-
-        if st.button("Sign in", key="auth_btn_login"):
-            if not login_email or not login_password:
-                st.error("Please enter both email and password.")
-                st.stop()
-
-            login_email_n = normalize_email(login_email)
-            if not is_valid_email(login_email_n):
-                st.error("Please enter a valid email address.")
-                st.stop()
-
-            user = authenticate_user(login_email_n, login_password)
-            if user:
-                st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
-                set_logged_in_user(user)
-            else:
-                st.error("Invalid email or password.")
-
-    # ---- REGISTER TAB ----
-    with tab_register:
-        reg_name = st.text_input("Full name", key="auth_reg_name")
-        reg_email = st.text_input("Email", key="auth_reg_email")
-        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
-        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
-
-        reg_referral_code = st.text_input(
-            "Referral code (optional)",
-            key="auth_reg_referral_code",
-            help="If a friend invited you, paste their referral code here.",
-        )
-
-        if st.button("Create account", key="auth_btn_register"):
-            if not reg_email or not reg_password or not reg_password2:
-                st.error("Please fill in all required fields.")
-                st.stop()
-
-            if reg_password != reg_password2:
-                st.error("Passwords do not match.")
-                st.stop()
-
-            reg_email_n = normalize_email(reg_email)
-            if not is_valid_email(reg_email_n):
-                st.error("Please enter a valid email address (e.g. name@example.com).")
-                st.stop()
-
-            referral_code = None
-            if reg_referral_code.strip():
-                ref_user = get_user_by_referral_code(reg_referral_code.strip())
-                if not ref_user:
-                    st.error("That referral code is not valid.")
-                    st.stop()
-                referral_code = reg_referral_code.strip().upper()
-
-            ok = create_user(
-                email=reg_email_n,
-                password=reg_password,
-                full_name=reg_name,
-                referred_by=referral_code,
-            )
-            if not ok:
-                st.error("That email is already registered.")
-                st.stop()
-
-            new_user = get_user_by_email(reg_email_n)
-            if new_user and new_user.get("id") is not None:
-                # must exist in your codebase
-                grant_starter_credits(int(new_user["id"]))
-
-            if referral_code:
-                try:
-                    apply_referral_bonus(
-                        new_user_email=reg_email_n,
-                        referral_code=referral_code,
-                    )
-                except Exception:
-                    pass
-
-            user = authenticate_user(reg_email_n, reg_password)
-            if user:
-                st.session_state["accepted_policies"] = False
-                st.session_state["chk_policy_agree"] = False
-                st.success("Account created. Please accept policies to continue.")
-                set_logged_in_user(user)
-            else:
-                st.success("Account created. Please sign in.")
-
-    # ---- FORGOT PASSWORD TAB ----
-    with tab_forgot:
-        st.write("If you've forgotten your password, you can reset it here.")
-
-        st.subheader("1. Request a reset link")
-        fp_email = st.text_input("Email used for your account", key="auth_fp_email")
-
-        if st.button("Send reset link", key="auth_btn_send_reset"):
-            if not fp_email:
-                st.error("Please enter your email.")
-            else:
-                try:
-                    token = create_password_reset_token(fp_email)
-                    if token:
-                        send_password_reset_email(fp_email, token)
-                    st.success("If this email is registered, a reset link has been sent.")
-                except Exception as e:
-                    st.error(f"Error while sending reset email: {e}")
-
-        st.markdown("---")
-        st.subheader("2. Set a new password using your reset token")
-
-        fp_token = st.text_input("Reset token (from the email)", key="auth_fp_token")
-        fp_new_pwd = st.text_input("New password", type="password", key="auth_fp_new_pwd")
-        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="auth_fp_new_pwd2")
-
-        if st.button("Set new password", key="auth_btn_do_reset"):
-            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
-                st.error("Please fill in all fields.")
-            elif fp_new_pwd != fp_new_pwd2:
-                st.error("Passwords do not match.")
-            else:
-                ok = reset_password_with_token(fp_token, fp_new_pwd)
-                if ok:
-                    st.success("Password reset successfully. You can now sign in.")
-                else:
-                    st.error("Invalid or expired reset token. Please request a new reset link.")
-
-
-# =========================
-# AUTH DIALOG (DEFINED ONCE)
-# =========================
 @st.dialog("Welcome back 👋", width="large")
 def _auth_dialog() -> None:
     st.markdown(
@@ -1739,50 +2066,553 @@ def _auth_dialog() -> None:
     preferred = st.session_state.get("auth_modal_tab", "Sign in")
     st.caption(f"Tip: You selected **{preferred}**")
 
+    # Your real auth renderer
     auth_ui()
 
-    if st.button("Close", key=f"auth_modal_close_{st.session_state.get('auth_modal_epoch', 0)}"):
-        close_auth_modal()
+    c1, c2 = st.columns([1, 1])
+    with c2:
+        if st.button("Close", key=f"auth_modal_close_{st.session_state['auth_modal_epoch']}"):
+            close_auth_modal()
+def set_logged_in_user(user: dict) -> None:
+    if not (isinstance(user, dict) and user.get("email")):
+        return
+
+    st.session_state["user"] = user
+
+    # set from DB truth
+    st.session_state["accepted_policies"] = bool(user.get("accepted_policies"))
+    st.session_state["chk_policy_agree"] = False
+    st.session_state["policy_view"] = None
+
+    st.session_state["auth_modal_open"] = False
+    st.rerun()
 
 def render_auth_modal_if_open() -> None:
     if st.session_state.get("auth_modal_open", False):
         _auth_dialog()
 
+def _auth_dialog() -> None:
+    if not st.session_state.get("auth_modal_open", False):
+        return
 
-state_debug_capture("run:start")
+    @st.dialog("Welcome back 👋", width="large")
+    def _dlg():
+        st.markdown(
+            """
+            <div style="
+                padding: 6px 0 14px 0;
+                opacity: 0.9;
+                font-size: 14px;
+            ">
+                Sign in to unlock the tools. Create a modern CV, generate tailored cover letters,
+                and use AI improvements. Your data stays private to your account.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        left, right = st.columns([3, 1], gap="large")
+
+        with left:
+            auth_ui()
+
+            c1, c2 = st.columns([1, 1])
+            with c2:
+                if st.button(
+                    "Close",
+                    key=f"auth_modal_close_{st.session_state.get('auth_modal_epoch', 0)}",
+                    use_container_width=True,
+                ):
+                    close_auth_modal()
+                    st.rerun()
+
+        with right:
+            st.markdown(
+                """
+                <div style="
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 14px;
+                    padding: 14px;
+                    background: rgba(255,255,255,0.04);
+                    margin-bottom: 12px;
+                ">
+                    <div style="font-weight:800; margin-bottom:8px;">What you get</div>
+                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                        • Modern CV builder (UK-friendly)<br/>
+                        • AI improvements (summary, bullets)<br/>
+                        • Cover letters tailored to job ads<br/>
+                        • PDF + Word downloads
+                    </div>
+                    <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">Fast</span>
+                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">Clean</span>
+                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">ATS-friendly</span>
+                    </div>
+                </div>
+
+                <div style="
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 14px;
+                    padding: 14px;
+                    background: rgba(255,255,255,0.04);
+                    margin-bottom: 12px;
+                ">
+                    <div style="font-weight:800; margin-bottom:8px;">How it works</div>
+                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                        1) Fill your details<br/>
+                        2) Improve wording with AI<br/>
+                        3) Generate & download PDF + Word
+                    </div>
+                </div>
+
+                <div style="
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 14px;
+                    padding: 14px;
+                    background: rgba(255,255,255,0.04);
+                ">
+                    <div style="font-weight:800; margin-bottom:8px;">Upgrade when ready</div>
+                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                        Guests can build. Sign in only when you want downloads + saved history.
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+    _dlg()
+    st.stop()
+
+
 
 # =========================
-# ROUTING (EARLY) — ONE VERSION ONLY
+# AUTH UI
 # =========================
-def get_user_context():
+def auth_ui():
+    """Login / register / password reset UI."""
+    import os
+    import traceback
+    import streamlit as st
+
+    tab_login, tab_register, tab_forgot = st.tabs(
+        ["Sign in", "Create account", "Forgot password"]
+    )
+
+    # ---- LOGIN TAB ----
+    with tab_login:
+        login_email = st.text_input("Email", key="auth_login_email")
+        login_password = st.text_input("Password", type="password", key="auth_login_password")
+
+        if st.button("Sign in", key="auth_btn_login"):
+            if not login_email or not login_password:
+                st.error("Please enter both email and password.")
+                st.stop()
+
+            login_email_n = normalize_email(login_email)
+            if not is_valid_email(login_email_n):
+                st.error("Please enter a valid email address.")
+                st.stop()
+
+            user = authenticate_user(login_email_n, login_password)
+            if user:
+                st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
+                set_logged_in_user(user)  # ✅ closes modal + reruns
+            else:
+                st.error("Invalid email or password.")
+
+
+    # ---- REGISTER TAB ----
+    with tab_register:
+        reg_name = st.text_input("Full name", key="auth_reg_name")
+        reg_email = st.text_input("Email", key="auth_reg_email")
+        reg_password = st.text_input(
+            "Password", type="password", key="auth_reg_password"
+        )
+        reg_password2 = st.text_input(
+            "Confirm password", type="password", key="auth_reg_password2"
+        )
+
+        reg_referral_code = st.text_input(
+            "Referral code (optional)",
+            key="auth_reg_referral_code",
+            help="If a friend invited you, paste their referral code here.",
+        )
+
+        if st.button("Create account", key="auth_btn_register"):
+            if not reg_email or not reg_password or not reg_password2:
+                st.error("Please fill in all required fields.")
+                st.stop()
+
+            if reg_password != reg_password2:
+                st.error("Passwords do not match.")
+                st.stop()
+
+            reg_email_n = normalize_email(reg_email)
+            if not is_valid_email(reg_email_n):
+                st.error(
+                    "Please enter a valid email address (e.g. name@example.com)."
+                )
+                st.stop()
+
+            referral_code = None
+            if reg_referral_code.strip():
+                ref_user = get_user_by_referral_code(reg_referral_code.strip())
+                if not ref_user:
+                    st.error("That referral code is not valid.")
+                    st.stop()
+                referral_code = reg_referral_code.strip().upper()
+
+            ok = create_user(
+                email=reg_email_n,
+                password=reg_password,
+                full_name=reg_name,
+                referred_by=referral_code,
+            )
+            if not ok:
+                st.error("That email is already registered.")
+                st.stop()
+
+            # 🔑 grant starter credits (ledger-based, idempotent)
+            new_user = get_user_by_email(reg_email_n)
+            if new_user and new_user.get("id") is not None:
+                grant_starter_credits(int(new_user["id"]))
+
+            # ✅ Apply referral bonus AFTER user exists
+            if referral_code:
+                try:
+                    applied = apply_referral_bonus(
+                        new_user_email=reg_email_n,
+                        referral_code=referral_code,
+                    )
+                    print(
+                        "apply_referral_bonus:",
+                        applied,
+                        "new_user:",
+                        reg_email_n,
+                        "code:",
+                        referral_code,
+                    )
+                except Exception as e:
+                    print("apply_referral_bonus error:", repr(e))
+
+            user = authenticate_user(reg_email_n, reg_password)
+            if user:
+                # FORCE consent gate for brand new accounts (session only)
+                st.session_state["accepted_policies"] = False
+                st.session_state["chk_policy_agree"] = False
+                st.session_state["policy_view"] = None
+
+                st.success("Account created. Please accept policies to continue.")
+                set_logged_in_user(user)
+            else:
+                st.success("Account created. Please sign in.")
+
+
+    # ---- FORGOT PASSWORD TAB ----
+    with tab_forgot:
+        st.write("If you've forgotten your password, you can reset it here.")
+
+        st.subheader("1. Request a reset link")
+        fp_email = st.text_input("Email used for your account", key="auth_fp_email")
+
+        if st.button("Send reset link", key="auth_btn_send_reset"):
+            if not fp_email:
+                st.error("Please enter your email.")
+            else:
+                try:
+                    # ---- DEBUG START ----
+                    print("\n=== RESET EMAIL REQUESTED ===")
+                    print("fp_email:", fp_email)
+
+                    resend_key = os.getenv("RESEND_API_KEY", "")
+                    from_email = os.getenv("FROM_EMAIL", "")
+                    app_url = os.getenv("APP_URL", "")
+
+                    print("RESEND_API_KEY present:", bool(resend_key))
+                    print("RESEND_API_KEY length:", len(resend_key))
+                    print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
+                    print("FROM_EMAIL present:", bool(from_email))
+                    print("APP_URL present:", bool(app_url))
+                    # ---- DEBUG END ----
+
+                    token = create_password_reset_token(fp_email)
+                    print("token created:", bool(token))
+
+                    if token:
+                        send_password_reset_email(fp_email, token)
+                        print("send_password_reset_email() finished without raising")
+
+                    st.success("If this email is registered, a reset link has been sent.")
+
+                except Exception as e:
+                    print("=== RESET EMAIL ERROR ===")
+                    traceback.print_exc()
+                    st.error(f"Error while sending reset email: {e}")
+
+        st.markdown("---")
+        st.subheader("2. Set a new password using your reset token")
+
+        fp_token = st.text_input("Reset token (from the email)", key="auth_fp_token")
+        fp_new_pwd = st.text_input("New password", type="password", key="auth_fp_new_pwd")
+        fp_new_pwd2 = st.text_input("Confirm new password", type="password", key="auth_fp_new_pwd2")
+
+        if st.button("Set new password", key="auth_btn_do_reset"):
+            if not fp_token or not fp_new_pwd or not fp_new_pwd2:
+                st.error("Please fill in all fields.")
+            elif fp_new_pwd != fp_new_pwd2:
+                st.error("Passwords do not match.")
+            else:
+                ok = reset_password_with_token(fp_token, fp_new_pwd)
+                if ok:
+                    st.success(
+                        "Password reset successfully. You can now sign in with your new password."
+                    )
+                else:
+                    st.error(
+                        "Invalid or expired reset token. Please request a new reset link."
+                    )    
+
+
+# =========================
+# PUBLIC HOME (guest header)
+# =========================
+def render_public_home() -> None:
+    st.markdown(
+        """
+        <div style="
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 20px;
+            padding: 18px 20px;
+            box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+            margin-top: 6px;
+            margin-bottom: 18px;
+        ">
+          <div style="font-weight:900; font-size:30px; letter-spacing:-0.02em; line-height:1.1;">
+            Mulyba
+          </div>
+          <div style="opacity:0.86; font-size:13px; margin-top:8px; line-height:1.55;">
+            Career Suite • CV Builder • AI tools
+          </div>
+          <div style="margin-top:10px; font-size:12px; opacity:0.70;">
+            Guests can build. Sign in only when you want downloads + saved history.
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+# =========================
+# PAYWALL + QUOTA HELPERS (LEDGER)
+# =========================
+
+def show_paywall(feature_label: str) -> None:
+    st.markdown(
+        f"""
+        <div style="
+            border-radius: 14px;
+            padding: 14px 16px;
+            margin: 10px 0 6px 0;
+            background: rgba(59,130,246,0.12);
+            border: 1px solid rgba(59,130,246,0.35);
+        ">
+            <div style="font-weight:800; margin-bottom:6px;">
+                Limit reached for {feature_label}.
+            </div>
+            <div style="font-size: 13px; opacity:0.85; margin-bottom: 10px;">
+                Upgrade your plan or use referrals to unlock more usage.
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+
+
+
+def try_spend(user_id: int, source: str, cv: int = 0, ai: int = 0) -> bool:
+    """
+    Atomic spend: only inserts a spend row if user has enough remaining credits.
+    """
+    user_id = int(user_id)
+    cv = int(cv or 0)
+    ai = int(ai or 0)
+
+    if cv < 0 or ai < 0:
+        raise ValueError("Spend must be >= 0")
+
+    if cv == 0 and ai == 0:
+        return True
+
+    with get_conn() as conn:
+        cur = conn.cursor()
+
+        # Lockless but consistent enough for most apps; if you want strict,
+        # you can SELECT ... FOR UPDATE on users row first.
+        cur.execute(
+            """
+            WITH remaining AS (
+              SELECT
+                GREATEST(
+                  COALESCE(
+                    (SELECT SUM(cv_amount)
+                     FROM credit_grants
+                     WHERE user_id = %s
+                       AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0
+                  )
+                  -
+                  COALESCE(
+                    (SELECT SUM(cv_amount)
+                     FROM credit_spends
+                     WHERE user_id = %s
+                    ), 0
+                  ),
+                0) AS cv_remaining,
+                GREATEST(
+                  COALESCE(
+                    (SELECT SUM(ai_amount)
+                     FROM credit_grants
+                     WHERE user_id = %s
+                       AND (expires_at IS NULL OR expires_at > NOW())
+                    ), 0
+                  )
+                  -
+                  COALESCE(
+                    (SELECT SUM(ai_amount)
+                     FROM credit_spends
+                     WHERE user_id = %s
+                    ), 0
+                  ),
+                0) AS ai_remaining
+            )
+            INSERT INTO credit_spends (user_id, source, cv_amount, ai_amount)
+            SELECT %s, %s, %s, %s
+            FROM remaining
+            WHERE cv_remaining >= %s AND ai_remaining >= %s
+            RETURNING id
+            """,
+            (user_id, user_id, user_id, user_id, user_id, source, cv, ai, cv, ai),
+        )
+        inserted = cur.fetchone()
+        conn.commit()
+        return bool(inserted)
+
+
+def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
     u = st.session_state.get("user") or {}
-    logged_in = _is_logged_in_user(u)
-    email = normalize_email(u.get("email")) if logged_in else None
-    admin = bool(logged_in and u.get("role") in {"owner", "admin"})
-    role = (u.get("role") or "user") if logged_in else "guest"
-    return u, logged_in, email, admin, role
 
-current_user, is_logged_in, user_email, is_admin, user_role = get_user_context()
+    # 🔒 Block guests
+    if not (isinstance(u, dict) and u.get("email")):
+        st.warning(f"Sign in to use {feature_label}.")
+        return False
 
-# Non-blocking overlays / dialogs
+    # 👑 Owner / admin unlimited
+    if u.get("role") in {"owner", "admin"}:
+        return True
+
+    email = (u.get("email") or "").strip().lower()
+    credits = get_user_credits(email)
+
+    if counter_key in CV_USAGE_KEYS:
+        bucket = "cv"
+    else:
+        bucket = "ai"
+
+    required = int(cost or 1)
+    remaining = int(credits.get(bucket, 0) or 0)
+
+    if remaining < required:
+        show_paywall(feature_label)
+        return False
+
+    return True
+
+
+
+
+# =========================
+# ROUTING (preview-first)
+# =========================
+if show_policy_page():
+    st.stop()
+
+# ---- Policy return guard (MUST be here) ----
+just_returned = st.session_state.pop("_just_returned_from_policy", False)
+
+
+# render modal early (non-blocking)
 render_auth_modal_if_open()
 
-# Guest home header (MUST exist ABOVE this call in your file)
+current_user = st.session_state.get("user")
+is_logged_in = _is_logged_in_user(current_user)
+
+# Guest header (non-blocking)
 if not is_logged_in:
-    # make sure render_public_home() is defined before this chunk runs
     render_public_home()
 
-# Cache uid for DB ops (logged in only)
-if user_email:
-    uid = get_user_id_by_email(user_email)
+# Safe guest placeholder for UI (DO NOT treat as logged in)
+if not is_logged_in:
+    current_user = {
+        "full_name": "Guest",
+        "email": None,
+        "role": "guest",
+        "plan": "free",
+        "referral_code": None,
+        "referrals_count": 0,
+        "is_banned": False,
+        "accepted_policies": False,
+        "accepted_policies_at": None,
+    }
+
+# Always define these (kills NameError)
+user_email = (current_user or {}).get("email")  # None for guests
+is_admin = (current_user or {}).get("role") in {"owner", "admin"}
+
+# Hydrate counters (real user only) else safe defaults
+if is_logged_in and isinstance(st.session_state.get("user"), dict):
+    real_user = st.session_state["user"]
+    for k, default in USAGE_KEYS_DEFAULTS.items():
+        if k not in st.session_state:
+            st.session_state[k] = real_user.get(k, default)
+else:
+    for k, default in USAGE_KEYS_DEFAULTS.items():
+        st.session_state.setdefault(k, default)
+
+# Consent gate for logged-in users only
+show_consent_gate()
+
+email = (st.session_state.get("user") or {}).get("email")
+if email:
+    uid = get_user_id(email)  # lookup only (no inserts)
     if not uid:
         st.error("No account found for this email. Please sign out and sign in again.")
         st.stop()
     st.session_state["user_id"] = uid
 
 
+
+
+
 # =========================
-# ADMIN DASHBOARD (unchanged logic)
+# Referral code (ONLY when logged in)
+# =========================
+my_ref_code = None
+my_ref_count = 0
+
+if is_logged_in and user_email:
+    my_ref_code = (st.session_state.get("user") or {}).get("referral_code")
+    if not my_ref_code:
+        my_ref_code = ensure_referral_code(user_email)
+        st.session_state["user"]["referral_code"] = my_ref_code
+
+    my_ref_count = int((st.session_state.get("user") or {}).get("referrals_count", 0) or 0)
+    my_ref_count = min(my_ref_count, REFERRAL_CAP)
+
+# =========================
+# Admin dashboard
 # =========================
 def render_admin_dashboard() -> None:
     st.title("👨‍💻 Admin Dashboard")
@@ -1921,12 +2751,11 @@ def render_admin_dashboard() -> None:
             delete_user(selected_email)
             st.success(f"User {selected_email} deleted.")
             if (st.session_state.get("user") or {}).get("email") == selected_email:
-                do_logout()
+                st.session_state["user"] = None
             st.rerun()
 
-
 # =========================
-# MODE SELECT (ADMIN ONLY)
+# Mode select (ADMIN ONLY)
 # =========================
 if is_admin:
     mode = st.sidebar.radio("Mode", ["Use app", "Admin dashboard"], index=0, key="mode_select")
@@ -1938,9 +2767,7 @@ if mode == "Admin dashboard":
     st.stop()
 
 
-# =========================
-# SIDEBAR (KEEP DRAFT STATE)
-# =========================
+
 def render_mulyba_brand_header(is_logged_in: bool):
     st.markdown(
         """
@@ -1957,30 +2784,54 @@ def render_mulyba_brand_header(is_logged_in: bool):
         with c1:
             if st.button("🔐 Sign in", key="brand_signin_btn"):
                 open_auth_modal("Sign in")
+                st.rerun()
         with c2:
             if st.button("✨ Create", key="brand_create_btn"):
                 open_auth_modal("Create account")
+                st.rerun()
 
+
+# =========================
+# SIDEBAR (full)
+# =========================
 with st.sidebar:
-    # always re-pull
-    session_user, sidebar_logged_in, email0, sidebar_is_admin, sidebar_role = get_user_context()
+    session_user = st.session_state.get("user")
+    sidebar_logged_in = _is_logged_in_user(session_user)
 
-    # Brand
+    # ✅ Refresh session user from DB so plan/premium updates instantly
+    if sidebar_logged_in:
+        email0 = ((session_user or {}).get("email") or "").strip().lower()
+        fresh = get_user_by_email(email0)  # dict | None
+        if fresh:
+            st.session_state["user"] = {**(st.session_state.get("user") or {}), **fresh}
+            session_user = st.session_state["user"]
+
+    sidebar_role = (session_user or {}).get("role", "user")
+
+    # Brand header (your existing function)
     render_mulyba_brand_header(sidebar_logged_in)
 
     # Mode badge
     if sidebar_logged_in:
         st.markdown(
-            """<div class="mode-badge mode-live"><span class="dot"></span> Live mode</div>""",
+            """
+            <div class="mode-badge mode-live">
+              <span class="dot"></span> Live mode
+            </div>
+            """,
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            """<div class="mode-badge mode-guest"><span class="dot"></span> Guest mode</div>""",
+            """
+            <div class="mode-badge mode-guest">
+              <span class="dot"></span> Guest mode
+            </div>
+            """,
             unsafe_allow_html=True,
         )
 
-    # Account
+    # ---------- Account ----------
     st.markdown('<div class="sb-card">', unsafe_allow_html=True)
     st.markdown("### 👤 Account")
 
@@ -1993,16 +2844,14 @@ with st.sidebar:
         st.markdown("**Status:** ✅ Active")
         st.markdown("**Policies accepted:** No")
     else:
-        # OPTIONAL: if you have refresh_session_user_from_db() keep it; else remove this try.
-        try:
-            refresh_session_user_from_db()
-        except Exception:
-            pass
-
+        # ✅ refresh session user BEFORE reading plan/full_name/etc
+        refresh_session_user_from_db()
         session_user = st.session_state.get("user") or {}
-        full_name = session_user.get("full_name") or "Member"
-        email = session_user.get("email") or "—"
-        plan = (session_user.get("plan") or "free").strip().lower()
+
+        full_name = (session_user or {}).get("full_name") or "Member"
+        email = (session_user or {}).get("email") or "—"
+        plan = ((session_user or {}).get("plan") or "free").strip().lower()
+
         plan_label = "Pro" if plan == "pro" else ("Monthly" if plan == "monthly" else "Free")
 
         st.markdown(f"**{full_name}**")
@@ -2012,14 +2861,15 @@ with st.sidebar:
         if sidebar_role in {"owner", "admin"}:
             st.caption(f"Admin: {sidebar_role}")
 
-        is_banned = bool(session_user.get("is_banned"))
+        is_banned = bool((session_user or {}).get("is_banned"))
         st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
 
-        accepted = bool(session_user.get("accepted_policies"))
+        accepted = bool((session_user or {}).get("accepted_policies"))
         st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
 
         if st.button("Log out", key="sb_logout_btn"):
-            do_logout()
+            st.session_state["user"] = None
+            st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -2218,110 +3068,128 @@ Please ensure your details are reviewed before downloading.
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-def apply_pending_autofill_if_any():
-    parsed = st.session_state.pop("_pending_cv_parsed", None)
+
+
+# =========================
+# CV Upload + AI Autofill (ONE block only)
+# =========================
+st.subheader("Upload an existing CV (optional)")
+st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
+
+
+# ============================================================
+# CV Upload + AI Autofill (ONE block only)
+# ============================================================
+
+def _safe_set(key: str, value):
+    if isinstance(value, str):
+        value = value.strip()
+    if value is not None and (not isinstance(value, str) or value.strip()):
+        st.session_state[key] = value
+
+uploaded_cv = st.file_uploader(
+    "Upload your current CV (PDF, DOCX or TXT)",
+    type=["pdf", "docx", "txt"],
+    key="cv_uploader",
+)
+
+fill_clicked = locked_action_button(
+    "Fill the form from this CV (AI)",
+    key="btn_fill_from_cv",
+    feature_label="CV upload & parsing",
+    counter_key="upload_parses",
+    require_login=True,          # 🔒 blocks guests
+    default_tab="Sign in",
+    cooldown_name="upload_parse",
+    cooldown_seconds=5,
+)
+
+if uploaded_cv is not None and fill_clicked:
+    raw_text = _read_uploaded_cv_to_text(uploaded_cv)
+    if not raw_text.strip():
+        st.warning("No readable text found in that file.")
+        st.stop()
+
+    cv_fp = hashlib.sha256(raw_text.encode("utf-8", errors="ignore")).hexdigest()
+    last_fp = st.session_state.get("_last_cv_fingerprint")
+
+    with st.spinner("Reading and analysing your CV..."):
+        parsed = extract_cv_data(raw_text)
+
     if not isinstance(parsed, dict):
-        return
+        st.error("AI parser returned an unexpected format.")
+        st.stop()
 
-    # Let your existing mapper run if it exists (but it might still write cv_* keys)
-    if "_apply_parsed_cv_to_session" in globals() and callable(globals()["_apply_parsed_cv_to_session"]):
-        globals()["_apply_parsed_cv_to_session"](parsed)
-    else:
-        _apply_parsed_fallback(parsed)
+    # reset on new CV
+    if cv_fp != last_fp:
+        _reset_outputs_on_new_cv()
+        _clear_education_persistence_for_new_cv()
+        st.session_state["_last_cv_fingerprint"] = cv_fp
 
-    # ✅ Persist into draft (wipe-proof)
-    cv_set_if_missing("cv_full_name", parsed.get("full_name") or parsed.get("name") or "")
-    cv_set_if_missing("cv_email", parsed.get("email") or "")
-    cv_set_if_missing("cv_phone", parsed.get("phone") or "")
-    cv_set_if_missing("cv_location", parsed.get("location") or "")
-    cv_set_if_missing("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title") or "")
-    cv_set_if_missing("cv_summary", parsed.get("summary") or parsed.get("professional_summary") or "")
+    # ✅ Apply parsed data (your existing function)
+    _apply_parsed_cv_to_session(parsed)
 
-    # Force widget rehydrate next render
-    for k in ["cv_full_name","cv_email","cv_phone","cv_location","cv_title","cv_summary"]:
-        st.session_state.pop(cv_wkey(k), None)
+    # ✅ FORCE Personal details keys to match YOUR NEW cv_* widgets
+    _safe_set("cv_full_name", parsed.get("full_name") or parsed.get("name"))
+    _safe_set("cv_email", parsed.get("email"))
+    _safe_set("cv_phone", parsed.get("phone"))
+    _safe_set("cv_location", parsed.get("location"))
+    _safe_set("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
+    _safe_set("cv_summary", parsed.get("summary") or parsed.get("professional_summary"))
 
+
+    # ✅ Flags so restore/default logic can’t wipe after rerun
+    st.session_state["_cv_parsed"] = parsed
+    st.session_state["_cv_autofill_enabled"] = True
     st.session_state["_just_autofilled_from_cv"] = True
+    st.session_state["_skip_restore_personal_once"] = True  # << important
+
+    # ✅ usage counting (only for logged-in users)
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
+    if email_for_usage:
+        st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
+        increment_usage(email_for_usage, "upload_parses")
+   
+    st.success("Form fields updated from your CV. Scroll down to review and edit.")
+    st.rerun()
 
 
-def section_cv_upload():
-    st.subheader("Upload an existing CV (optional)")
-    st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
 
-    uploaded_cv = st.file_uploader(
-        "Upload your current CV (PDF, DOCX or TXT)",
-        type=["pdf", "docx", "txt"],
-        key="cv_uploader",
-    )
+# ============================================================
+# RESTORE GUARDS (stop restore funcs from wiping new data)
+# ============================================================
 
-    # Persist bytes+name across reruns
-    if uploaded_cv is not None:
-        data = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
-        if data:
-            st.session_state["cv_upload_bytes"] = data
-            st.session_state["cv_upload_name"] = getattr(uploaded_cv, "name", "uploaded_cv")
+# If we just came back from policy, restore snapshot FIRST (then continue)
+if st.session_state.pop("_just_returned_from_policy", False):
+    restore_form_state()
 
-    fill_clicked = locked_action_button(
-        "Fill the form from this CV (AI)",
-        key="btn_fill_from_cv",
-        feature_label="CV upload & parsing",
-        counter_key="upload_parses",
-        require_login=True,
-        default_tab="Sign in",
-        cooldown_name="upload_parse",
-        cooldown_seconds=5,
-    )
+# If we just autofilled from CV, DO NOT run restore_* that might overwrite fields
+just_autofilled = st.session_state.pop("_just_autofilled_from_cv", False)
 
-    if fill_clicked:
-        cv_upload_bytes = st.session_state.get("cv_upload_bytes")
-        cv_upload_name = st.session_state.get("cv_upload_name")
+# Your existing restore skills calls should NOT run when just_autofilled
+if not just_autofilled:
+    restore_skills_state()
 
-        if not cv_upload_bytes:
-            st.warning("Upload a CV first.")
-            st.stop()
+backup_skills_state()
 
-        raw_text = _read_uploaded_cv_bytes_to_text(cv_upload_name, cv_upload_bytes)
-        if not (raw_text or "").strip():
-            st.warning("Please upload a readable PDF, DOCX, or TXT CV first.")
-            st.stop()
-
-        with st.spinner("Reading and analysing your CV..."):
-            parsed = extract_cv_data(raw_text)
-
-        if not isinstance(parsed, dict):
-            st.error("AI parser returned an unexpected format.")
-            st.stop()
-
-        # ✅ stage parsed for next run
-        st.session_state["_pending_cv_parsed"] = parsed
-
-        st.success("CV parsed. Applying to the form…")
-        st.rerun()
-		
-
-apply_pending_autofill_if_any()
-section_cv_upload()   # ✅ THIS LINE IS MISSING IN YOUR CODE
-for k in ["cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"]:
-    cv_sync_draft_to_widget(k)
+restore_form_state_if_needed()
 
 # -------------------------
 # 1. Personal details
 # -------------------------
 st.header("1. Personal details")
 
-for k in ["cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"]:
-    cv_rehydrate_widget(k)
+cv_full_name = st.text_input("Full name *", key="cv_full_name")
+cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key="cv_title")
+cv_email     = st.text_input("Email *", key="cv_email")
+cv_phone     = st.text_input("Phone", key="cv_phone")
+cv_location  = st.text_input("Location (City, Country)", key="cv_location")
 
-cv_full_name = st.text_input("Full name *", key=cv_wkey("cv_full_name")); cv_sync_widget_to_draft("cv_full_name")
-cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key=cv_wkey("cv_title")); cv_sync_widget_to_draft("cv_title")
-cv_email     = st.text_input("Email *", key=cv_wkey("cv_email")); cv_sync_widget_to_draft("cv_email")
-cv_phone     = st.text_input("Phone", key=cv_wkey("cv_phone")); cv_sync_widget_to_draft("cv_phone")
-cv_location  = st.text_input("Location (City, Country)", key=cv_wkey("cv_location")); cv_sync_widget_to_draft("cv_location")
+# --- Apply staged summary BEFORE widget renders ---
+if "cv_summary_pending" in st.session_state:
+    st.session_state["cv_summary"] = st.session_state.pop("cv_summary_pending")
 
-cv_summary_text = st.text_area("Professional summary", height=120, key=cv_wkey("cv_summary"))
-cv_sync_widget_to_draft("cv_summary")
-
-MAX_PANEL_WORDS = globals().get("MAX_PANEL_WORDS", 100)
+cv_summary_text = st.text_area("Professional summary", height=120, key="cv_summary")
 st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
 
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
@@ -2333,63 +3201,67 @@ if btn_summary:
     ok, left = cooldown_ok("improve_summary", 5)
     if not ok:
         st.warning(f"⏳ Please wait {left}s before trying again.")
-        st.stop()
-
-    if not cv_summary_text.strip():
-        st.error("Please write a professional summary first.")
-        st.stop()
-
-    email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if not email_for_usage:
-        st.warning("Please sign in to use AI features.")
-        st.stop()
-
-    ok_spend = spend_ai_credit(email_for_usage, source=f"ai_summary_improve:{int(time.time())}", amount=1)
-    if not ok_spend:
-        st.warning("You don’t have enough AI credits for this action.")
-        st.stop()
-
-    with st.spinner("Improving your professional summary..."):
-        try:
-            cv_like = {
-                "full_name": cv_full_name,
-                "current_title": cv_title,
-                "location": cv_location,
-                "existing_summary": cv_summary_text,
-            }
-            instructions = (
-                "Improve this existing professional summary so it is clearer, "
-                "more impactful and suitable for a modern UK CV. Do not invent "
-                "new experience, only polish what is already there."
-            )
-
-            improved = generate_tailored_summary(cv_like, instructions)
-            improved = enforce_word_limit(improved, MAX_PANEL_WORDS, label="Professional summary")
-
-            stage_value("cv_summary", improved)
-
-            st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
-            increment_usage(email_for_usage, "summary_uses")
-
-            st.success("AI summary applied.")
-            st.rerun()
-
-        except Exception as e:
-            st.error(f"AI error (summary improvement): {e}")
+    else:
+        if not cv_summary_text.strip():
+            st.error("Please write a professional summary first.")
+        elif not has_free_quota("summary_uses", 1, "AI professional summary"):
             st.stop()
+        else:
+            with st.spinner("Improving your professional summary..."):
+                try:
+                    cv_like = {
+                        "full_name": cv_full_name,
+                        "current_title": cv_title,
+                        "location": cv_location,
+                        "existing_summary": cv_summary_text,
+                    }
 
-        except Exception as e:
-            restore_protected_state(snap)
-            st.error(f"AI error (summary improvement): {e}")
-            st.stop()
+                    instructions = (
+                        "Improve this existing professional summary so it is clearer, "
+                        "more impactful and suitable for a modern UK CV. Do not invent "
+                        "new experience, just polish what is already there."
+                    )
 
+                    improved = generate_tailored_summary(cv_like, instructions)
+                    improved_limited = enforce_word_limit(
+                        improved,
+                        MAX_DOC_WORDS,
+                        label="Professional summary (AI)",
+                    )
+
+                    # stage for next rerun (do not mutate key after widget renders)
+                    st.session_state["cv_summary_pending"] = improved_limited
+
+                    st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
+                    email_for_usage = (st.session_state.get("user") or {}).get("email")
+                    if email_for_usage:
+                        increment_usage(email_for_usage, "summary_uses")
+
+                    st.success("AI summary applied into your main box.")
+                    st.rerun()
+
+                except Exception as e:
+                    st.error(f"AI error (summary improvement): {e}")
+
+
+
+normalize_skills_state()
+st.header("2. Skills")
 
 # -------------------------
 # 2. Skills (bullet points only)
 # -------------------------
+
 def normalize_skills_to_bullets(text: str) -> str:
+    """
+    Takes ANY input (sentences, commas, paragraphs, bullets)
+    and outputs clean skill bullets:
+    • Skill
+    • Skill
+    """
     if not text:
         return ""
+
     raw = text.strip()
     if not raw:
         return ""
@@ -2400,20 +3272,28 @@ def normalize_skills_to_bullets(text: str) -> str:
     def is_sentence(s: str) -> bool:
         return len(s.split()) > 6 or "," in s or "result" in s.lower() or "through" in s.lower()
 
+    # 1) Break input into candidate chunks
     for ln in lines:
         ln = ln.lstrip("•*-–— \t").strip()
         if not ln:
             continue
 
-        parts = [p.strip() for p in ln.split(",") if p.strip()] if "," in ln else [ln]
+        # Split comma-heavy lines
+        if "," in ln:
+            parts = [p.strip() for p in ln.split(",") if p.strip()]
+        else:
+            parts = [ln]
+
         for p in parts:
             if is_sentence(p):
+                # reduce sentence to skill-like phrases
                 words = p.split()
                 if len(words) >= 2:
                     items.append(" ".join(words[:3]))
             else:
                 items.append(p)
 
+    # 2) Clean + de-dupe
     seen = set()
     clean: list[str] = []
     for it in items:
@@ -2422,11 +3302,21 @@ def normalize_skills_to_bullets(text: str) -> str:
             seen.add(it.lower())
             clean.append(it)
 
+    # 3) Format as bullets
     return "\n".join(f"• {c}" for c in clean)
 
-# apply staged before widget
-safe_init_key("skills_text", "")
-apply_staged_value("skills_text")
+
+# ✅ Apply staged AI value BEFORE widget renders
+if "skills_pending" in st.session_state:
+    st.session_state["skills_text"] = st.session_state.pop("skills_pending")
+
+# ✅ Default only if missing (never overwrite user CV)
+if "skills_text" not in st.session_state or st.session_state["skills_text"] is None:
+    st.session_state["skills_text"] = (
+        "• Marketing Strategy\n"
+        "• Brand Management\n"
+        "• Customer Engagement"
+    )
 
 skills_text = st.text_area(
     "Skills (one per line)",
@@ -2437,9 +3327,6 @@ skills_text = st.text_area(
 btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
 
 if btn_skills:
-    state_debug_capture("btn_improve_skills:clicked")
-    snap = snapshot_protected_state("before_ai_skills")
-
     if not gate_premium("improve your skills"):
         st.stop()
 
@@ -2452,6 +3339,7 @@ if btn_skills:
         st.warning("Please add some skills first.")
         st.stop()
 
+    # ✅ Spend 1 AI credit (ledger)  <-- NEW FLOW (replaces has_free_quota)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
     if not email_for_usage:
         st.warning("Please sign in to use AI features.")
@@ -2464,24 +3352,30 @@ if btn_skills:
 
     with st.spinner("Improving your skills..."):
         try:
+            # 🔥 IMPORTANT: this MUST be skills-specific
             improved = improve_skills(skills_text)
+
             improved_bullets = normalize_skills_to_bullets(improved)
-            improved_limited = enforce_word_limit(improved_bullets, MAX_DOC_WORDS, label="Skills (AI)")
 
-            stage_value("skills_text", improved_limited)
-            restore_protected_state(snap)
-            state_debug_capture("btn_improve_skills:staged")
+            improved_limited = enforce_word_limit(
+                improved_bullets,
+                MAX_DOC_WORDS,
+                label="Skills (AI)",
+            )
 
+            # ✅ Stage for NEXT run
+            st.session_state["skills_pending"] = improved_limited
+
+            # ✅ Analytics (keep this, not credits)
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
             increment_usage(email_for_usage, "bullets_uses")
 
             st.success("AI skills applied.")
-            state_debug_capture("btn_improve_skills:before_rerun")
             st.rerun()
 
         except Exception as e:
-            restore_protected_state(snap)
             st.error(f"AI error (skills improvement): {e}")
+
 
 
 # -------------------------
@@ -2489,6 +3383,7 @@ if btn_skills:
 # -------------------------
 skills: list[str] = []
 raw = (st.session_state.get("skills_text") or "").strip()
+
 for ln in raw.splitlines():
     ln = ln.lstrip("•*-–— \t").strip()
     if not ln:
@@ -2497,21 +3392,31 @@ for ln in raw.splitlines():
         skills.extend([p.strip() for p in ln.split(",") if p.strip()])
     else:
         skills.append(ln)
+
+# De-dupe
 _seen = set()
 skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
+
+
+restore_experience_from_parsed()
+st.header("3. Experience (multiple roles)")
+
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
+
+# ✅ If we just autofilled from CV, sync the UI role count to what was parsed
 if st.session_state.get("_just_autofilled_from_cv", False):
     parsed_n = int(st.session_state.get("parsed_num_experiences", 1) or 1)
-    st.session_state["num_experiences"] = max(1, min(5, parsed_n))
-    st.session_state["_just_autofilled_from_cv"] = False  # ✅ consume it once
+    st.session_state["num_experiences"] = max(1, min(5, parsed_n))  # respect UI bounds
 
+# Keep count stable (parsed -> UI) (only if still missing/None)
 if "num_experiences" not in st.session_state or st.session_state["num_experiences"] is None:
     st.session_state["num_experiences"] = st.session_state.get("parsed_num_experiences", 1)
 
+# used to run AI after render
 st.session_state.setdefault("ai_running_role", None)
 st.session_state.setdefault("ai_run_now", False)
 
@@ -2525,6 +3430,7 @@ num_experiences = st.number_input(
 
 experiences = []
 
+# ---- Render roles ----
 for i in range(int(num_experiences)):
     st.subheader(f"Role {i + 1}")
 
@@ -2534,46 +3440,48 @@ for i in range(int(num_experiences)):
     start_key     = f"start_date_{i}"
     end_key       = f"end_date_{i}"
     desc_key      = f"description_{i}"
+    pending_key   = f"description_pending_{i}"
 
-    safe_init_key(job_title_key, "")
-    safe_init_key(company_key, "")
-    safe_init_key(loc_key, "")
-    safe_init_key(start_key, "")
-    safe_init_key(end_key, "")
-    safe_init_key(desc_key, "")
+    # ✅ Apply staged AI BEFORE the widget renders
+    if pending_key in st.session_state:
+        st.session_state[desc_key] = st.session_state.pop(pending_key)
 
-    apply_staged_value(desc_key)
+    # ✅ Ensure keys exist (never None)
+    if st.session_state.get(job_title_key) is None: st.session_state[job_title_key] = ""
+    if st.session_state.get(company_key)   is None: st.session_state[company_key]   = ""
+    if st.session_state.get(loc_key)       is None: st.session_state[loc_key]       = ""
+    if st.session_state.get(start_key)     is None: st.session_state[start_key]     = ""
+    if st.session_state.get(end_key)       is None: st.session_state[end_key]       = ""
+    if st.session_state.get(desc_key)      is None: st.session_state[desc_key]      = ""
 
+    # widgets
     job_title = st.text_input("Job title", key=job_title_key)
     company   = st.text_input("Company", key=company_key)
     exp_loc   = st.text_input("Job location", key=loc_key)
     start_dt  = st.text_input("Start date (e.g. Jan 2020)", key=start_key)
     end_dt    = st.text_input("End date (e.g. Present or Jun 2023)", key=end_key)
 
-    st.text_area(
+    desc_value = st.text_area(
         "Description / key achievements",
         key=desc_key,
         help="Use one bullet per line.",
     )
 
-    if st.button("Improve this role (AI)", key=f"btn_role_ai_{i}"):
-        state_debug_capture(f"btn_role_ai_{i}:clicked")
+    # ✅ Button only schedules AI (no AI work inside loop)
+    btn_role = st.button("Improve this role (AI)", key=f"btn_role_ai_{i}")
+    if btn_role:
         if not gate_premium(f"improve Role {i+1} with AI"):
             st.stop()
-
         ok, left = cooldown_ok(f"improve_role_{i}", 5)
         if not ok:
             st.warning(f"⏳ Please wait {left}s before trying again.")
             st.stop()
 
-        # ✅ SNAPSHOT right before doing anything that may rerun / error
-        st.session_state["_snap_before_role_ai"] = snapshot_protected_state()
-
         st.session_state["ai_running_role"] = i
         st.session_state["ai_run_now"] = True
-        state_debug_capture(f"btn_role_ai_{i}:before_rerun")
         st.rerun()
 
+    # Build Experience objects
     if job_title and company:
         experiences.append(
             Experience(
@@ -2586,66 +3494,76 @@ for i in range(int(num_experiences)):
             )
         )
 
-# ---------- Run AI AFTER render ----------
+
+# ---------- Run AI AFTER the loop (single, correct) ----------
 role_to_improve = st.session_state.get("ai_running_role")
-run_now = st.session_state.pop("ai_run_now", False)
+run_now = st.session_state.pop("ai_run_now", False)  # pop so it runs once
 
 if run_now and role_to_improve is not None:
     i = int(role_to_improve)
+
+    # IMPORTANT: clear role flag early so reruns don't re-trigger
     st.session_state["ai_running_role"] = None
 
-    # ✅ If something clears, we can restore
-    snap = st.session_state.pop("_snap_before_role_ai", None)
+    if not gate_premium("use AI role improvements"):
+        st.stop()
 
-    desc_key = f"description_{i}"
+    desc_key     = f"description_{i}"
+    pending_key  = f"description_pending_{i}"
     current_text = (st.session_state.get(desc_key) or "").strip()
+
     if not current_text:
-        if snap: restore_protected_state(snap)
         st.warning("Please add text for this role first.")
         st.stop()
 
-    email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
+    # ✅ Replace free-quota check with AI credit spend (ledger)
+    email_for_usage = (st.session_state.get("user") or {}).get("email")
     if not email_for_usage:
-        if snap: restore_protected_state(snap)
         st.warning("Please sign in to use AI features.")
         st.stop()
 
     ok_spend = spend_ai_credit(email_for_usage, source=f"ai_role_improve_{i+1}", amount=1)
     if not ok_spend:
-        if snap: restore_protected_state(snap)
         st.warning("You don’t have enough AI credits for this action.")
         st.stop()
 
     with st.spinner(f"Improving Role {i+1} description..."):
         try:
             improved = improve_bullets(current_text)
-            improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label=f"Role {i+1} description")
+            improved_limited = enforce_word_limit(
+                improved,
+                MAX_DOC_WORDS,
+                label=f"Role {i+1} description",
+            )
 
-            stage_value(desc_key, improved_limited)
-            state_debug_capture(f"role_ai_{i}:staged")
-            if snap:
-                restore_protected_state(snap)
+            # Stage update for next render
+            st.session_state[pending_key] = improved_limited
 
+            # ✅ Keep existing analytics increment right after success
             st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
             increment_usage(email_for_usage, "bullets_uses")
 
             st.success(f"Role {i+1} updated.")
-            state_debug_capture(f"role_ai_{i}:before_rerun")
             st.rerun()
 
         except Exception as e:
-            if snap: restore_protected_state(snap)
             st.error(f"AI error: {e}")
 
-st.session_state.pop("_just_autofilled_from_cv", None)
 
+# ✅ Keep your existing pop (ensures sync only happens once after autofill)
+if not st.session_state.pop("_just_autofilled_from_cv", False):
+    pass
+
+
+    restore_education_state()
 
 # -------------------------
 # 4. Education (multiple entries)
 # -------------------------
 st.header("4. Education (multiple entries)")
 
-safe_init_key("num_education", 1)
+if "num_education" not in st.session_state:
+    st.session_state["num_education"] = 1
 
 num_education = st.number_input(
     "How many education entries do you want to include?",
@@ -2660,17 +3578,29 @@ education_items = []
 for i in range(int(num_education)):
     st.subheader(f"Education {i + 1}")
 
+    # ✅ Blank defaults (no placeholder education)
+    default_degree = ""
+    default_institution = ""
+    default_location = ""
+    default_start = ""
+    default_end = ""
+
     degree_key = f"degree_{i}"
     institution_key = f"institution_{i}"
     edu_location_key = f"edu_location_{i}"
     edu_start_key = f"edu_start_{i}"
     edu_end_key = f"edu_end_{i}"
 
-    safe_init_key(degree_key, "")
-    safe_init_key(institution_key, "")
-    safe_init_key(edu_location_key, "")
-    safe_init_key(edu_start_key, "")
-    safe_init_key(edu_end_key, "")
+    if degree_key not in st.session_state:
+        st.session_state[degree_key] = default_degree
+    if institution_key not in st.session_state:
+        st.session_state[institution_key] = default_institution
+    if edu_location_key not in st.session_state:
+        st.session_state[edu_location_key] = default_location
+    if edu_start_key not in st.session_state:
+        st.session_state[edu_start_key] = default_start
+    if edu_end_key not in st.session_state:
+        st.session_state[edu_end_key] = default_end
 
     degree = st.text_input("Degree / qualification", key=degree_key)
     institution = st.text_input("Institution", key=institution_key)
@@ -2678,6 +3608,7 @@ for i in range(int(num_education)):
     edu_start = st.text_input("Start date (e.g. Sep 2016)", key=edu_start_key)
     edu_end = st.text_input("End date (e.g. Jun 2019)", key=edu_end_key)
 
+    # ✅ Only append real education (prevents empty rows being passed to AI)
     if degree.strip() and institution.strip():
         education_items.append(
             Education(
@@ -2689,18 +3620,17 @@ for i in range(int(num_education)):
             )
         )
 
-# ✅ store what you just built (instead of overwriting it with old state)
-try:
-    st.session_state["education_items"] = [e.dict() for e in education_items]
-except Exception:
-    st.session_state["education_items"] = [getattr(e, "__dict__", {}) for e in education_items]
-
+# ✅ CRITICAL: save what the user typed so reruns can't wipe it
+backup_education_state()
+st.session_state["education_items"] = [edu.dict() for edu in education_items]
 
 # -------------------------
 # 5. References (optional)
 # -------------------------
-st.header("5. References (optional)")
-safe_init_key("references", "")
+st.header("6. References (optional)")
+
+if "references" not in st.session_state:
+    st.session_state["references"] = ""
 
 references = st.text_area(
     "References (leave blank to omit from CV)",
@@ -2710,7 +3640,6 @@ references = st.text_area(
         "Line breaks will be preserved in the PDF."
     ),
 )
-
 
 # =========================
 # Job Search (Adzuna) — Expander + Uses SAME user credits as the rest of your app
@@ -2917,12 +3846,10 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                     st.stop()
 
                 st.session_state["adzuna_results"] = jobs
-                state_debug_capture("adzuna_search:results_staged")
 
                 if not jobs:
                     st.info("No results found. Try different keywords or a nearby location.")
 
-                state_debug_capture("adzuna_search:before_rerun")
                 st.rerun()
 
             except AdzunaConfigError:
@@ -2989,34 +3916,33 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                             }
 
                             st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
-                            state_debug_capture("use_job:before_rerun")
                             st.rerun()
 
                 st.markdown("**Preview description**")
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
 
 
+
 # -------------------------
-# 6. Target Job (optional, for AI) — workspace safe:
-# - DO NOT auto-pop outputs when JD changes
-# - SNAPSHOT before AI actions
+# 5. Target Job (optional, for AI)
 # -------------------------
 st.header("5. Target Job (optional)")
+
+import hashlib
 
 def _fingerprint(text: str) -> str:
     return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
 
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
+    """Read personal details from either the main Section 1 keys OR cv_* keys."""
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
 
+# Pull personal details safely (works with either key system)
 full_name_ss = get_personal_value("full_name", "cv_full_name")
 email_ss     = get_personal_value("email", "cv_email")
 title_ss     = get_personal_value("title", "cv_title")
 phone_ss     = get_personal_value("phone", "cv_phone")
 location_ss  = get_personal_value("location", "cv_location")
-
-safe_init_key("job_description", "")
-apply_staged_value("job_description")  # if you ever stage it
 
 job_description = st.text_area(
     "Paste the job description here",
@@ -3025,8 +3951,16 @@ job_description = st.text_area(
     key="job_description",
 )
 
-# ✅ inline fingerprint (jd_fp was unused)
-st.session_state["_last_jd_fp"] = _fingerprint(job_description)  # track it, but DO NOT clear other stuff
+jd_fp = _fingerprint(job_description)
+last_jd_fp = st.session_state.get("_last_jd_fp")
+
+# If JD changed, clear AI outputs
+if last_jd_fp and jd_fp != last_jd_fp:
+    st.session_state.pop("job_summary_ai", None)
+    st.session_state.pop("cover_letter", None)
+    st.session_state.pop("cover_letter_box", None)
+
+st.session_state["_last_jd_fp"] = jd_fp
 
 st.caption(
     f"For best results, keep this to {MAX_DOC_WORDS} words or less. "
@@ -3039,17 +3973,14 @@ with col_jd1:
 with col_jd2:
     ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key="btn_cover")
 
-
 # -------------------------
 # AI job-description summary
 # -------------------------
 if job_summary_clicked:
-    state_debug_capture("btn_job_summary:clicked")
-    snap = snapshot_protected_state("before_ai_job_summary")
-
     if not gate_premium("generate a job summary"):
         st.stop()
 
+    # ✅ use safe personal values
     if not (full_name_ss and email_ss):
         st.warning("Complete Section 1 (Full name + Email) first — these are used in outputs.")
         st.stop()
@@ -3058,6 +3989,7 @@ if job_summary_clicked:
         st.error("Please paste a job description first.")
         st.stop()
 
+    # ✅ LEDGER SPEND (1 AI credit)
     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
     if not uid:
@@ -3074,42 +4006,31 @@ if job_summary_clicked:
             jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description")
             job_summary_text = generate_job_summary(jd_limited)
 
-            stage_value("job_summary_ai", job_summary_text)
-            restore_protected_state(snap)
-            state_debug_capture("btn_job_summary:staged")
+            st.session_state["job_summary_ai"] = job_summary_text
             st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
 
+            # Optional analytics only (won't affect credits)
             if email_for_usage:
                 increment_usage(email_for_usage, "job_summary_uses")
 
             st.success("AI job summary generated below.")
-            state_debug_capture("btn_job_summary:before_rerun")
-            st.rerun()
-
         except Exception as e:
-            restore_protected_state(snap)
             st.error(f"AI error (job summary): {e}")
-            st.stop()
-
 
 # Display job summary
-apply_staged_value("job_summary_ai")
 job_summary_text = st.session_state.get("job_summary_ai", "")
 if job_summary_text:
     st.markdown("**AI job summary for this role (read-only):**")
     st.write(job_summary_text)
 
-
 # -------------------------
 # AI cover letter generation
 # -------------------------
 if ai_cover_letter_clicked:
-    state_debug_capture("btn_cover_letter:clicked")
-    snap = snapshot_protected_state("before_ai_cover_letter")
-
     if not gate_premium("generate a cover letter"):
         st.stop()
 
+    # ✅ use safe personal values
     if not (full_name_ss and email_ss):
         st.warning("Complete Section 1 (Full name + Email) first — added to cover letter.")
         st.stop()
@@ -3118,6 +4039,7 @@ if ai_cover_letter_clicked:
         st.error("Please paste a job description first.")
         st.stop()
 
+    # ✅ LEDGER SPEND (1 AI credit)
     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
     if not uid:
@@ -3131,16 +4053,12 @@ if ai_cover_letter_clicked:
 
     with st.spinner("Generating cover letter..."):
         try:
-            # ✅ Keep education source consistent:
-            # prefer local education_items (built this run), else session fallback
-            edu_for_ai = education_items if "education_items" in locals() else st.session_state.get("education_items", [])
-
             cover_input = {
                 "full_name": full_name_ss,
                 "current_title": title_ss,
                 "skills": skills,
                 "experiences": [exp.dict() for exp in experiences],
-                "education": edu_for_ai,
+                "education": st.session_state.get("education_items", []),
                 "location": location_ss,
             }
 
@@ -3151,33 +4069,25 @@ if ai_cover_letter_clicked:
             cleaned = clean_cover_letter_body(cover_text)
             final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-            stage_value("cover_letter", final_letter)
-            stage_value("cover_letter_box", final_letter)
-            restore_protected_state(snap)
-            state_debug_capture("btn_cover_letter:staged")
+            st.session_state["cover_letter"] = final_letter
+            st.session_state["cover_letter_box"] = final_letter
 
             st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
             if email_for_usage:
                 increment_usage(email_for_usage, "cover_uses")
 
             st.success("AI cover letter generated below. You can edit it before downloading.")
-            state_debug_capture("btn_cover_letter:before_rerun")
             st.rerun()
 
         except Exception as e:
-            restore_protected_state(snap)
             st.error(f"AI error (cover letter): {e}")
-            st.stop()
-
 
 # -------------------------
 # Cover letter editor + downloads
 # -------------------------
-apply_staged_value("cover_letter")
-apply_staged_value("cover_letter_box")
 st.session_state.setdefault("cover_letter", "")
 
-if st.session_state.get("cover_letter"):
+if st.session_state["cover_letter"]:
     st.subheader("✏️ Cover letter")
 
     edited = st.text_area(
@@ -3188,6 +4098,7 @@ if st.session_state.get("cover_letter"):
     st.session_state["cover_letter"] = edited
 
     try:
+        # ✅ use safe values so we never hit NameError or blank fields
         letter_pdf = render_cover_letter_pdf_bytes(
             full_name=full_name_ss or "Candidate",
             letter_body=st.session_state["cover_letter"],
@@ -3224,6 +4135,9 @@ if st.session_state.get("cover_letter"):
         st.error(f"Error generating cover letter files: {e!r}")
 
 
+
+
+
 # -------------------------
 # CV Template mapping
 # -------------------------
@@ -3236,8 +4150,11 @@ TEMPLATE_MAP = {
     "Classic Grey": "classic_grey.html",
 }
 
-safe_init_key("template_label", "Blue")
+# ✅ Ensure a default template label exists
+if "template_label" not in st.session_state or not st.session_state["template_label"]:
+    st.session_state["template_label"] = "Blue"
 
+# ✅ UI: Template dropdown
 template_label = st.selectbox(
     "Choose a CV template",
     options=list(TEMPLATE_MAP.keys()),
@@ -3249,24 +4166,25 @@ template_label = st.selectbox(
     ),
 )
 
+
+
 # -------------------------
 # Generate CV (spend 1 credit)
 # -------------------------
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
-    feature_label="generate and download your CV",
+    action_label="generate and download your CV",
     key="btn_generate_cv",
 )
 
 if generate_clicked:
-    state_debug_capture("btn_generate_cv:clicked")
-    snapshot_protected_state("before_generate_cv")  # ✅ SNAPSHOT
-
-    # clears only derived outputs (must be your SAFE version)
+    # IMPORTANT: make sure this does NOT clear cv_* keys
+    # If it does, comment it out or fix it
     clear_ai_upload_state_only()
 
     email_for_usage = (st.session_state.get("user") or {}).get("email")
 
+    # Pull CV fields ONLY from cv_* keys
     cv_full_name = get_cv_field("cv_full_name")
     cv_title     = get_cv_field("cv_title")
     cv_email     = get_cv_field("cv_email")
@@ -3274,10 +4192,12 @@ if generate_clicked:
     cv_location  = get_cv_field("cv_location")
     raw_summary  = get_cv_field("cv_summary", "")
 
+    # Validate CV fields (NOT auth email)
     if not cv_full_name or not cv_email:
         st.error("Please fill in at least your full name and email.")
         st.stop()
 
+    # Validate login
     if not email_for_usage:
         st.error("Please sign in again.")
         open_auth_modal("Sign in")
@@ -3288,13 +4208,18 @@ if generate_clicked:
         st.error("Please sign in again.")
         st.stop()
 
+    # Spend ledger credit (1 CV)
     spent = try_spend(uid, source="cv_generate", cv=1)
     if not spent:
         st.warning("You don’t have enough CV credits to generate a CV.")
         st.stop()
 
     try:
-        cv_summary = enforce_word_limit(raw_summary or "", MAX_DOC_WORDS, "Professional summary")
+        cv_summary = enforce_word_limit(
+            raw_summary or "",
+            MAX_DOC_WORDS,
+            "Professional summary",
+        )
 
         cv = CV(
             full_name=cv_full_name,
@@ -3310,7 +4235,10 @@ if generate_clicked:
             references=references or None,
         )
 
-        template_name = TEMPLATE_MAP.get(st.session_state.get("template_label"), "Blue Theme.html")
+        template_name = TEMPLATE_MAP.get(
+            st.session_state.get("template_label"),
+            "Blue Theme.html",
+        )
 
         pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
         docx_bytes = render_cv_docx_bytes(cv)
@@ -3325,6 +4253,7 @@ if generate_clicked:
                 file_name="cv.pdf",
                 mime="application/pdf",
             )
+
         with col_cv2:
             st.download_button(
                 "📝 Download CV as Word (.docx)",
@@ -3333,6 +4262,7 @@ if generate_clicked:
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
 
+        # Optional analytics only
         st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
         increment_usage(email_for_usage, "cv_generations")
 
@@ -3349,10 +4279,6 @@ st.header("Pricing")
 col_free, col_monthly, col_pro = st.columns(3)
 
 email_for_checkout = (st.session_state.get("user") or {}).get("email")
-
-# ✅ persistent checkout urls (survive reruns)
-st.session_state.setdefault("checkout_url_monthly", None)
-st.session_state.setdefault("checkout_url_pro", None)
 
 with col_free:
     st.subheader("Free")
@@ -3372,7 +4298,7 @@ with col_monthly:
         "- PDF + Word downloads\n"
         "- Email support\n"
         "- Cancel anytime\n"
-        "\n"
+        "\n"       
     )
 
     if st.button("Start Monthly Subscription", key="start_monthly_sub"):
@@ -3392,15 +4318,9 @@ with col_monthly:
                 pack="monthly",
                 customer_email=email_for_checkout,
             )
-            st.session_state["checkout_url_monthly"] = url
-            state_debug_capture("start_monthly_sub:before_rerun")
-            st.rerun()
+            st.link_button("Continue to secure checkout", url)
         except Exception as e:
             st.error(f"Stripe error: {e}")
-
-    # ✅ render link outside click handler so it persists
-    if st.session_state.get("checkout_url_monthly"):
-        st.link_button("Continue to secure checkout", st.session_state["checkout_url_monthly"])
 
 with col_pro:
     st.subheader("Pro")
@@ -3410,7 +4330,7 @@ with col_pro:
         "- PDF + Word downloads\n"
         "- Priority support\n"
         "- Cancel anytime\n"
-        "\n"
+        "\n"        
     )
 
     if st.button("Start Pro Subscription", key="start_pro_sub"):
@@ -3430,15 +4350,9 @@ with col_pro:
                 pack="pro",
                 customer_email=email_for_checkout,
             )
-            st.session_state["checkout_url_pro"] = url
-            state_debug_capture("start_pro_sub:before_rerun")
-            st.rerun()
+            st.link_button("Continue to secure checkout", url)
         except Exception as e:
             st.error(f"Stripe error: {e}")
-
-    # ✅ render link outside click handler so it persists
-    if st.session_state.get("checkout_url_pro"):
-        st.link_button("Continue to secure checkout", st.session_state["checkout_url_pro"])
 
 st.markdown("---")
 st.subheader("Enterprise (organisations & programmes)")
@@ -3458,34 +4372,30 @@ st.caption(
 )
 
 
-state_debug_report("run:report")
-
 # ==============================================
-# FOOTER POLICY BUTTONS (MODAL ONLY - NO SNAPSHOT)
-# ==============================================
+# FOOTER POLICY BUTTONS (snapshot before navigate)
+# ============================================================
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
-
-render_policy_modal("footer")
 
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
-        open_policy("footer", "accessibility")
+        snapshot_form_state()
+        st.session_state["policy_view"] = "accessibility"
+        st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
-        open_policy("footer", "cookies")
+        snapshot_form_state()
+        st.session_state["policy_view"] = "cookies"
+        st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
-        open_policy("footer", "privacy")
+        snapshot_form_state()
+        st.session_state["policy_view"] = "privacy"
+        st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
-        open_policy("footer", "terms")
-
-# FOOTER POLICY BUTTONS
-render_policy_modal("footer")
-
-# Consent gate LAST so it doesn't wipe widget state
-show_consent_gate()
-
-# Ensure the gate modal can render if user clicks from inside show_consent_gate()
-render_policy_modal("gate")
+        snapshot_form_state()
+        st.session_state["policy_view"] = "terms"
+        st.rerun()
+		
