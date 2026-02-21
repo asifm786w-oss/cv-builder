@@ -668,8 +668,7 @@ def section_cv_upload():
     )
 
     if fill_clicked:
-        dbg_capture_state("before: cv_parse")
-
+        
         cv_upload_bytes = st.session_state.get("cv_upload_bytes")
         cv_upload_name = st.session_state.get("cv_upload_name")
 
@@ -702,8 +701,7 @@ def section_cv_upload():
         # allow the experience section to set count once
         st.session_state["_just_autofilled_from_cv"] = True
         st.session_state["parsed_num_experiences"] = int(parsed.get("parsed_num_experiences") or st.session_state.get("parsed_num_experiences", 1) or 1)
-
-        dbg_diff_since_last("after: cv_parse")
+        
         st.success("Form fields updated from your CV. Scroll down to review and edit.")
         st.rerun()
 
@@ -2547,86 +2545,6 @@ Please ensure your details are reviewed before downloading.
     st.markdown("</div>", unsafe_allow_html=True)
 
 
-# =========================
-# CV Upload + AI Autofill (WORKSPACE SAFE)
-# =========================
-
-st.subheader("Upload an existing CV (optional)")
-st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
-
-uploaded_cv = st.file_uploader(
-    "Upload your current CV (PDF, DOCX or TXT)",
-    type=["pdf", "docx", "txt"],
-    key="cv_uploader",
-)
-
-if uploaded_cv is not None:
-    cached_bytes = uploaded_cv.getvalue() if hasattr(uploaded_cv, "getvalue") else uploaded_cv.read()
-    if cached_bytes:
-        st.session_state["cv_upload_bytes"] = cached_bytes
-        st.session_state["cv_upload_name"] = getattr(uploaded_cv, "name", "uploaded_cv")
-
-fill_clicked = locked_action_button(
-    "Fill the form from this CV (AI)",
-    key="btn_fill_from_cv",
-    feature_label="CV upload & parsing",
-    counter_key="upload_parses",
-    require_login=True,
-    default_tab="Sign in",
-    cooldown_name="upload_parse",
-    cooldown_seconds=5,
-)
-
-def _apply_parsed_fallback(parsed: dict):
-    """
-    Fallback mapping if your _apply_parsed_cv_to_session isn't defined.
-    Workspace-safe: sets only missing fields (never overwrites).
-    """
-    # --- skills ---
-    skills = parsed.get("skills")
-    if isinstance(skills, list):
-        joined = "\n".join(f"• {str(s).strip()}" for s in skills if str(s).strip())
-        if joined.strip():
-            safe_set_if_missing("skills_text", joined)
-    elif isinstance(skills, str) and skills.strip():
-        safe_set_if_missing("skills_text", skills.strip())
-
-    # --- experiences ---
-    exps = parsed.get("experiences") or parsed.get("experience") or []
-    if isinstance(exps, list) and exps:
-        n = max(1, min(5, len(exps)))
-        st.session_state["parsed_num_experiences"] = n
-        safe_set_if_missing("num_experiences", n)
-
-        for i in range(n):
-            e = exps[i] or {}
-            safe_set_if_missing(f"job_title_{i}", e.get("job_title") or e.get("title") or "")
-            safe_set_if_missing(f"company_{i}", e.get("company") or e.get("employer") or "")
-            safe_set_if_missing(f"exp_location_{i}", e.get("location") or "")
-            safe_set_if_missing(f"start_date_{i}", e.get("start_date") or e.get("start") or "")
-            safe_set_if_missing(f"end_date_{i}", e.get("end_date") or e.get("end") or "")
-            desc = e.get("description") or ""
-            if isinstance(desc, list):
-                desc = "\n".join([str(x).strip() for x in desc if str(x).strip()])
-            safe_set_if_missing(f"description_{i}", desc or "")
-
-    # --- education ---
-    edu = parsed.get("education") or parsed.get("educations") or []
-    if isinstance(edu, list) and edu:
-        n = max(1, min(5, len(edu)))
-        safe_set_if_missing("num_education", n)
-
-        # keep education_items list too, but never overwrite if already exists
-        if "education_items" not in st.session_state or st.session_state["education_items"] is None:
-            st.session_state["education_items"] = []
-
-        for i in range(n):
-            r = edu[i] or {}
-            safe_set_if_missing(f"degree_{i}", r.get("degree") or r.get("qualification") or "")
-            safe_set_if_missing(f"institution_{i}", r.get("institution") or r.get("school") or "")
-            safe_set_if_missing(f"edu_location_{i}", r.get("location") or r.get("city") or "")
-            safe_set_if_missing(f"edu_start_{i}", r.get("start_date") or r.get("start") or "")
-            safe_set_if_missing(f"edu_end_{i}", r.get("end_date") or r.get("end") or "")
 
 
 if fill_clicked:
