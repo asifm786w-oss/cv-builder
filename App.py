@@ -3323,7 +3323,6 @@ st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be
 if "cv_summary_pending" in st.session_state:
     st.session_state["cv_summary"] = st.session_state.pop("cv_summary_pending")
 
-cv_summary_text = st.text_area("Professional summary", height=120, key="cv_summary")
 st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
 
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
@@ -4071,6 +4070,8 @@ def get_personal_value(primary_key: str, fallback_key: str) -> str:
     """Read personal details from either the main Section 1 keys OR cv_* keys."""
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
 
+
+
 # Pull personal details safely (works with either key system)
 full_name_ss = get_personal_value("full_name", "cv_full_name")
 email_ss     = get_personal_value("email", "cv_email")
@@ -4079,11 +4080,16 @@ phone_ss     = get_personal_value("phone", "cv_phone")
 location_ss  = get_personal_value("location", "cv_location")
 
 epoch = int(st.session_state.get("form_epoch", 0) or 0)
+jd_key = f"job_description__{epoch}"
+
+# seed epoch key BEFORE widget renders
+if jd_key not in st.session_state:
+    st.session_state[jd_key] = st.session_state.get("job_description", "")
 
 job_description = st.text_area(
     "Paste the job description here",
     height=200,
-    key=f"job_description__{epoch}",
+    key=jd_key,
 )
 
 jd_fp = _fingerprint(job_description)
