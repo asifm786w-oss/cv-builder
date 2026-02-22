@@ -2885,19 +2885,52 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 st.rerun()
 
 
-def hard_logout(preserve: list[str] | None = None) -> None:
-    preserve = preserve or []
+def clear_form_state_on_logout() -> None:
+    # Stop any “return from policy” restore
+    st.session_state["_just_returned_from_policy"] = False
 
-    keep = {k: st.session_state.get(k) for k in preserve if k in st.session_state}
+    # Remove snapshot so it can’t rehydrate anything later
+    st.session_state.pop("_form_snapshot", None)
 
-    # Nuclear reset
-    st.session_state.clear()
+    # Clear Section 1 (both naming systems, just in case)
+    for k in ["full_name", "title", "email", "phone", "location", "summary",
+              "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"]:
+        st.session_state.pop(k, None)
 
-    # Restore only what we explicitly kept
-    for k, v in keep.items():
-        st.session_state[k] = v
+    # Clear upload / parsing
+    for k in ["cv_uploader", "cv_upload_bytes", "cv_upload_name",
+              "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
+              "_last_cv_fingerprint", "parsed_num_experiences"]:
+        st.session_state.pop(k, None)
 
-    st.rerun()
+    # Clear skills + counters tied to form output
+    for k in ["skills_text", "skills", "cv_generations", "summary_uses", "cover_uses",
+              "bullets_uses", "job_summary_uses", "upload_parses"]:
+        st.session_state.pop(k, None)
+
+    # Clear dynamic experience fields (max 5)
+    st.session_state.pop("num_experiences", None)
+    for i in range(5):
+        for k in [f"job_title_{i}", f"company_{i}", f"exp_location_{i}",
+                  f"start_date_{i}", f"end_date_{i}", f"description_{i}"]:
+            st.session_state.pop(k, None)
+
+    # Clear education + references (max 5)
+    st.session_state.pop("num_education", None)
+    st.session_state.pop("education_items", None)
+    st.session_state.pop("references", None)
+    for i in range(5):
+        for k in [f"degree_{i}", f"institution_{i}", f"edu_location_{i}",
+                  f"edu_start_{i}", f"edu_end_{i}"]:
+            st.session_state.pop(k, None)
+
+    # Clear job target + AI outputs
+    for k in ["job_description", "_last_jd_fp", "job_summary_ai",
+              "cover_letter", "cover_letter_box", "selected_job"]:
+        st.session_state.pop(k, None)
+
+    # Optional: reset template selection back to default
+    st.session_state["template_label"] = "Blue"
 
 # =========================
 # SIDEBAR (full)
@@ -2976,12 +3009,7 @@ with st.sidebar:
         st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
 
         if st.button("Log out", key="sb_logout_btn"):
-            hard_logout(preserve=[
-            # keep only UI/app-level stuff if you want
-            "auth_modal_open", "auth_modal_tab", "auth_modal_epoch",
-            "help_topic_sidebar",  # optional
-            "template_label",      # optional (or remove if you want FULL reset)
-        ])
+            sidebar_logout()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
