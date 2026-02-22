@@ -3317,8 +3317,6 @@ st.session_state["cv_phone"]     = cv_phone
 st.session_state["cv_location"]  = cv_location
 st.session_state["cv_summary"]   = cv_summary_text
 
-st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
-
 # --- Apply staged summary BEFORE widget renders ---
 if "cv_summary_pending" in st.session_state:
     st.session_state["cv_summary"] = st.session_state.pop("cv_summary_pending")
@@ -4223,21 +4221,32 @@ if ai_cover_letter_clicked:
         except Exception as e:
             st.error(f"AI error (cover letter): {e}")
 
-# -------------------------
-# Cover letter editor + downloads
-# -------------------------
-st.session_state.setdefault("cover_letter", "")
 
+# -------------------------
+# Cover letter editor + downloads (epoch-safe)
+# -------------------------
 epoch = int(st.session_state.get("form_epoch", 0) or 0)
+cl_box_key = f"cover_letter_box__{epoch}"
 
-if st.session_state["cover_letter"]:
+# Canonical cover letter text (source of truth)
+cover_text = (st.session_state.get("cover_letter") or "").strip()
+
+# If we have a cover letter but the epoch widget isn't seeded yet, seed it BEFORE render
+if cover_text and cl_box_key not in st.session_state:
+    st.session_state[cl_box_key] = st.session_state["cover_letter"]
+
+# Render editor if either canonical has text OR widget already has text
+if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     st.subheader("✏️ Cover letter")
 
     edited = st.text_area(
         "You can edit this before using it:",
-        key=f"cover_letter_box__{epoch}",
+        key=cl_box_key,
         height=260,
     )
+
+    # Sync widget -> canonical AFTER render (allowed)
+    st.session_state["cover_letter"] = edited
 
     # sync edited text back into canonical state
     st.session_state["cover_letter"] = edited
