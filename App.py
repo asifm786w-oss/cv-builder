@@ -3282,20 +3282,33 @@ st.header("1. Personal details")
 
 epoch = int(st.session_state.get("form_epoch", 0) or 0)
 
+# If AI wants to update summary, stage it into canonical BEFORE seeding widgets
+if "cv_summary_pending" in st.session_state:
+    st.session_state["cv_summary"] = st.session_state.pop("cv_summary_pending")
+
+# Seed widget epoch-keys from canonical keys BEFORE widgets render
+bind_epoch_keys(
+    ["cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"],
+    epoch
+)
+
+# Render widgets (ONLY ONCE)
 cv_full_name = st.text_input("Full name *", key=f"cv_full_name__{epoch}")
 cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key=f"cv_title__{epoch}")
 cv_email     = st.text_input("Email *", key=f"cv_email__{epoch}")
 cv_phone     = st.text_input("Phone", key=f"cv_phone__{epoch}")
 cv_location  = st.text_input("Location (City, Country)", key=f"cv_location__{epoch}")
 cv_summary_text = st.text_area("Professional summary", height=120, key=f"cv_summary__{epoch}")
-epoch = int(st.session_state.get("form_epoch", 0) or 0)
 
-st.session_state["cv_full_name"] = st.session_state.get(f"cv_full_name__{epoch}", "")
-st.session_state["cv_title"]     = st.session_state.get(f"cv_title__{epoch}", "")
-st.session_state["cv_email"]     = st.session_state.get(f"cv_email__{epoch}", "")
-st.session_state["cv_phone"]     = st.session_state.get(f"cv_phone__{epoch}", "")
-st.session_state["cv_location"]  = st.session_state.get(f"cv_location__{epoch}", "")
-st.session_state["cv_summary"]   = st.session_state.get(f"cv_summary__{epoch}", "")
+# Sync epoch widget values -> canonical keys
+st.session_state["cv_full_name"] = cv_full_name
+st.session_state["cv_title"]     = cv_title
+st.session_state["cv_email"]     = cv_email
+st.session_state["cv_phone"]     = cv_phone
+st.session_state["cv_location"]  = cv_location
+st.session_state["cv_summary"]   = cv_summary_text
+
+st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
 
 # --- Apply staged summary BEFORE widget renders ---
 if "cv_summary_pending" in st.session_state:
