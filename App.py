@@ -197,24 +197,7 @@ def refresh_session_user_from_db() -> None:
 
     st.session_state["user"] = dict(db_u)
   
-# =========================
-# HARD RESET ON LOGOUT (EARLY)
-# =========================
-def _hard_reset_to_guest() -> None:
-    # Nuke everything (including widget values) to prevent rehydration
-    st.session_state.clear()
 
-    # Recreate only the minimum safe defaults your app expects
-    st.session_state["user"] = None
-    st.session_state["template_label"] = "Blue"
-    st.session_state["auth_modal_open"] = False
-    st.session_state["auth_modal_tab"] = "Sign in"
-    st.session_state["auth_modal_epoch"] = 0
-
-# If logout requested, do it BEFORE anything else can restore/init values
-if st.session_state.get("_logout_requested", False):
-    _hard_reset_to_guest()
-    st.rerun()
 
 def improve_skills(skills_text: str) -> str:
     """
@@ -2896,7 +2879,24 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 open_auth_modal("Create account")
                 st.rerun()
 
+# =========================
+# HARD RESET ON LOGOUT (EARLY)
+# =========================
+def _hard_reset_to_guest() -> None:
+    # Nuke everything (including widget values) to prevent rehydration
+    st.session_state.clear()
 
+    # Recreate only the minimum safe defaults your app expects
+    st.session_state["user"] = None
+    st.session_state["template_label"] = "Blue"
+    st.session_state["auth_modal_open"] = False
+    st.session_state["auth_modal_tab"] = "Sign in"
+    st.session_state["auth_modal_epoch"] = 0
+
+# If logout requested, do it BEFORE anything else can restore/init values
+if st.session_state.get("_logout_requested", False):
+    _hard_reset_to_guest()
+    st.rerun()
 
 # =========================
 # SIDEBAR (full)
