@@ -241,6 +241,15 @@ def get_cv_field(key: str, fallback=None):
     v = st.session_state.get(key, None)
     return fallback if (v is None or v == "") else v
 
+def bind_epoch_keys(prefixes: list[str], epoch: int) -> None:
+    """
+    Seed widget keys like cv_full_name__{epoch} from canonical keys like cv_full_name
+    BEFORE widgets render.
+    """
+    for p in prefixes:
+        wk = f"{p}__{epoch}"
+        if wk not in st.session_state:
+            st.session_state[wk] = st.session_state.get(p, "")
 
 def set_cv_defaults_from_existing(full_name=None, title=None, email=None, phone=None, location=None, summary=None):
     """
