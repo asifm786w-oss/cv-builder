@@ -4200,18 +4200,19 @@ if ai_cover_letter_clicked:
 # -------------------------
 st.session_state.setdefault("cover_letter", "")
 
-if st.session_state["cover_letter"]:
-    st.subheader("✏️ Cover letter")
 epoch = int(st.session_state.get("form_epoch", 0) or 0)
 
-edited = st.text_area(
-    "You can edit this before using it:",
-    key=f"cover_letter_box__{epoch}",
-    height=260,
-)
+if st.session_state["cover_letter"]:
+    st.subheader("✏️ Cover letter")
+
+    edited = st.text_area(
+        "You can edit this before using it:",
+        key=f"cover_letter_box__{epoch}",
+        height=260,
+    )
+
+    # sync edited text back into canonical state
     st.session_state["cover_letter"] = edited
-epoch = int(st.session_state.get("form_epoch", 0) or 0)
-st.session_state["job_description"] = st.session_state.get(f"job_description__{epoch}", "")
     try:
         # ✅ use safe values so we never hit NameError or blank fields
         letter_pdf = render_cover_letter_pdf_bytes(
