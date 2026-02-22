@@ -111,11 +111,6 @@ st.markdown(
 )
 
 
-
-
-
-
-
 # -------------------------
 # GLOBAL PLAN + REFERRAL CONFIG
 # -------------------------
@@ -202,7 +197,24 @@ def refresh_session_user_from_db() -> None:
 
     st.session_state["user"] = dict(db_u)
   
+# =========================
+# HARD RESET ON LOGOUT (EARLY)
+# =========================
+def _hard_reset_to_guest() -> None:
+    # Nuke everything (including widget values) to prevent rehydration
+    st.session_state.clear()
 
+    # Recreate only the minimum safe defaults your app expects
+    st.session_state["user"] = None
+    st.session_state["template_label"] = "Blue"
+    st.session_state["auth_modal_open"] = False
+    st.session_state["auth_modal_tab"] = "Sign in"
+    st.session_state["auth_modal_epoch"] = 0
+
+# If logout requested, do it BEFORE anything else can restore/init values
+if st.session_state.get("_logout_requested", False):
+    _hard_reset_to_guest()
+    st.rerun()
 
 def improve_skills(skills_text: str) -> str:
     """
@@ -2885,65 +2897,7 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 st.rerun()
 
 
-def clear_form_state_on_logout() -> None:
-    # Stop any “return from policy” restore
-    st.session_state["_just_returned_from_policy"] = False
 
-    # Remove snapshot so it can’t rehydrate anything later
-    st.session_state.pop("_form_snapshot", None)
-
-    # Clear Section 1 (both naming systems, just in case)
-    for k in ["full_name", "title", "email", "phone", "location", "summary",
-              "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"]:
-        st.session_state.pop(k, None)
-
-    # Clear upload / parsing
-    for k in ["cv_uploader", "cv_upload_bytes", "cv_upload_name",
-              "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
-              "_last_cv_fingerprint", "parsed_num_experiences"]:
-        st.session_state.pop(k, None)
-
-    # Clear skills + counters tied to form output
-    for k in ["skills_text", "skills", "cv_generations", "summary_uses", "cover_uses",
-              "bullets_uses", "job_summary_uses", "upload_parses"]:
-        st.session_state.pop(k, None)
-
-    # Clear dynamic experience fields (max 5)
-    st.session_state.pop("num_experiences", None)
-    for i in range(5):
-        for k in [f"job_title_{i}", f"company_{i}", f"exp_location_{i}",
-                  f"start_date_{i}", f"end_date_{i}", f"description_{i}"]:
-            st.session_state.pop(k, None)
-
-    # Clear education + references (max 5)
-    st.session_state.pop("num_education", None)
-    st.session_state.pop("education_items", None)
-    st.session_state.pop("references", None)
-    for i in range(5):
-        for k in [f"degree_{i}", f"institution_{i}", f"edu_location_{i}",
-                  f"edu_start_{i}", f"edu_end_{i}"]:
-            st.session_state.pop(k, None)
-
-    # Clear job target + AI outputs
-    for k in ["job_description", "_last_jd_fp", "job_summary_ai",
-              "cover_letter", "cover_letter_box", "selected_job"]:
-        st.session_state.pop(k, None)
-
-    # Optional: reset template selection back to default
-    st.session_state["template_label"] = "Blue"
-
-def sidebar_logout() -> None:
-    # Clear CV + form state
-    clear_form_state_on_logout()
-
-    # Clear auth only
-    st.session_state["user"] = None
-
-    # Close auth modal safely if it exists
-    if "auth_modal_open" in st.session_state:
-        st.session_state["auth_modal_open"] = False
-
-    st.rerun()
 # =========================
 # SIDEBAR (full)
 # =========================
@@ -3011,8 +2965,9 @@ with st.sidebar:
         st.markdown(f'<div class="sb-muted">{email}</div>', unsafe_allow_html=True)
         st.markdown(f"**Plan:** {plan_label}")
 
-        if sidebar_role in {"owner", "admin"}:
-            st.caption(f"Admin: {sidebar_role}")
+        if st.button("Log out", key="sb_logout_btn"):
+            st.session_state["_logout_requested"] = True
+            st.rerun()
 
         is_banned = bool((session_user or {}).get("is_banned"))
         st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
