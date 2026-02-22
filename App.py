@@ -2888,6 +2888,7 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 st.rerun()
 
 
+
 # =========================
 # SIDEBAR (full)
 # =========================
@@ -2928,6 +2929,16 @@ with st.sidebar:
             unsafe_allow_html=True,
         )
 
+def sidebar_logout() -> None:
+    # Minimal logout: only remove user session
+    st.session_state["user"] = None
+
+    # Optional: close auth modal if your app uses it (safe guards)
+    if "auth_modal_open" in st.session_state:
+        st.session_state["auth_modal_open"] = False
+
+    st.rerun()
+
     # ---------- Account ----------
     st.markdown('<div class="sb-card">', unsafe_allow_html=True)
     st.markdown("### 👤 Account")
@@ -2965,8 +2976,7 @@ with st.sidebar:
         st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
 
         if st.button("Log out", key="sb_logout_btn"):
-            st.session_state["user"] = None
-            st.rerun()
+            sidebar_logout()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
