@@ -2887,7 +2887,15 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 open_auth_modal("Create account")
                 st.rerun()
 
+def sidebar_logout() -> None:
+    # Minimal logout: only remove user session
+    st.session_state["user"] = None
 
+    # Optional: close auth modal if your app uses it (safe guards)
+    if "auth_modal_open" in st.session_state:
+        st.session_state["auth_modal_open"] = False
+
+    st.rerun()
 
 # =========================
 # SIDEBAR (full)
@@ -2928,16 +2936,6 @@ with st.sidebar:
             """,
             unsafe_allow_html=True,
         )
-
-def sidebar_logout() -> None:
-    # Minimal logout: only remove user session
-    st.session_state["user"] = None
-
-    # Optional: close auth modal if your app uses it (safe guards)
-    if "auth_modal_open" in st.session_state:
-        st.session_state["auth_modal_open"] = False
-
-    st.rerun()
 
     # ---------- Account ----------
     st.markdown('<div class="sb-card">', unsafe_allow_html=True)
