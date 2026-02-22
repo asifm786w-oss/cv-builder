@@ -1995,16 +1995,13 @@ def restore_form_state():
         st.session_state[k] = v
 
 if st.session_state.get("_just_returned_from_policy"):
-    restore_form_state()
+    # Only restore snapshot if the user is still logged in
+    u = st.session_state.get("user") or {}
+    if _is_logged_in_user(u):
+        restore_form_state()
+
     st.session_state["_just_returned_from_policy"] = False
 
-
-# =========================
-# RESTORE SNAPSHOT ON RETURN
-# =========================
-if st.session_state.get("_just_returned_from_policy"):
-    restore_form_state()
-    st.session_state["_just_returned_from_policy"] = False
 
 
 
@@ -2887,53 +2884,18 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 open_auth_modal("Create account")
                 st.rerun()
 
-def sidebar_logout() -> None:
-    # 1) remove auth user
-    st.session_state["user"] = None
 
-    # 2) close auth modal if present
-    if "auth_modal_open" in st.session_state:
-        st.session_state["auth_modal_open"] = False
+def hard_logout(preserve: list[str] | None = None) -> None:
+    preserve = preserve or []
 
-    # 3) clear CV builder + AI + upload + job keys
-    CLEAR_KEYS = [
-        # Upload
-        "cv_uploader", "cv_upload_bytes", "cv_upload_name",
-        "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
-        "_last_cv_fingerprint", "parsed_num_experiences",
+    keep = {k: st.session_state.get(k) for k in preserve if k in st.session_state}
 
-        # Personal details (your current system uses cv_* for the form)
-        "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
+    # Nuclear reset
+    st.session_state.clear()
 
-        # Skills + counts
-        "skills_text", "num_experiences", "num_education",
-
-        # Job / Adzuna / Cover outputs
-        "job_description", "_last_jd_fp", "job_summary_ai",
-        "cover_letter", "cover_letter_box", "selected_job",
-        "adzuna_results", "adzuna_keywords", "adzuna_location",
-
-        # Usage counters in session (optional but usually desired)
-        "cv_generations", "summary_uses", "cover_uses", "bullets_uses",
-        "job_summary_uses", "upload_parses",
-
-        # Any snapshot/return flags you used
-        "_form_snapshot", "_just_returned_from_policy",
-    ]
-
-    for k in CLEAR_KEYS:
-        if k in st.session_state:
-            st.session_state.pop(k, None)
-
-    # 4) also clear any dynamic role/education fields (job_title_0, degree_0, etc.)
-    for k in list(st.session_state.keys()):
-        if (
-            k.startswith("job_title_") or k.startswith("company_") or k.startswith("exp_location_")
-            or k.startswith("start_date_") or k.startswith("end_date_") or k.startswith("description_")
-            or k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_location_")
-            or k.startswith("edu_start_") or k.startswith("edu_end_")
-        ):
-            st.session_state.pop(k, None)
+    # Restore only what we explicitly kept
+    for k, v in keep.items():
+        st.session_state[k] = v
 
     st.rerun()
 
@@ -3014,7 +2976,12 @@ with st.sidebar:
         st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
 
         if st.button("Log out", key="sb_logout_btn"):
-            sidebar_logout()
+            hard_logout(preserve=[
+            # keep only UI/app-level stuff if you want
+            "auth_modal_open", "auth_modal_tab", "auth_modal_epoch",
+            "help_topic_sidebar",  # optional
+            "template_label",      # optional (or remove if you want FULL reset)
+        ])
 
     st.markdown("</div>", unsafe_allow_html=True)
 
