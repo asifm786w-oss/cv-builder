@@ -2976,7 +2976,8 @@ with st.sidebar:
         st.markdown(f"**Policies accepted:** {'Yes' if accepted else 'No'}")
 
         if st.button("Log out", key="sb_logout_btn"):
-            sidebar_logout()
+            st.session_state["_logout_requested"] = True
+            st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
