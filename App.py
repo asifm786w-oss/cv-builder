@@ -2888,12 +2888,52 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 st.rerun()
 
 def sidebar_logout() -> None:
-    # Minimal logout: only remove user session
+    # 1) remove auth user
     st.session_state["user"] = None
 
-    # Optional: close auth modal if your app uses it (safe guards)
+    # 2) close auth modal if present
     if "auth_modal_open" in st.session_state:
         st.session_state["auth_modal_open"] = False
+
+    # 3) clear CV builder + AI + upload + job keys
+    CLEAR_KEYS = [
+        # Upload
+        "cv_uploader", "cv_upload_bytes", "cv_upload_name",
+        "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
+        "_last_cv_fingerprint", "parsed_num_experiences",
+
+        # Personal details (your current system uses cv_* for the form)
+        "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
+
+        # Skills + counts
+        "skills_text", "num_experiences", "num_education",
+
+        # Job / Adzuna / Cover outputs
+        "job_description", "_last_jd_fp", "job_summary_ai",
+        "cover_letter", "cover_letter_box", "selected_job",
+        "adzuna_results", "adzuna_keywords", "adzuna_location",
+
+        # Usage counters in session (optional but usually desired)
+        "cv_generations", "summary_uses", "cover_uses", "bullets_uses",
+        "job_summary_uses", "upload_parses",
+
+        # Any snapshot/return flags you used
+        "_form_snapshot", "_just_returned_from_policy",
+    ]
+
+    for k in CLEAR_KEYS:
+        if k in st.session_state:
+            st.session_state.pop(k, None)
+
+    # 4) also clear any dynamic role/education fields (job_title_0, degree_0, etc.)
+    for k in list(st.session_state.keys()):
+        if (
+            k.startswith("job_title_") or k.startswith("company_") or k.startswith("exp_location_")
+            or k.startswith("start_date_") or k.startswith("end_date_") or k.startswith("description_")
+            or k.startswith("degree_") or k.startswith("institution_") or k.startswith("edu_location_")
+            or k.startswith("edu_start_") or k.startswith("edu_end_")
+        ):
+            st.session_state.pop(k, None)
 
     st.rerun()
 
