@@ -3285,17 +3285,21 @@ backup_skills_state()
 restore_form_state_if_needed()
 
 # -------------------------
-# 1. Personal details
+# 1. Personal details (epoch-safe + AI summary update)
 # -------------------------
 st.header("1. Personal details")
 
 epoch = int(st.session_state.get("form_epoch", 0) or 0)
 
-# If AI wants to update summary, stage it into canonical BEFORE seeding widgets
-if "cv_summary_pending" in st.session_state:
-    st.session_state["cv_summary"] = st.session_state.pop("cv_summary_pending")
+# If AI produced a new summary, apply it BEFORE widgets render
+pending = st.session_state.pop("cv_summary_pending", None)
+if pending is not None:
+    # canonical
+    st.session_state["cv_summary"] = pending
+    # IMPORTANT: push into the epoch-bound widget key too (so UI updates)
+    st.session_state[f"cv_summary__{epoch}"] = pending
 
-# Seed widget epoch-keys from canonical keys BEFORE widgets render
+# Seed epoch-keys from canonical keys BEFORE widgets render
 bind_epoch_keys(
     ["cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary"],
     epoch
@@ -3317,10 +3321,6 @@ st.session_state["cv_phone"]     = cv_phone
 st.session_state["cv_location"]  = cv_location
 st.session_state["cv_summary"]   = cv_summary_text
 
-# --- Apply staged summary BEFORE widget renders ---
-if "cv_summary_pending" in st.session_state:
-    st.session_state["cv_summary"] = st.session_state.pop("cv_summary_pending")
-
 st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be ignored.")
 
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
@@ -3332,47 +3332,46 @@ if btn_summary:
     ok, left = cooldown_ok("improve_summary", 5)
     if not ok:
         st.warning(f"⏳ Please wait {left}s before trying again.")
-    else:
-        if not cv_summary_text.strip():
-            st.error("Please write a professional summary first.")
-        elif not has_free_quota("summary_uses", 1, "AI professional summary"):
-            st.stop()
-        else:
-            with st.spinner("Improving your professional summary..."):
-                try:
-                    cv_like = {
-                        "full_name": cv_full_name,
-                        "current_title": cv_title,
-                        "location": cv_location,
-                        "existing_summary": cv_summary_text,
-                    }
+        st.stop()
 
-                    instructions = (
-                        "Improve this existing professional summary so it is clearer, "
-                        "more impactful and suitable for a modern UK CV. Do not invent "
-                        "new experience, just polish what is already there."
-                    )
+    if not cv_summary_text.strip():
+        st.error("Please write a professional summary first.")
+        st.stop()
 
-                    improved = generate_tailored_summary(cv_like, instructions)
-                    improved_limited = enforce_word_limit(
-                        improved,
-                        MAX_DOC_WORDS,
-                        label="Professional summary (AI)",
-                    )
+    if not has_free_quota("summary_uses", 1, "AI professional summary"):
+        st.stop()
 
-                    # stage for next rerun (do not mutate key after widget renders)
-                    st.session_state["cv_summary_pending"] = improved_limited
+    with st.spinner("Improving your professional summary..."):
+        try:
+            cv_like = {
+                "full_name": cv_full_name,
+                "current_title": cv_title,
+                "location": cv_location,
+                "existing_summary": cv_summary_text,
+            }
 
-                    st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
-                    email_for_usage = (st.session_state.get("user") or {}).get("email")
-                    if email_for_usage:
-                        increment_usage(email_for_usage, "summary_uses")
+            instructions = (
+                "Improve this existing professional summary so it is clearer, "
+                "more impactful and suitable for a modern UK CV. Do not invent "
+                "new experience, just polish what is already there."
+            )
 
-                    st.success("AI summary applied into your main box.")
-                    st.rerun()
+            improved = generate_tailored_summary(cv_like, instructions)
+            improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label="Professional summary (AI)")
 
-                except Exception as e:
-                    st.error(f"AI error (summary improvement): {e}")
+            # Stage for next rerun
+            st.session_state["cv_summary_pending"] = improved_limited
+
+            st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
+            email_for_usage = (st.session_state.get("user") or {}).get("email")
+            if email_for_usage:
+                increment_usage(email_for_usage, "summary_uses")
+
+            st.success("AI summary applied into your main box.")
+            st.rerun()
+
+        except Exception as e:
+            st.error(f"AI error (summary improvement): {e}")
 
 
 
