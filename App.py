@@ -216,21 +216,22 @@ def clear_ai_upload_state_only():
         if k.startswith(("ai_", "upload_", "parsed_", "adzuna_", "job_")):
             st.session_state.pop(k, None)
 
-# =========================
-# HARD RESET ON LOGOUT (EARLY)
-# =========================
+FORM_EPOCH_KEY = "form_epoch"
+
 def _hard_reset_to_guest() -> None:
-    # Nuke everything (including widget values) to prevent rehydration
+    next_epoch = int(st.session_state.get(FORM_EPOCH_KEY, 0) or 0) + 1
+
     st.session_state.clear()
 
-    # Recreate only the minimum safe defaults your app expects
     st.session_state["user"] = None
     st.session_state["template_label"] = "Blue"
     st.session_state["auth_modal_open"] = False
     st.session_state["auth_modal_tab"] = "Sign in"
     st.session_state["auth_modal_epoch"] = 0
 
-# If logout requested, do it BEFORE anything else can restore/init values
+    # key part: bump epoch AFTER clear
+    st.session_state[FORM_EPOCH_KEY] = next_epoch
+
 if st.session_state.get("_logout_requested", False):
     _hard_reset_to_guest()
     st.rerun()
@@ -3279,11 +3280,22 @@ restore_form_state_if_needed()
 # -------------------------
 st.header("1. Personal details")
 
-cv_full_name = st.text_input("Full name *", key="cv_full_name")
-cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key="cv_title")
-cv_email     = st.text_input("Email *", key="cv_email")
-cv_phone     = st.text_input("Phone", key="cv_phone")
-cv_location  = st.text_input("Location (City, Country)", key="cv_location")
+epoch = int(st.session_state.get("form_epoch", 0) or 0)
+
+cv_full_name = st.text_input("Full name *", key=f"cv_full_name__{epoch}")
+cv_title     = st.text_input("Professional title (e.g. Software Engineer)", key=f"cv_title__{epoch}")
+cv_email     = st.text_input("Email *", key=f"cv_email__{epoch}")
+cv_phone     = st.text_input("Phone", key=f"cv_phone__{epoch}")
+cv_location  = st.text_input("Location (City, Country)", key=f"cv_location__{epoch}")
+cv_summary_text = st.text_area("Professional summary", height=120, key=f"cv_summary__{epoch}")
+epoch = int(st.session_state.get("form_epoch", 0) or 0)
+
+st.session_state["cv_full_name"] = st.session_state.get(f"cv_full_name__{epoch}", "")
+st.session_state["cv_title"]     = st.session_state.get(f"cv_title__{epoch}", "")
+st.session_state["cv_email"]     = st.session_state.get(f"cv_email__{epoch}", "")
+st.session_state["cv_phone"]     = st.session_state.get(f"cv_phone__{epoch}", "")
+st.session_state["cv_location"]  = st.session_state.get(f"cv_location__{epoch}", "")
+st.session_state["cv_summary"]   = st.session_state.get(f"cv_summary__{epoch}", "")
 
 # --- Apply staged summary BEFORE widget renders ---
 if "cv_summary_pending" in st.session_state:
@@ -4044,11 +4056,12 @@ title_ss     = get_personal_value("title", "cv_title")
 phone_ss     = get_personal_value("phone", "cv_phone")
 location_ss  = get_personal_value("location", "cv_location")
 
+epoch = int(st.session_state.get("form_epoch", 0) or 0)
+
 job_description = st.text_area(
     "Paste the job description here",
     height=200,
-    help="Paste the full job spec from LinkedIn, Indeed, etc.",
-    key="job_description",
+    key=f"job_description__{epoch}",
 )
 
 jd_fp = _fingerprint(job_description)
@@ -4189,14 +4202,16 @@ st.session_state.setdefault("cover_letter", "")
 
 if st.session_state["cover_letter"]:
     st.subheader("✏️ Cover letter")
+epoch = int(st.session_state.get("form_epoch", 0) or 0)
 
-    edited = st.text_area(
-        "You can edit this before using it:",
-        key="cover_letter_box",
-        height=260,
-    )
+edited = st.text_area(
+    "You can edit this before using it:",
+    key=f"cover_letter_box__{epoch}",
+    height=260,
+)
     st.session_state["cover_letter"] = edited
-
+epoch = int(st.session_state.get("form_epoch", 0) or 0)
+st.session_state["job_description"] = st.session_state.get(f"job_description__{epoch}", "")
     try:
         # ✅ use safe values so we never hit NameError or blank fields
         letter_pdf = render_cover_letter_pdf_bytes(
