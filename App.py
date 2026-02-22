@@ -216,7 +216,24 @@ def clear_ai_upload_state_only():
         if k.startswith(("ai_", "upload_", "parsed_", "adzuna_", "job_")):
             st.session_state.pop(k, None)
 
+# =========================
+# HARD RESET ON LOGOUT (EARLY)
+# =========================
+def _hard_reset_to_guest() -> None:
+    # Nuke everything (including widget values) to prevent rehydration
+    st.session_state.clear()
 
+    # Recreate only the minimum safe defaults your app expects
+    st.session_state["user"] = None
+    st.session_state["template_label"] = "Blue"
+    st.session_state["auth_modal_open"] = False
+    st.session_state["auth_modal_tab"] = "Sign in"
+    st.session_state["auth_modal_epoch"] = 0
+
+# If logout requested, do it BEFORE anything else can restore/init values
+if st.session_state.get("_logout_requested", False):
+    _hard_reset_to_guest()
+    st.rerun()
 
 def get_cv_field(key: str, fallback=None):
     """Read CV-only session state first, else fall back to existing variable/value."""
@@ -2879,24 +2896,7 @@ def render_mulyba_brand_header(is_logged_in: bool):
                 open_auth_modal("Create account")
                 st.rerun()
 
-# =========================
-# HARD RESET ON LOGOUT (EARLY)
-# =========================
-def _hard_reset_to_guest() -> None:
-    # Nuke everything (including widget values) to prevent rehydration
-    st.session_state.clear()
 
-    # Recreate only the minimum safe defaults your app expects
-    st.session_state["user"] = None
-    st.session_state["template_label"] = "Blue"
-    st.session_state["auth_modal_open"] = False
-    st.session_state["auth_modal_tab"] = "Sign in"
-    st.session_state["auth_modal_epoch"] = 0
-
-# If logout requested, do it BEFORE anything else can restore/init values
-if st.session_state.get("_logout_requested", False):
-    _hard_reset_to_guest()
-    st.rerun()
 
 # =========================
 # SIDEBAR (full)
@@ -2960,14 +2960,6 @@ with st.sidebar:
         plan = ((session_user or {}).get("plan") or "free").strip().lower()
 
         plan_label = "Pro" if plan == "pro" else ("Monthly" if plan == "monthly" else "Free")
-
-        st.markdown(f"**{full_name}**")
-        st.markdown(f'<div class="sb-muted">{email}</div>', unsafe_allow_html=True)
-        st.markdown(f"**Plan:** {plan_label}")
-
-        if st.button("Log out", key="sb_logout_btn"):
-            st.session_state["_logout_requested"] = True
-            st.rerun()
 
         is_banned = bool((session_user or {}).get("is_banned"))
         st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
