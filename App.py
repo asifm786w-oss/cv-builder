@@ -2932,6 +2932,18 @@ def clear_form_state_on_logout() -> None:
     # Optional: reset template selection back to default
     st.session_state["template_label"] = "Blue"
 
+def sidebar_logout() -> None:
+    # Clear CV + form state
+    clear_form_state_on_logout()
+
+    # Clear auth only
+    st.session_state["user"] = None
+
+    # Close auth modal safely if it exists
+    if "auth_modal_open" in st.session_state:
+        st.session_state["auth_modal_open"] = False
+
+    st.rerun()
 # =========================
 # SIDEBAR (full)
 # =========================
