@@ -110,44 +110,7 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-if is_logged_in:
-    st.markdown(
-        """
-        <div id="mulyba-rail">
-          <div class="rail-card">
-            <div class="rail-title">What you get</div>
-            <ul class="rail-list">
-              <li>Modern CV builder (UK-friendly)</li>
-              <li>AI improvements (summary, bullets)</li>
-              <li>Cover letters tailored to job ads</li>
-              <li>PDF + Word downloads</li>
-            </ul>
-            <div style="margin-top:10px;">
-              <span class="rail-badge">Fast</span>
-              <span class="rail-badge">Clean</span>
-              <span class="rail-badge">ATS-friendly</span>
-            </div>
-          </div>
 
-          <div class="rail-card">
-            <div class="rail-title">How it works</div>
-            <div class="rail-text">
-              1) Fill your details<br/>
-              2) Improve wording with AI<br/>
-              3) Generate & download PDF + Word
-            </div>
-          </div>
-
-          <div class="rail-card">
-            <div class="rail-title">Upgrade when ready</div>
-            <div class="rail-text">
-              Guests can build. Sign in only when you want downloads + saved history.
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 # -------------------------
 # GLOBAL PLAN + REFERRAL CONFIG
@@ -1567,7 +1530,44 @@ def sync_session_plan_and_credits() -> None:
     st.session_state["user"]["cv_remaining"] = int(credits.get("cv", 0) or 0)
     st.session_state["user"]["ai_remaining"] = int(credits.get("ai", 0) or 0)
 
+if is_logged_in:
+    st.markdown(
+        """
+        <div id="mulyba-rail">
+          <div class="rail-card">
+            <div class="rail-title">What you get</div>
+            <ul class="rail-list">
+              <li>Modern CV builder (UK-friendly)</li>
+              <li>AI improvements (summary, bullets)</li>
+              <li>Cover letters tailored to job ads</li>
+              <li>PDF + Word downloads</li>
+            </ul>
+            <div style="margin-top:10px;">
+              <span class="rail-badge">Fast</span>
+              <span class="rail-badge">Clean</span>
+              <span class="rail-badge">ATS-friendly</span>
+            </div>
+          </div>
 
+          <div class="rail-card">
+            <div class="rail-title">How it works</div>
+            <div class="rail-text">
+              1) Fill your details<br/>
+              2) Improve wording with AI<br/>
+              3) Generate & download PDF + Word
+            </div>
+          </div>
+
+          <div class="rail-card">
+            <div class="rail-title">Upgrade when ready</div>
+            <div class="rail-text">
+              Guests can build. Sign in only when you want downloads + saved history.
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 # -------------------------
 # GLOBAL THEME + LAYOUT CSS
 # (NO st.set_page_config() here — keep that at the top of the file only)
