@@ -2717,6 +2717,8 @@ is_logged_in = _is_logged_in_user(current_user)
 # Guest header (non-blocking)
 if not is_logged_in:
     render_public_home()
+    st.stop()   # optional: stops rest of app for guests (recommended)
+
 
 # Safe guest placeholder for UI (DO NOT treat as logged in)
 if not is_logged_in:
