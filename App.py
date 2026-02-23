@@ -2538,101 +2538,93 @@ def auth_ui():
                     )    
 
 
+
 # =========================
 # PUBLIC HOME (guest landing)
 # =========================
 def render_public_home() -> None:
-    st.markdown(
-        """
-        <div style="
-            background: rgba(255,255,255,0.06);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 20px;
-            padding: 18px 20px;
-            box-shadow: 0 18px 50px rgba(0,0,0,0.35);
-            margin-top: 6px;
-            margin-bottom: 18px;
-        ">
-          <div style="font-weight:900; font-size:32px; letter-spacing:-0.02em; line-height:1.1;">
-            Mulyba
-          </div>
-          <div style="opacity:0.86; font-size:13px; margin-top:8px; line-height:1.55;">
-            Career Suite • CV Builder • AI tools
-          </div>
-          <div style="margin-top:10px; font-size:12px; opacity:0.70;">
-            Guests can browse. Sign in only when you want downloads + saved history.
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    # Full landing (header + benefits + CTA). No st.stop() inside here.
+    left, right = st.columns([1.4, 1.0], vertical_alignment="top")
 
-    col1, col2 = st.columns([1.25, 1])
-
-    with col1:
-        st.markdown("### Build a modern UK CV in minutes")
+    with left:
         st.markdown(
             """
-            - Fill sections quickly (Skills, Experience, Education)
-            - Improve wording with AI (summary + bullets)
-            - Generate tailored cover letters from job ads
-            - Export to PDF + Word (sign-in required)
-            """
+            <div style="
+                background: rgba(255,255,255,0.06);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 20px;
+                padding: 18px 20px;
+                box-shadow: 0 18px 50px rgba(0,0,0,0.35);
+                margin-top: 6px;
+                margin-bottom: 14px;
+            ">
+              <div style="font-weight:900; font-size:30px; letter-spacing:-0.02em; line-height:1.1;">
+                Mulyba
+              </div>
+              <div style="opacity:0.86; font-size:13px; margin-top:8px; line-height:1.55;">
+                Career Suite • CV Builder • AI tools
+              </div>
+              <div style="margin-top:10px; font-size:12px; opacity:0.70;">
+                Guests can build. Sign in only when you want downloads + saved history.
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        cta1, cta2 = st.columns(2)
-        with cta1:
-            if st.button("Sign in", key="landing_signin_btn", use_container_width=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Sign in", key="guest_cta_signin"):
+                # Uses your existing modal system
                 open_auth_modal("Sign in")
-                st.rerun()
-        with cta2:
-            if st.button("Create account", key="landing_create_btn", use_container_width=True):
+        with c2:
+            if st.button("Create account", key="guest_cta_create"):
                 open_auth_modal("Create account")
-                st.rerun()
 
-        st.markdown("")
-        st.caption("Tip: You can still look around without signing in. Downloads + AI tools require login.")
+        st.caption("You can still fill the form below as a guest. Downloads + AI are locked until you sign in.")
 
-    with col2:
+    with right:
+        # If you already render these cards elsewhere, that's fine —
+        # but putting them here guarantees the landing is never “half”.
         st.markdown(
             """
-            <div style="
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.10);
-                border-radius: 18px;
-                padding: 14px 14px;
-                margin-bottom: 10px;
-            ">
-              <div style="font-weight:800; font-size:14px; margin-bottom:8px;">What you get</div>
-              <div style="opacity:0.85; font-size:12px; line-height:1.65;">
-                • Modern CV builder (UK-friendly)<br/>
-                • AI improvements (summary, bullets)<br/>
-                • Cover letters tailored to job ads<br/>
-                • PDF + Word downloads
+            <div style="display:flex; flex-direction:column; gap:14px; margin-top:6px;">
+              <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.10); border-radius:18px; padding:14px;">
+                <div style="font-weight:800; margin-bottom:8px;">What you get</div>
+                <ul style="margin:0; padding-left:18px; opacity:0.9; font-size:13px; line-height:1.6;">
+                  <li>Modern CV builder (UK-friendly)</li>
+                  <li>AI improvements (summary, bullets)</li>
+                  <li>Cover letters tailored to job ads</li>
+                  <li>PDF + Word downloads</li>
+                </ul>
+                <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                  <span style="border:1px solid rgba(255,255,255,0.12); border-radius:999px; padding:4px 10px; font-size:12px; opacity:0.85;">Fast</span>
+                  <span style="border:1px solid rgba(255,255,255,0.12); border-radius:999px; padding:4px 10px; font-size:12px; opacity:0.85;">Clean</span>
+                  <span style="border:1px solid rgba(255,255,255,0.12); border-radius:999px; padding:4px 10px; font-size:12px; opacity:0.85;">ATS-friendly</span>
+                </div>
+              </div>
+
+              <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.10); border-radius:18px; padding:14px;">
+                <div style="font-weight:800; margin-bottom:8px;">How it works</div>
+                <div style="opacity:0.9; font-size:13px; line-height:1.7;">
+                  1) Fill your details<br/>
+                  2) Improve wording with AI<br/>
+                  3) Generate & download PDF + Word
+                </div>
+              </div>
+
+              <div style="background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.10); border-radius:18px; padding:14px;">
+                <div style="font-weight:800; margin-bottom:6px;">Upgrade when ready</div>
+                <div style="opacity:0.85; font-size:13px; line-height:1.6;">
+                  Guests can build. Sign in only when you want downloads + saved history.
+                </div>
               </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        st.markdown(
-            """
-            <div style="
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.10);
-                border-radius: 18px;
-                padding: 14px 14px;
-            ">
-              <div style="font-weight:800; font-size:14px; margin-bottom:8px;">How it works</div>
-              <div style="opacity:0.85; font-size:12px; line-height:1.65;">
-                1) Fill your details<br/>
-                2) Improve wording with AI<br/>
-                3) Generate & download PDF + Word
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    st.markdown("---")
 
 
 # =========================
@@ -2773,16 +2765,17 @@ if show_policy_page():
 
 just_returned = st.session_state.pop("_just_returned_from_policy", False)
 
+# Modal can render early (non-blocking)
 render_auth_modal_if_open()
 
 current_user = st.session_state.get("user")
 is_logged_in = _is_logged_in_user(current_user)
 
-# Show the landing header, but DO NOT stop
+# Show landing for guests, but DO NOT stop (guests can still build)
 if not is_logged_in:
     render_public_home()
 
-# Safe guest placeholder (NOW it matters)
+# Safe guest placeholder for code that expects user dict
 if not is_logged_in:
     current_user = {
         "full_name": "Guest",
@@ -2799,7 +2792,7 @@ if not is_logged_in:
 user_email = (current_user or {}).get("email")
 is_admin = (current_user or {}).get("role") in {"owner", "admin"}
 
-# Hydrate counters
+# Hydrate counters safely
 if is_logged_in and isinstance(st.session_state.get("user"), dict):
     real_user = st.session_state["user"]
     for k, default in USAGE_KEYS_DEFAULTS.items():
@@ -2808,10 +2801,11 @@ else:
     for k, default in USAGE_KEYS_DEFAULTS.items():
         st.session_state.setdefault(k, default)
 
-# Consent gate should only block logged-in users
+# Consent gate: ONLY for logged-in users
 if is_logged_in:
     show_consent_gate()
 
+# Attach user_id for logged in users
 email = (st.session_state.get("user") or {}).get("email")
 if email:
     uid = get_user_id(email)
