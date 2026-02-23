@@ -197,7 +197,56 @@ def refresh_session_user_from_db() -> None:
 
     st.session_state["user"] = dict(db_u)
   
+def get_active_subscription_plan_by_user_id(user_id: int) -> str | None:
+    """
+    Returns the plan from the user's active/trialing subscription, else None.
+    Adjust table/column names if yours differ.
+    """
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT plan
+                FROM subscriptions
+                WHERE user_id = %s
+                  AND status IN ('active', 'trialing')
+                ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST, id DESC
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            row = cur.fetchone()
+        conn.close()
+        return (row[0] if row and row[0] else None)
+    except Exception:
+        return None
 
+def refresh_session_user_from_db() -> None:
+    u = st.session_state.get("user") or {}
+    uid = u.get("id")
+    if not uid:
+        return
+
+    db_u = get_user_row_by_id(int(uid))
+    if not db_u:
+        return
+
+    # preserve role from session if DB doesn't include it
+    for k in ("role",):
+        if k in u and k not in db_u:
+            db_u[k] = u[k]
+
+    # ✅ compute effective plan from subscriptions
+    sub_plan = get_active_subscription_plan_by_user_id(int(uid))
+    if sub_plan:
+        db_u["plan"] = sub_plan  # UI sees pro/monthly instantly
+    else:
+        # Optional: if your users table might contain stale paid plans, force free when no active sub
+        # db_u["plan"] = (db_u.get("plan") or "free")
+        pass
+
+    st.session_state["user"] = dict(db_u)
 
 def improve_skills(skills_text: str) -> str:
     """
@@ -2961,16 +3010,20 @@ with st.sidebar:
         st.markdown("**Status:** ✅ Active")
         st.markdown("**Policies accepted:** No")
     else:
-        # ✅ refresh session user BEFORE reading plan/full_name/etc
         refresh_session_user_from_db()
         session_user = st.session_state.get("user") or {}
 
         full_name = (session_user or {}).get("full_name") or "Member"
         email = (session_user or {}).get("email") or "—"
         plan = ((session_user or {}).get("plan") or "free").strip().lower()
-
         plan_label = "Pro" if plan == "pro" else ("Monthly" if plan == "monthly" else "Free")
 
+        # User identity
+        st.markdown(f"**{full_name}**")
+        st.markdown(f'<div class="sb-muted">{email}</div>', unsafe_allow_html=True)
+        st.markdown(f"**Plan:** {plan_label}")
+
+        # Status
         is_banned = bool((session_user or {}).get("is_banned"))
         st.markdown(f"**Status:** {'🚫 Banned' if is_banned else '✅ Active'}")
 
