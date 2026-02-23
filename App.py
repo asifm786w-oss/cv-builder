@@ -2699,28 +2699,23 @@ def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
 
 
 # =========================
-# ROUTING (preview-first)
+# ROUTING (guests can browse/build, actions locked)
 # =========================
 if show_policy_page():
     st.stop()
 
-# ---- Policy return guard (MUST be here) ----
 just_returned = st.session_state.pop("_just_returned_from_policy", False)
 
-
-# render modal early (non-blocking)
 render_auth_modal_if_open()
 
 current_user = st.session_state.get("user")
 is_logged_in = _is_logged_in_user(current_user)
 
-# Guest header (non-blocking)
+# Show the landing header, but DO NOT stop
 if not is_logged_in:
     render_public_home()
-    st.stop()   # optional: stops rest of app for guests (recommended)
 
-
-# Safe guest placeholder for UI (DO NOT treat as logged in)
+# Safe guest placeholder (NOW it matters)
 if not is_logged_in:
     current_user = {
         "full_name": "Guest",
@@ -2734,26 +2729,25 @@ if not is_logged_in:
         "accepted_policies_at": None,
     }
 
-# Always define these (kills NameError)
-user_email = (current_user or {}).get("email")  # None for guests
+user_email = (current_user or {}).get("email")
 is_admin = (current_user or {}).get("role") in {"owner", "admin"}
 
-# Hydrate counters (real user only) else safe defaults
+# Hydrate counters
 if is_logged_in and isinstance(st.session_state.get("user"), dict):
     real_user = st.session_state["user"]
     for k, default in USAGE_KEYS_DEFAULTS.items():
-        if k not in st.session_state:
-            st.session_state[k] = real_user.get(k, default)
+        st.session_state.setdefault(k, real_user.get(k, default))
 else:
     for k, default in USAGE_KEYS_DEFAULTS.items():
         st.session_state.setdefault(k, default)
 
-# Consent gate for logged-in users only
-show_consent_gate()
+# Consent gate should only block logged-in users
+if is_logged_in:
+    show_consent_gate()
 
 email = (st.session_state.get("user") or {}).get("email")
 if email:
-    uid = get_user_id(email)  # lookup only (no inserts)
+    uid = get_user_id(email)
     if not uid:
         st.error("No account found for this email. Please sign out and sign in again.")
         st.stop()
