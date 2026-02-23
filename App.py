@@ -2539,7 +2539,7 @@ def auth_ui():
 
 
 # =========================
-# PUBLIC HOME (guest header)
+# PUBLIC HOME (guest landing)
 # =========================
 def render_public_home() -> None:
     st.markdown(
@@ -2553,19 +2553,86 @@ def render_public_home() -> None:
             margin-top: 6px;
             margin-bottom: 18px;
         ">
-          <div style="font-weight:900; font-size:30px; letter-spacing:-0.02em; line-height:1.1;">
+          <div style="font-weight:900; font-size:32px; letter-spacing:-0.02em; line-height:1.1;">
             Mulyba
           </div>
           <div style="opacity:0.86; font-size:13px; margin-top:8px; line-height:1.55;">
             Career Suite • CV Builder • AI tools
           </div>
           <div style="margin-top:10px; font-size:12px; opacity:0.70;">
-            Guests can build. Sign in only when you want downloads + saved history.
+            Guests can browse. Sign in only when you want downloads + saved history.
           </div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+
+    col1, col2 = st.columns([1.25, 1])
+
+    with col1:
+        st.markdown("### Build a modern UK CV in minutes")
+        st.markdown(
+            """
+            - Fill sections quickly (Skills, Experience, Education)
+            - Improve wording with AI (summary + bullets)
+            - Generate tailored cover letters from job ads
+            - Export to PDF + Word (sign-in required)
+            """
+        )
+
+        cta1, cta2 = st.columns(2)
+        with cta1:
+            if st.button("Sign in", key="landing_signin_btn", use_container_width=True):
+                open_auth_modal("Sign in")
+                st.rerun()
+        with cta2:
+            if st.button("Create account", key="landing_create_btn", use_container_width=True):
+                open_auth_modal("Create account")
+                st.rerun()
+
+        st.markdown("")
+        st.caption("Tip: You can still look around without signing in. Downloads + AI tools require login.")
+
+    with col2:
+        st.markdown(
+            """
+            <div style="
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.10);
+                border-radius: 18px;
+                padding: 14px 14px;
+                margin-bottom: 10px;
+            ">
+              <div style="font-weight:800; font-size:14px; margin-bottom:8px;">What you get</div>
+              <div style="opacity:0.85; font-size:12px; line-height:1.65;">
+                • Modern CV builder (UK-friendly)<br/>
+                • AI improvements (summary, bullets)<br/>
+                • Cover letters tailored to job ads<br/>
+                • PDF + Word downloads
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            """
+            <div style="
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.10);
+                border-radius: 18px;
+                padding: 14px 14px;
+            ">
+              <div style="font-weight:800; font-size:14px; margin-bottom:8px;">How it works</div>
+              <div style="opacity:0.85; font-size:12px; line-height:1.65;">
+                1) Fill your details<br/>
+                2) Improve wording with AI<br/>
+                3) Generate & download PDF + Word
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # =========================
