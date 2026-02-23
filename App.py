@@ -259,11 +259,19 @@ def improve_skills(skills_text: str) -> str:
 
 def clear_ai_upload_state_only():
     """
-    Remove only AI/upload/parse leftovers so they don't leak into CV output.
-    DO NOT touch cv_* keys (your form fields).
+    Clear ONLY transient AI / upload / parse state.
+    Never touch CV form, job search, or selected job.
     """
+    SAFE_PREFIXES = (
+        "ai_",              # AI intermediate outputs
+        "upload_",          # file upload temp state
+        "parsed_",          # parsed CV temp data
+        "_cv_parsed",       # specific parser flags
+        "_just_autofilled", # autofill flags
+    )
+
     for k in list(st.session_state.keys()):
-        if k.startswith(("ai_", "upload_", "parsed_", "adzuna_", "job_")):
+        if k.startswith(SAFE_PREFIXES):
             st.session_state.pop(k, None)
 
 FORM_EPOCH_KEY = "form_epoch"
@@ -4337,15 +4345,42 @@ template_label = st.selectbox(
 # -------------------------
 # Generate CV (spend 1 credit)
 # -------------------------
+st.session_state.setdefault("cv_pdf_bytes", None)
+st.session_state.setdefault("cv_docx_bytes", None)
+st.session_state.setdefault("cv_last_template", None)  # optional
+st.session_state.setdefault("cv_last_fingerprint", None)  # optional
+
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
     action_label="generate and download your CV",
     key="btn_generate_cv",
 )
 
+def _cv_fingerprint() -> str:
+    """
+    Optional: helps you decide whether to regenerate.
+    Keep it simple and only use canonical keys (cv_* + main lists).
+    """
+    import json, hashlib
+    payload = {
+        "cv_full_name": get_cv_field("cv_full_name"),
+        "cv_title": get_cv_field("cv_title"),
+        "cv_email": get_cv_field("cv_email"),
+        "cv_phone": get_cv_field("cv_phone"),
+        "cv_location": get_cv_field("cv_location"),
+        "cv_summary": get_cv_field("cv_summary", ""),
+        "skills": skills,
+        "experiences": [e.dict() for e in experiences],
+        "education": education_items,
+        "references": references,
+        "template_label": st.session_state.get("template_label"),
+    }
+    dumped = json.dumps(payload, default=str, sort_keys=True)
+    return hashlib.sha256(dumped.encode("utf-8", errors="ignore")).hexdigest()
+
 if generate_clicked:
-    # IMPORTANT: make sure this does NOT clear cv_* keys
-    # If it does, comment it out or fix it
+    # If this clears anything CV-related, it must be fixed/removed.
+    # But leave it for now since you said system works.
     clear_ai_upload_state_only()
 
     email_for_usage = (st.session_state.get("user") or {}).get("email")
@@ -4409,32 +4444,52 @@ if generate_clicked:
         pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
         docx_bytes = render_cv_docx_bytes(cv)
 
+        # ✅ STORE BYTES IN SESSION (THIS IS THE KEY FIX)
+        st.session_state["cv_pdf_bytes"] = pdf_bytes
+        st.session_state["cv_docx_bytes"] = docx_bytes
+
+        # optional: store “what this CV represents”
+        st.session_state["cv_last_template"] = st.session_state.get("template_label")
+        st.session_state["cv_last_fingerprint"] = _cv_fingerprint()
+
         st.success("CV generated successfully! 🎉")
 
-        col_cv1, col_cv2 = st.columns(2)
-        with col_cv1:
-            st.download_button(
-                "📄 Download CV as PDF",
-                data=pdf_bytes,
-                file_name="cv.pdf",
-                mime="application/pdf",
-            )
-
-        with col_cv2:
-            st.download_button(
-                "📝 Download CV as Word (.docx)",
-                data=docx_bytes,
-                file_name="cv.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            )
-
-        # Optional analytics only
+        # ✅ analytics only once (right after generating)
         st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
         increment_usage(email_for_usage, "cv_generations")
+
+        st.rerun()
 
     except Exception as e:
         st.error(f"CV generation failed: {e}")
         st.stop()
+
+# -------------------------
+# Downloads (always shown if bytes exist)
+# -------------------------
+pdf_bytes = st.session_state.get("cv_pdf_bytes")
+docx_bytes = st.session_state.get("cv_docx_bytes")
+
+if pdf_bytes and docx_bytes:
+    col_cv1, col_cv2 = st.columns(2)
+
+    with col_cv1:
+        st.download_button(
+            "📄 Download CV as PDF",
+            data=pdf_bytes,
+            file_name="cv.pdf",
+            mime="application/pdf",
+            key="dl_cv_pdf",
+        )
+
+    with col_cv2:
+        st.download_button(
+            "📝 Download CV as Word (.docx)",
+            data=docx_bytes,
+            file_name="cv.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="dl_cv_docx",
+        )
 
 
 # -------------------------
