@@ -2703,12 +2703,12 @@ def has_free_quota(counter_key: str, cost: int, feature_label: str) -> bool:
         return True
 
     email = (u.get("email") or "").strip().lower()
-    credits = get_user_credits(email)
 
-    if counter_key in CV_USAGE_KEYS:
-        bucket = "cv"
-    else:
-        bucket = "ai"
+    # ✅ Use ledger truth (same as try_spend)
+    uid = get_user_id(email)
+    credits = get_credits_by_user_id(uid) if uid else {"cv": 0, "ai": 0}
+
+    bucket = "cv" if counter_key in CV_USAGE_KEYS else "ai"
 
     required = int(cost or 1)
     remaining = int(credits.get(bucket, 0) or 0)
@@ -3416,6 +3416,18 @@ if btn_summary:
     if not has_free_quota("summary_uses", 1, "AI professional summary"):
         st.stop()
 
+    # ✅ LEDGER SPEND (1 AI credit) — place this BEFORE calling OpenAI
+    email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
+    uid = get_user_id(email_for_usage) if email_for_usage else None
+    if not uid:
+        st.error("Please sign in again.")
+        st.stop()
+
+    spent = try_spend(uid, source="summary_improve", ai=1)
+    if not spent:
+        st.warning("You don’t have enough AI credits to improve your summary.")
+        st.stop()
+
     with st.spinner("Improving your professional summary..."):
         try:
             cv_like = {
@@ -3437,8 +3449,8 @@ if btn_summary:
             # Stage for next rerun
             st.session_state["cv_summary_pending"] = improved_limited
 
+            # Session counters / analytics (optional — not the real billing)
             st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
-            email_for_usage = (st.session_state.get("user") or {}).get("email")
             if email_for_usage:
                 increment_usage(email_for_usage, "summary_uses")
 
