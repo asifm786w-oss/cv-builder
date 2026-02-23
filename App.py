@@ -3859,10 +3859,10 @@ references = st.text_area(
 )
 
 # =========================
-# Job Search (Adzuna) — Expander + Uses SAME user credits as the rest of your app
-# ✅ No extra AI counter UI
+# Job Search (Adzuna) — Expander (FREE search)
+# ✅ No AI credit spend for searching
 # ✅ No st.stop() (won't hide other features)
-# ✅ Refresh user from Postgres (get_user_by_email) then read credits from that user object
+# ✅ "Use this job" only loads JD into Target Job
 # =========================
 
 import streamlit as st
@@ -3885,73 +3885,6 @@ def _format_salary(smin, smax) -> str:
     except Exception:
         return "Salary: available"
 
-def _extract_ai_credits_from_user(user: dict) -> int | None:
-    """
-    Pull AI credits from the same user object your app uses.
-    Returns None if it can't confidently find it.
-    """
-    if not isinstance(user, dict):
-        return None
-
-    # 1) Common direct keys
-    common_keys = [
-        "ai_remaining",
-        "ai_credits",
-        "ai_credit",
-        "ai_credits_remaining",
-        "aiRemaining",
-        "credits_ai",
-        "ai",
-    ]
-    for k in common_keys:
-        v = user.get(k)
-        if v is not None:
-            try:
-                return int(v)
-            except Exception:
-                pass
-
-    # 2) Common nested structures (many apps store usage in a nested dict)
-    for nested_key in ("usage", "user_usage", "limits", "credits"):
-        nested = user.get(nested_key)
-        if isinstance(nested, dict):
-            for k in common_keys + ["remaining", "ai_remaining", "ai_credits"]:
-                v = nested.get(k)
-                if v is not None:
-                    try:
-                        return int(v)
-                    except Exception:
-                        pass
-
-    # 3) Heuristic fallback: find an int field with "ai" + ("remain"/"credit") in key name
-    candidates = []
-    for k, v in user.items():
-        if not isinstance(k, str):
-            continue
-        key_l = k.lower()
-        if ("ai" in key_l) and (("remain" in key_l) or ("credit" in key_l)):
-            try:
-                candidates.append(int(v))
-            except Exception:
-                pass
-    if candidates:
-        # if multiple, take the max (usually the remaining balance)
-        return max(candidates)
-
-    return None
-
-def _safe_refresh_user_from_db(email: str) -> dict | None:
-    """
-    Uses your existing helper get_user_by_email(email) to refresh from Postgres.
-    If your helper name differs, rename this function call below.
-    """
-    try:
-        fresh = get_user_by_email(email)  # <-- rename if yours differs
-        return fresh if isinstance(fresh, dict) else None
-    except Exception:
-        return None
-
-
 # -----------------------------
 # UI (Expander)
 # -----------------------------
@@ -3970,18 +3903,11 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
         can_use = False
 
     uid = None
-    credits = {"cv": 0, "ai": 0}
-
     if can_use:
         uid = get_user_id(email)
         if not uid:
             st.warning("Couldn’t find your account. Please sign out and sign in again.")
             can_use = False
-        else:
-            credits = get_credits_by_user_id(uid)
-            if int(credits.get("ai", 0) or 0) <= 0:
-                st.warning("You have 0 AI credits. Buy more credits to use Job Search.")
-                can_use = False
 
     # Inputs
     with st.container(border=True):
@@ -4019,7 +3945,6 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
         if isinstance(x, str):
             return x
         if isinstance(x, dict):
-            # common Adzuna shapes
             return (
                 x.get("display_name")
                 or x.get("name")
@@ -4030,17 +3955,13 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
         return str(x)
 
     def _normalize_jobs(jobs_raw):
-        """
-        Adzuna wrappers vary. Ensure we end up with: list[dict]
-        """
+        """Adzuna wrappers vary. Ensure we end up with: list[dict]"""
         if jobs_raw is None:
             return []
         if isinstance(jobs_raw, dict):
-            # common wrappers
             jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
         if not isinstance(jobs_raw, list):
             return []
-        # filter to dict items only
         return [j for j in jobs_raw if isinstance(j, dict)]
 
     if search_clicked and can_use:
@@ -4056,12 +3977,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
                 jobs = _normalize_jobs(jobs_raw)
 
-                # ✅ Spend 1 AI credit only if API returned successfully (even if 0 results)
-                spent = try_spend(uid, source="job_search", ai=1)
-                if not spent:
-                    st.warning("You don’t have enough AI credits to perform this search.")
-                    st.stop()
-
+                # ✅ FREE SEARCH: DO NOT spend credits here
                 st.session_state["adzuna_results"] = jobs
 
                 if not jobs:
@@ -4089,11 +4005,9 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
         for idx, job in enumerate(jobs):
             title = _as_text(job.get("title")) or "Untitled"
 
-            # company can be dict or string depending on API
             company_val = job.get("company")
             company = _as_text(company_val) or "Unknown company"
 
-            # location can be dict (display_name) or string
             loc_val = job.get("location") or job.get("candidate_required_location") or job.get("area")
             loc = _as_text(loc_val) or "Unknown location"
 
@@ -4118,9 +4032,11 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
                     with top[1]:
                         if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
-                            # NOTE: Keep job state names job_* so they never collide with cv_*
+                            # FREE: just load JD into Target Job
                             st.session_state["job_description"] = desc
                             st.session_state["_last_jd_fp"] = None
+
+                            # Optional: clear outputs so user generates fresh ones for this JD
                             st.session_state.pop("job_summary_ai", None)
                             st.session_state.pop("cover_letter", None)
                             st.session_state.pop("cover_letter_box", None)
@@ -4137,7 +4053,6 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
                 st.markdown("**Preview description**")
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
-
 
 
 # -------------------------
