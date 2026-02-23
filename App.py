@@ -579,12 +579,6 @@ def backup_skills_state():
         st.session_state["_skills_backup"] = val
 
 
-def render_auth_modal_if_open():
-    if not st.session_state.get("auth_modal_open", False):
-        return
-    _auth_dialog()  # your existing dialog function
-
-
 def restore_skills_state():
     """
     Restore skills_text only when it is missing/blank.
@@ -2176,7 +2170,7 @@ def show_consent_gate() -> None:
 
 
 # =========================
-# AUTH MODAL (friendly box) - define ONCE
+# AUTH MODAL (define ONCE)
 # =========================
 st.session_state.setdefault("auth_modal_open", False)
 st.session_state.setdefault("auth_modal_tab", "Sign in")
@@ -2191,7 +2185,7 @@ def is_logged_in_user() -> bool:
 def open_auth_modal(default_tab: str = "Sign in") -> None:
     st.session_state["auth_modal_tab"] = default_tab
     st.session_state["auth_modal_open"] = True
-    st.session_state["auth_modal_epoch"] += 1
+    st.session_state["auth_modal_epoch"] = int(st.session_state.get("auth_modal_epoch", 0) or 0) + 1
     st.rerun()
 
 def close_auth_modal() -> None:
@@ -2205,8 +2199,24 @@ def gate_premium(action_label: str = "use this feature", tab: str = "Sign in") -
     open_auth_modal(tab)
     return False
 
+def set_logged_in_user(user: dict) -> None:
+    if not (isinstance(user, dict) and user.get("email")):
+        return
+
+    st.session_state["user"] = user
+
+    # set from DB truth
+    st.session_state["accepted_policies"] = bool(user.get("accepted_policies"))
+    st.session_state["chk_policy_agree"] = False
+    st.session_state["policy_view"] = None
+
+    st.session_state["auth_modal_open"] = False
+    st.rerun()
+
 @st.dialog("Welcome back 👋", width="large")
 def _auth_dialog() -> None:
+    preferred = st.session_state.get("auth_modal_tab", "Sign in")
+
     st.markdown(
         """
         <div style="
@@ -2228,125 +2238,80 @@ def _auth_dialog() -> None:
         unsafe_allow_html=True,
     )
 
-    preferred = st.session_state.get("auth_modal_tab", "Sign in")
     st.caption(f"Tip: You selected **{preferred}**")
 
-    # Your real auth renderer
-    auth_ui()
+    left, right = st.columns([3, 1], gap="large")
 
-    c1, c2 = st.columns([1, 1])
-    with c2:
-        if st.button("Close", key=f"auth_modal_close_{st.session_state['auth_modal_epoch']}"):
-            close_auth_modal()
-def set_logged_in_user(user: dict) -> None:
-    if not (isinstance(user, dict) and user.get("email")):
-        return
+    with left:
+        auth_ui()
 
-    st.session_state["user"] = user
+        _, c2 = st.columns([1, 1])
+        with c2:
+            if st.button(
+                "Close",
+                key=f"auth_modal_close_{st.session_state.get('auth_modal_epoch', 0)}",
+                use_container_width=True,
+            ):
+                close_auth_modal()
 
-    # set from DB truth
-    st.session_state["accepted_policies"] = bool(user.get("accepted_policies"))
-    st.session_state["chk_policy_agree"] = False
-    st.session_state["policy_view"] = None
-
-    st.session_state["auth_modal_open"] = False
-    st.rerun()
-
-def render_auth_modal_if_open() -> None:
-    if st.session_state.get("auth_modal_open", False):
-        _auth_dialog()
-
-def _auth_dialog() -> None:
-    if not st.session_state.get("auth_modal_open", False):
-        return
-
-    @st.dialog("Welcome back 👋", width="large")
-    def _dlg():
+    with right:
         st.markdown(
             """
             <div style="
-                padding: 6px 0 14px 0;
-                opacity: 0.9;
-                font-size: 14px;
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 14px;
+                padding: 14px;
+                background: rgba(255,255,255,0.04);
+                margin-bottom: 12px;
             ">
-                Sign in to unlock the tools. Create a modern CV, generate tailored cover letters,
-                and use AI improvements. Your data stays private to your account.
+                <div style="font-weight:800; margin-bottom:8px;">What you get</div>
+                <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                    • Modern CV builder (UK-friendly)<br/>
+                    • AI improvements (summary, bullets)<br/>
+                    • Cover letters tailored to job ads<br/>
+                    • PDF + Word downloads
+                </div>
+                <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+                    <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">Fast</span>
+                    <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">Clean</span>
+                    <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">ATS-friendly</span>
+                </div>
+            </div>
+
+            <div style="
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 14px;
+                padding: 14px;
+                background: rgba(255,255,255,0.04);
+                margin-bottom: 12px;
+            ">
+                <div style="font-weight:800; margin-bottom:8px;">How it works</div>
+                <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                    1) Fill your details<br/>
+                    2) Improve wording with AI<br/>
+                    3) Generate & download PDF + Word
+                </div>
+            </div>
+
+            <div style="
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 14px;
+                padding: 14px;
+                background: rgba(255,255,255,0.04);
+            ">
+                <div style="font-weight:800; margin-bottom:8px;">Upgrade when ready</div>
+                <div style="font-size:13px; opacity:0.9; line-height:1.6;">
+                    Guests can build. Sign in only when you want downloads + saved history.
+                </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-        left, right = st.columns([3, 1], gap="large")
-
-        with left:
-            auth_ui()
-
-            c1, c2 = st.columns([1, 1])
-            with c2:
-                if st.button(
-                    "Close",
-                    key=f"auth_modal_close_{st.session_state.get('auth_modal_epoch', 0)}",
-                    use_container_width=True,
-                ):
-                    close_auth_modal()
-                    st.rerun()
-
-        with right:
-            st.markdown(
-                """
-                <div style="
-                    border: 1px solid rgba(255,255,255,0.08);
-                    border-radius: 14px;
-                    padding: 14px;
-                    background: rgba(255,255,255,0.04);
-                    margin-bottom: 12px;
-                ">
-                    <div style="font-weight:800; margin-bottom:8px;">What you get</div>
-                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
-                        • Modern CV builder (UK-friendly)<br/>
-                        • AI improvements (summary, bullets)<br/>
-                        • Cover letters tailored to job ads<br/>
-                        • PDF + Word downloads
-                    </div>
-                    <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">Fast</span>
-                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">Clean</span>
-                        <span style="padding:4px 10px; border-radius:999px; background:rgba(255,255,255,0.06); font-size:12px;">ATS-friendly</span>
-                    </div>
-                </div>
-
-                <div style="
-                    border: 1px solid rgba(255,255,255,0.08);
-                    border-radius: 14px;
-                    padding: 14px;
-                    background: rgba(255,255,255,0.04);
-                    margin-bottom: 12px;
-                ">
-                    <div style="font-weight:800; margin-bottom:8px;">How it works</div>
-                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
-                        1) Fill your details<br/>
-                        2) Improve wording with AI<br/>
-                        3) Generate & download PDF + Word
-                    </div>
-                </div>
-
-                <div style="
-                    border: 1px solid rgba(255,255,255,0.08);
-                    border-radius: 14px;
-                    padding: 14px;
-                    background: rgba(255,255,255,0.04);
-                ">
-                    <div style="font-weight:800; margin-bottom:8px;">Upgrade when ready</div>
-                    <div style="font-size:13px; opacity:0.9; line-height:1.6;">
-                        Guests can build. Sign in only when you want downloads + saved history.
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-    _dlg()
-    st.stop()
+def render_auth_modal_if_open():
+    if not st.session_state.get("auth_modal_open", False):
+        return
+    _auth_dialog()  # your existing dialog function
 
 
 
