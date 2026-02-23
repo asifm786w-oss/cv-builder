@@ -1530,44 +1530,7 @@ def sync_session_plan_and_credits() -> None:
     st.session_state["user"]["cv_remaining"] = int(credits.get("cv", 0) or 0)
     st.session_state["user"]["ai_remaining"] = int(credits.get("ai", 0) or 0)
 
-if is_logged_in:
-    st.markdown(
-        """
-        <div id="mulyba-rail">
-          <div class="rail-card">
-            <div class="rail-title">What you get</div>
-            <ul class="rail-list">
-              <li>Modern CV builder (UK-friendly)</li>
-              <li>AI improvements (summary, bullets)</li>
-              <li>Cover letters tailored to job ads</li>
-              <li>PDF + Word downloads</li>
-            </ul>
-            <div style="margin-top:10px;">
-              <span class="rail-badge">Fast</span>
-              <span class="rail-badge">Clean</span>
-              <span class="rail-badge">ATS-friendly</span>
-            </div>
-          </div>
 
-          <div class="rail-card">
-            <div class="rail-title">How it works</div>
-            <div class="rail-text">
-              1) Fill your details<br/>
-              2) Improve wording with AI<br/>
-              3) Generate & download PDF + Word
-            </div>
-          </div>
-
-          <div class="rail-card">
-            <div class="rail-title">Upgrade when ready</div>
-            <div class="rail-text">
-              Guests can build. Sign in only when you want downloads + saved history.
-            </div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 # -------------------------
 # GLOBAL THEME + LAYOUT CSS
 # (NO st.set_page_config() here — keep that at the top of the file only)
@@ -1732,7 +1695,7 @@ section[data-testid="stSidebar"] *{
    RIGHT MARKETING RAIL (FIXED)
    ============================ */
 @media (min-width: 1200px){
-  [data-testid="stAppViewContainer"] .main .block-container{
+  body.has-rail [data-testid="stAppViewContainer"] .main .block-container{
     padding-right: 420px !important;
   }
 }
@@ -1791,9 +1754,18 @@ section[data-testid="stSidebar"] *{
     unsafe_allow_html=True,
 )
 
-# Rail HTML (unchanged)
-st.markdown(
-    """
+# Rail HTML (only show on desktop when logged-in)
+is_logged_in = _is_logged_in_user(st.session_state.get("user"))
+
+if is_logged_in:
+    # enables right padding only when rail exists
+    st.markdown(
+        "<script>document.body.classList.add('has-rail');</script>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        """
 <div id="mulyba-rail">
   <div class="rail-card">
     <div class="rail-title">What you get</div>
@@ -1826,9 +1798,9 @@ st.markdown(
     </div>
   </div>
 </div>
-    """,
-    unsafe_allow_html=True,
-)
+        """,
+        unsafe_allow_html=True,
+    )
 
 # -------------------------
 # INPUT VISIBILITY (WHITE INPUTS + DARK TEXT) — MAIN APP
@@ -2292,6 +2264,7 @@ def _auth_dialog() -> None:
                 use_container_width=True,
             ):
                 close_auth_modal()
+                return  # ✅ important: stop dialog rendering
 
     with right:
         st.markdown(
@@ -2347,10 +2320,9 @@ def _auth_dialog() -> None:
             unsafe_allow_html=True,
         )
 
-def render_auth_modal_if_open():
-    if not st.session_state.get("auth_modal_open", False):
-        return
-    _auth_dialog()  # your existing dialog function
+def render_auth_modal_if_open() -> None:
+    if st.session_state.get("auth_modal_open", False):
+        _auth_dialog()
 
 
 
