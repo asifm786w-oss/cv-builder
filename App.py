@@ -2997,21 +2997,42 @@ def render_admin_dashboard() -> None:
 
 
 # =========================
-# Mode select (ADMIN ONLY) — SINGLE
+# Mode select (ADMIN ONLY)
 # =========================
 if is_admin:
-    mode = st.sidebar.radio(
-        "Mode",
-        ["Use app", "Admin dashboard"],
-        index=0,
-        key="mode_select",
-    )
+    mode = st.sidebar.radio("Mode", ["Use app", "Admin dashboard"], index=0, key="mode_select")
 else:
     mode = "Use app"
 
 if mode == "Admin dashboard":
     render_admin_dashboard()
     st.stop()
+
+
+
+def render_mulyba_brand_header(is_logged_in: bool):
+    st.markdown(
+        """
+        <div class="sb-card">
+            <div style="font-size:20px; font-weight:900;">🏷️ Mulyba</div>
+            <div class="sb-muted">Career Suite • CV Builder • AI tools</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not is_logged_in:
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🔐 Sign in", key="brand_signin_btn"):
+                open_auth_modal("Sign in")
+                st.rerun()
+        with c2:
+            if st.button("✨ Create", key="brand_create_btn"):
+                open_auth_modal("Create account")
+                st.rerun()
+
+
 
 
 
@@ -3031,6 +3052,9 @@ with st.sidebar:
             session_user = st.session_state["user"]
 
     sidebar_role = (session_user or {}).get("role", "user")
+
+    # Brand header (your existing function)
+    render_mulyba_brand_header(sidebar_logged_in)
 
     # Mode badge
     if sidebar_logged_in:
