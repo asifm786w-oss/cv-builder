@@ -1074,96 +1074,67 @@ def build_cover_input_from_cv_or_form(
 # -------------------------
 RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
 
+import os
+import requests
+
+def send_email_brevo(
+    *,
+    to_email: str,
+    subject: str,
+    html: str,
+) -> None:
+    api_key = (os.getenv("BREVO_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError("BREVO_API_KEY is missing")
+
+    from_email = (os.getenv("BREVO_FROM_EMAIL") or "").strip()
+    if not from_email:
+        raise RuntimeError("BREVO_FROM_EMAIL is missing")
+
+    url = "https://api.brevo.com/v3/smtp/email"
+
+    payload = {
+        "sender": {"email": from_email},
+        "to": [{"email": to_email}],
+        "subject": subject,
+        "htmlContent": html,
+    }
+
+    headers = {
+        "api-key": api_key,
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    r = requests.post(url, json=payload, headers=headers, timeout=20)
+
+    if r.status_code >= 400:
+        raise RuntimeError(f"Brevo failed {r.status_code}: {r.text}")
+
 def send_password_reset_email(email: str, token: str) -> None:
     app_url = (os.getenv("APP_URL") or "").strip()
 
     if app_url:
         reset_link = f"{app_url.rstrip('/')}/?reset_token={token}"
-        body_html = f"""
-        <p>Click to reset your password:</p>
-        <p><a href="{reset_link}">{reset_link}</a></p>
-        <p>If the link doesn’t work, use this reset token: <b>{token}</b></p>
+        html = f"""
+        <p>You requested a password reset.</p>
+        <p><a href="{reset_link}">Reset password</a></p>
+        <p>If the link doesn't work, use this code:</p>
+        <p><b>{token}</b></p>
         """
     else:
-        body_html = f"""
-        <p>Your password reset token is:</p>
+        html = f"""
+        <p>Your password reset code:</p>
         <p><b>{token}</b></p>
         """
 
-    send_resend_email(email, "Reset your password", body_html)
-
-def _send_password_reset_email_local_DO_NOT_USE(email: str, token: str) -> None:
-    key = (os.getenv("RESEND_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError("RESEND_API_KEY is missing in environment variables.")
-
-    from_email = (os.getenv("FROM_EMAIL") or "").strip() or "onboarding@resend.dev"
-    app_url = (os.getenv("APP_URL") or "").strip()
-
-    if app_url:
-        reset_link = f"{app_url.rstrip('/')}/?reset_token={token}"
-        body_html = f"""
-        <p>Click to reset your password:</p>
-        <p><a href="{reset_link}">{reset_link}</a></p>
-        <p>If the link doesn’t work, use this reset token: <b>{token}</b></p>
-        """
-    else:
-        body_html = f"""
-        <p>Your password reset token is:</p>
-        <p><b>{token}</b></p>
-        """
-
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "from": from_email,
-        "to": [email],
-        "subject": "Reset your password",
-        "html": body_html,
-    }
-
-    r = requests.post(
-        "https://api.resend.com/emails",
-        headers=headers,
-        json=payload,
-        timeout=20,
+    send_email_brevo(
+        to_email=email,
+        subject="Reset your password",
+        html=html,
     )
 
-    if r.status_code >= 400:
-        raise RuntimeError(f"Resend failed: {r.status_code} {r.text}")
 
-
-def send_resend_email(to_email: str, subject: str, html: str) -> None:
-    key = (os.getenv("RESEND_API_KEY") or "").strip()
-    if not key:
-        raise RuntimeError("RESEND_API_KEY is missing in environment variables.")
-
-    from_email = (os.getenv("FROM_EMAIL") or "").strip() or "onboarding@resend.dev"
-
-    headers = {
-        "Authorization": f"Bearer {key}",
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "from": from_email,
-        "to": [to_email],
-        "subject": subject,
-        "html": html,
-    }
-
-    r = requests.post(
-        "https://api.resend.com/emails",
-        headers=headers,
-        json=payload,
-        timeout=20,
-    )
-
-    if r.status_code >= 400:
-        raise RuntimeError(f"Resend failed: {r.status_code} {r.text}")
 
 def _get_openai_client() -> OpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
@@ -2488,6 +2459,33 @@ def verify_email_otp(email: str, code: str, purpose: str = "verify") -> bool:
     )
 
     return True
+(email: str, code: str) -> None:
+    html = f"""
+    <p>Verify your email address</p>
+    <p>Your verification code is:</p>
+    <h2>{code}</h2>
+    <p>This code expires in 10 minutes.</p>
+    """
+
+    send_email_brevo(
+        to_email=email,
+        subject="Verify your email",
+        html=html,
+    )
+
+def send_email_verification_code(email: str, code: str) -> None:
+    html = f"""
+    <p>Verify your email address</p>
+    <p>Your verification code is:</p>
+    <h2>{code}</h2>
+    <p>This code expires in 10 minutes.</p>
+    """
+
+    send_email_brevo(
+        to_email=email,
+        subject="Verify your email",
+        html=html,
+    )
 
 def is_email_verified(email: str) -> bool:
     row = fetchone(
