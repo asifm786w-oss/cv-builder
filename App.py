@@ -1074,6 +1074,23 @@ def build_cover_input_from_cv_or_form(
 # -------------------------
 RESEND_API_KEY = (os.getenv("RESEND_API_KEY") or "").strip()
 
+def send_password_reset_email(email: str, token: str) -> None:
+    app_url = (os.getenv("APP_URL") or "").strip()
+
+    if app_url:
+        reset_link = f"{app_url.rstrip('/')}/?reset_token={token}"
+        body_html = f"""
+        <p>Click to reset your password:</p>
+        <p><a href="{reset_link}">{reset_link}</a></p>
+        <p>If the link doesn’t work, use this reset token: <b>{token}</b></p>
+        """
+    else:
+        body_html = f"""
+        <p>Your password reset token is:</p>
+        <p><b>{token}</b></p>
+        """
+
+    send_resend_email(email, "Reset your password", body_html)
 
 def _send_password_reset_email_local_DO_NOT_USE(email: str, token: str) -> None:
     key = (os.getenv("RESEND_API_KEY") or "").strip()
@@ -1118,6 +1135,35 @@ def _send_password_reset_email_local_DO_NOT_USE(email: str, token: str) -> None:
     if r.status_code >= 400:
         raise RuntimeError(f"Resend failed: {r.status_code} {r.text}")
 
+
+def send_resend_email(to_email: str, subject: str, html: str) -> None:
+    key = (os.getenv("RESEND_API_KEY") or "").strip()
+    if not key:
+        raise RuntimeError("RESEND_API_KEY is missing in environment variables.")
+
+    from_email = (os.getenv("FROM_EMAIL") or "").strip() or "onboarding@resend.dev"
+
+    headers = {
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+    }
+
+    payload = {
+        "from": from_email,
+        "to": [to_email],
+        "subject": subject,
+        "html": html,
+    }
+
+    r = requests.post(
+        "https://api.resend.com/emails",
+        headers=headers,
+        json=payload,
+        timeout=20,
+    )
+
+    if r.status_code >= 400:
+        raise RuntimeError(f"Resend failed: {r.status_code} {r.text}")
 
 def _get_openai_client() -> OpenAI:
     api_key = os.getenv("OPENAI_API_KEY")
@@ -2332,7 +2378,123 @@ def render_auth_modal_if_open() -> None:
     if st.session_state.get("auth_modal_open", False):
         _auth_dialog()
 
+import hashlib
+import secrets
+from datetime import datetime, timedelta, timezone
 
+OTP_TTL_MINUTES = 15
+OTP_MAX_ATTEMPTS = 5
+
+def _hash_code(code: str) -> str:
+    return hashlib.sha256((code or "").strip().encode("utf-8")).hexdigest()
+
+def _now_utc():
+    return datetime.now(timezone.utc)
+
+def _send_otp_email(email: str, code: str) -> None:
+    html = f"""
+    <div style="font-family:Inter,Arial,sans-serif;max-width:520px">
+      <h2 style="margin:0 0 10px 0;">Your verification code</h2>
+      <p style="margin:0 0 14px 0;">Use this code to verify your email:</p>
+      <div style="font-size:28px;font-weight:800;letter-spacing:4px;padding:12px 14px;border:1px solid rgba(0,0,0,0.12);border-radius:12px;display:inline-block;">
+        {code}
+      </div>
+      <p style="margin:14px 0 0 0;color:rgba(0,0,0,0.65);">
+        This code expires in {OTP_TTL_MINUTES} minutes.
+      </p>
+    </div>
+    """
+    send_resend_email(email, "Your verification code", html)
+
+def create_email_otp(email: str, purpose: str = "verify") -> bool:
+    """
+    Inserts a hashed OTP into email_otps and emails the code.
+    Uses your db.execute/fetchone helpers (same style as auth.py).
+    """
+    email_n = normalize_email(email)
+    if not is_valid_email(email_n):
+        return False
+
+    code = f"{secrets.randbelow(1000000):06d}"  # 6 digits
+    code_hash = _hash_code(code)
+    expires_at = _now_utc() + timedelta(minutes=OTP_TTL_MINUTES)
+
+    # store in db
+    execute(
+        """
+        INSERT INTO email_otps (email, purpose, code_hash, expires_at, attempts)
+        VALUES (%s, %s, %s, %s, 0)
+        """,
+        (email_n, purpose, code_hash, expires_at),
+    )
+
+    # send
+    _send_otp_email(email_n, code)
+    return True
+
+def verify_email_otp(email: str, code: str, purpose: str = "verify") -> bool:
+    """
+    Checks latest OTP for email+purpose; enforces expiry and attempts.
+    """
+    email_n = normalize_email(email)
+    code_hash = _hash_code(code)
+
+    row = fetchone(
+        """
+        SELECT id, code_hash, expires_at, attempts
+        FROM email_otps
+        WHERE LOWER(email)=LOWER(%s) AND purpose=%s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (email_n, purpose),
+    )
+    if not row:
+        return False
+
+    otp_id = row["id"]
+    attempts = int(row.get("attempts") or 0)
+
+    if attempts >= OTP_MAX_ATTEMPTS:
+        return False
+
+    # expires_at is TIMESTAMPTZ in your table
+    expires_at = row.get("expires_at")
+    if not expires_at:
+        return False
+    # if your db returns string, parse it; if it returns datetime, ok
+    if isinstance(expires_at, str):
+        try:
+            expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+        except Exception:
+            return False
+
+    if _now_utc() > expires_at:
+        return False
+
+    if str(row.get("code_hash") or "") != code_hash:
+        execute("UPDATE email_otps SET attempts = attempts + 1 WHERE id=%s", (otp_id,))
+        return False
+
+    # ✅ mark user verified
+    execute(
+        """
+        UPDATE users
+        SET email_verified = TRUE,
+            email_verified_at = COALESCE(email_verified_at, %s)
+        WHERE LOWER(email)=LOWER(%s)
+        """,
+        (_now_utc().isoformat(), email_n),
+    )
+
+    return True
+
+def is_email_verified(email: str) -> bool:
+    row = fetchone(
+        "SELECT email_verified FROM users WHERE LOWER(email)=LOWER(%s) LIMIT 1",
+        (normalize_email(email),),
+    )
+    return bool(row and row.get("email_verified"))
 
 # =========================
 # AUTH UI
@@ -2343,8 +2505,8 @@ def auth_ui():
     import traceback
     import streamlit as st
 
-    tab_login, tab_register, tab_forgot = st.tabs(
-        ["Sign in", "Create account", "Forgot password"]
+    tab_login, tab_register, tab_forgot, tab_verify = st.tabs(
+        ["Sign in", "Create account", "Forgot password", "Verify email"]
     )
 
     # ---- LOGIN TAB ----
@@ -2364,6 +2526,14 @@ def auth_ui():
 
             user = authenticate_user(login_email_n, login_password)
             if user:
+                # ✅ Email verification gate
+                if not bool(user.get("email_verified", True)):
+                    st.session_state["pending_verify_email"] = login_email_n
+                    st.session_state["auth_modal_tab"] = "Verify email"
+                    st.session_state["auth_modal_open"] = True
+                    st.warning("Please verify your email to continue.")
+                    st.stop()
+
                 st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
                 set_logged_in_user(user)  # ✅ closes modal + reruns
             else:
@@ -2374,12 +2544,8 @@ def auth_ui():
     with tab_register:
         reg_name = st.text_input("Full name", key="auth_reg_name")
         reg_email = st.text_input("Email", key="auth_reg_email")
-        reg_password = st.text_input(
-            "Password", type="password", key="auth_reg_password"
-        )
-        reg_password2 = st.text_input(
-            "Confirm password", type="password", key="auth_reg_password2"
-        )
+        reg_password = st.text_input("Password", type="password", key="auth_reg_password")
+        reg_password2 = st.text_input("Confirm password", type="password", key="auth_reg_password2")
 
         reg_referral_code = st.text_input(
             "Referral code (optional)",
@@ -2398,9 +2564,7 @@ def auth_ui():
 
             reg_email_n = normalize_email(reg_email)
             if not is_valid_email(reg_email_n):
-                st.error(
-                    "Please enter a valid email address (e.g. name@example.com)."
-                )
+                st.error("Please enter a valid email address (e.g. name@example.com).")
                 st.stop()
 
             referral_code = None
@@ -2429,32 +2593,26 @@ def auth_ui():
             # ✅ Apply referral bonus AFTER user exists
             if referral_code:
                 try:
-                    applied = apply_referral_bonus(
+                    apply_referral_bonus(
                         new_user_email=reg_email_n,
                         referral_code=referral_code,
-                    )
-                    print(
-                        "apply_referral_bonus:",
-                        applied,
-                        "new_user:",
-                        reg_email_n,
-                        "code:",
-                        referral_code,
                     )
                 except Exception as e:
                     print("apply_referral_bonus error:", repr(e))
 
-            user = authenticate_user(reg_email_n, reg_password)
-            if user:
-                # FORCE consent gate for brand new accounts (session only)
-                st.session_state["accepted_policies"] = False
-                st.session_state["chk_policy_agree"] = False
-                st.session_state["policy_view"] = None
+            # ✅ Send verification OTP + force verify tab
+            try:
+                create_email_otp(reg_email_n, purpose="verify")
+            except Exception as e:
+                st.error(f"Could not send verification code: {e}")
+                st.stop()
 
-                st.success("Account created. Please accept policies to continue.")
-                set_logged_in_user(user)
-            else:
-                st.success("Account created. Please sign in.")
+            st.session_state["pending_verify_email"] = reg_email_n
+            st.session_state["auth_modal_tab"] = "Verify email"
+            st.session_state["auth_modal_open"] = True
+
+            st.success("Account created. Check your email for a 6-digit verification code.")
+            st.stop()
 
 
     # ---- FORGOT PASSWORD TAB ----
@@ -2469,7 +2627,6 @@ def auth_ui():
                 st.error("Please enter your email.")
             else:
                 try:
-                    # ---- DEBUG START ----
                     print("\n=== RESET EMAIL REQUESTED ===")
                     print("fp_email:", fp_email)
 
@@ -2479,10 +2636,9 @@ def auth_ui():
 
                     print("RESEND_API_KEY present:", bool(resend_key))
                     print("RESEND_API_KEY length:", len(resend_key))
-                    print("RESEND_API_KEY prefix:", resend_key[:3])  # should be 're_'
+                    print("RESEND_API_KEY prefix:", resend_key[:3])
                     print("FROM_EMAIL present:", bool(from_email))
                     print("APP_URL present:", bool(app_url))
-                    # ---- DEBUG END ----
 
                     token = create_password_reset_token(fp_email)
                     print("token created:", bool(token))
@@ -2513,14 +2669,67 @@ def auth_ui():
             else:
                 ok = reset_password_with_token(fp_token, fp_new_pwd)
                 if ok:
-                    st.success(
-                        "Password reset successfully. You can now sign in with your new password."
-                    )
+                    st.success("Password reset successfully. You can now sign in with your new password.")
                 else:
-                    st.error(
-                        "Invalid or expired reset token. Please request a new reset link."
-                    )    
+                    st.error("Invalid or expired reset token. Please request a new reset link.")
 
+
+    # ---- VERIFY EMAIL TAB ----
+    with tab_verify:
+        pending_email = (st.session_state.get("pending_verify_email") or "").strip().lower()
+
+        st.write("Enter the 6-digit code we emailed you.")
+        v_email = st.text_input("Email", value=pending_email, key="auth_verify_email")
+        v_code = st.text_input("Verification code", key="auth_verify_code", max_chars=6)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Verify", key="auth_btn_verify"):
+                if not v_email or not v_code:
+                    st.error("Please enter your email and the 6-digit code.")
+                    st.stop()
+
+                v_email_n = normalize_email(v_email)
+                if not is_valid_email(v_email_n):
+                    st.error("Please enter a valid email address.")
+                    st.stop()
+
+                ok = verify_email_otp(v_email_n, v_code.strip(), purpose="verify")
+                if not ok:
+                    st.error("Invalid or expired code. Try again or resend.")
+                    st.stop()
+
+                # refresh user and log them in
+                user = get_user_by_email(v_email_n)
+                if not user:
+                    st.error("Account not found. Please sign in again.")
+                    st.stop()
+
+                st.session_state.pop("pending_verify_email", None)
+
+                # Force consent gate after verification (optional but sensible)
+                st.session_state["accepted_policies"] = bool(user.get("accepted_policies"))
+                st.session_state["chk_policy_agree"] = False
+                st.session_state["policy_view"] = None
+
+                st.success("Email verified! You can continue.")
+                set_logged_in_user(user)
+
+        with c2:
+            if st.button("Resend code", key="auth_btn_resend_verify"):
+                if not v_email:
+                    st.error("Enter your email first.")
+                    st.stop()
+                v_email_n = normalize_email(v_email)
+                if not is_valid_email(v_email_n):
+                    st.error("Please enter a valid email address.")
+                    st.stop()
+
+                try:
+                    create_email_otp(v_email_n, purpose="verify")
+                    st.success("New code sent.")
+                except Exception as e:
+                    st.error(f"Could not resend code: {e}")
 
 
 # =========================

@@ -1,6 +1,7 @@
 # auth.py
 import hashlib
 import secrets
+import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -16,6 +17,9 @@ BONUS_PER_REFERRAL_AI = 5
 
 STARTER_CV = 5
 STARTER_AI = 5
+
+OTP_TTL_MINUTES = 10
+OTP_MAX_ATTEMPTS = 5
 
 
 # -------------------------
@@ -92,6 +96,35 @@ def init_db() -> None:
             # already exists
             pass
 
+        # --- Email verification columns (safe) ---
+        execute("""
+        ALTER TABLE users
+          ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT TRUE;
+        """)
+
+        execute("""
+        ALTER TABLE users
+          ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ;
+        """)
+
+        # --- OTP table for signup verification ---
+        execute("""
+        CREATE TABLE IF NOT EXISTS email_otps (
+            id SERIAL PRIMARY KEY,
+            email TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TIMESTAMPTZ NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """)
+
+        execute("""
+        CREATE INDEX IF NOT EXISTS idx_email_otps_email_purpose_created
+        ON email_otps (email, purpose, created_at DESC);
+        """)
+
         return
 
     # SQLite DDL
@@ -121,6 +154,37 @@ def init_db() -> None:
             accepted_policies_at TEXT,
             job_summary_uses INTEGER NOT NULL DEFAULT 0
         );
+        """
+    )
+
+    # Email verification columns (sqlite: best-effort)
+    try:
+        execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1;")
+    except Exception:
+        pass
+    try:
+        execute("ALTER TABLE users ADD COLUMN email_verified_at TEXT;")
+    except Exception:
+        pass
+
+    # OTP table
+    execute(
+        """
+        CREATE TABLE IF NOT EXISTS email_otps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            code_hash TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        );
+        """
+    )
+    execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_email_otps_email_purpose_created
+        ON email_otps (email, purpose, created_at);
         """
     )
 
@@ -188,10 +252,12 @@ def create_user(
             """
             INSERT INTO users
                 (email, password_hash, full_name, plan, is_admin, role, created_at,
-                 referred_by, referrals_count, accepted_policies, accepted_policies_at)
+                 referred_by, referrals_count, accepted_policies, accepted_policies_at,
+                 email_verified, email_verified_at)
             VALUES
                 (%s, %s, %s, %s, %s, %s, %s,
-                 %s, %s, %s, %s)
+                 %s, %s, %s, %s,
+                 %s, %s)
             """,
             (
                 email,
@@ -205,6 +271,8 @@ def create_user(
                 0,
                 False,
                 None,
+                False,
+                None,
             ),
         )
     else:
@@ -212,10 +280,12 @@ def create_user(
             """
             INSERT INTO users
                 (email, password_hash, full_name, plan, is_admin, role, created_at,
-                 referred_by, referrals_count, accepted_policies, accepted_policies_at)
+                 referred_by, referrals_count, accepted_policies, accepted_policies_at,
+                 email_verified, email_verified_at)
             VALUES
                 (%s, %s, %s, %s, %s, %s, %s,
-                 %s, %s, %s, %s)
+                 %s, %s, %s, %s,
+                 %s, %s)
             """,
             (
                 email,
@@ -227,6 +297,8 @@ def create_user(
                 now,
                 referred_by_code,
                 0,
+                0,
+                None,
                 0,
                 None,
             ),
@@ -388,6 +460,123 @@ def reset_password_with_token(token: str, new_password: str) -> bool:
         (pwd_hash, email),
     )
     return True
+
+
+def _otp_pepper() -> str:
+    # Put OTP_PEPPER in Railway Variables for best security
+    return os.environ.get("OTP_PEPPER", "dev-change-me")
+
+
+def _hash_otp(email: str, purpose: str, code: str) -> str:
+    base = f"{(email or '').strip().lower()}|{purpose}|{code}|{_otp_pepper()}"
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
+
+
+def create_email_otp(email: str, purpose: str = "signup") -> Optional[str]:
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    code_hash = _hash_otp(email, purpose, code)
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=OTP_TTL_MINUTES)
+
+    if is_postgres():
+        execute(
+            """
+            INSERT INTO email_otps (email, purpose, code_hash, expires_at)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (email, purpose, code_hash, expires_at),
+        )
+    else:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        execute(
+            """
+            INSERT INTO email_otps (email, purpose, code_hash, expires_at, attempts, created_at)
+            VALUES (%s, %s, %s, %s, 0, %s)
+            """,
+            (email, purpose, code_hash, expires_at.isoformat(), now_iso),
+        )
+
+    return code
+
+
+def verify_email_otp(email: str, code: str, purpose: str = "signup") -> bool:
+    email = (email or "").strip().lower()
+    code = (code or "").strip()
+    if not email or not code:
+        return False
+
+    row = fetchone(
+        """
+        SELECT id, code_hash, expires_at, attempts
+        FROM email_otps
+        WHERE LOWER(email)=LOWER(%s) AND purpose=%s
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (email, purpose),
+    )
+    if not row:
+        return False
+
+    otp_id = row.get("id")
+    attempts = int(row.get("attempts", 0) or 0)
+    if attempts >= OTP_MAX_ATTEMPTS:
+        return False
+
+    expires_at = row.get("expires_at")
+    try:
+        if isinstance(expires_at, str):
+            expires_at_dt = datetime.fromisoformat(expires_at)
+        else:
+            expires_at_dt = expires_at
+    except Exception:
+        return False
+
+    now = datetime.now(timezone.utc)
+    try:
+        if expires_at_dt < now:
+            return False
+    except TypeError:
+        # fallback if tz mismatch
+        if expires_at_dt < now.replace(tzinfo=None):
+            return False
+
+    # count attempt (even if wrong)
+    execute("UPDATE email_otps SET attempts = attempts + 1 WHERE id=%s", (otp_id,))
+
+    expected = _hash_otp(email, purpose, code)
+    return expected == row.get("code_hash")
+
+
+def mark_email_verified(email: str) -> None:
+    email = (email or "").strip().lower()
+    if not email:
+        return
+
+    if is_postgres():
+        execute(
+            """
+            UPDATE users
+            SET email_verified = TRUE,
+                email_verified_at = COALESCE(email_verified_at, NOW())
+            WHERE LOWER(email)=LOWER(%s)
+            """,
+            (email,),
+        )
+    else:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        execute(
+            """
+            UPDATE users
+            SET email_verified = 1,
+                email_verified_at = COALESCE(email_verified_at, %s)
+            WHERE LOWER(email)=LOWER(%s)
+            """,
+            (now_iso, email),
+        )
 
 
 # -------------------------
