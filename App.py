@@ -2818,6 +2818,19 @@ if is_logged_in and user_email:
     my_ref_count = int((st.session_state.get("user") or {}).get("referrals_count", 0) or 0)
     my_ref_count = min(my_ref_count, REFERRAL_CAP)
 
+from datetime import datetime
+
+def _fmt_ts(v) -> str:
+    """Safe timestamp formatting for admin tables."""
+    if not v:
+        return ""
+    if isinstance(v, datetime):
+        # seconds precision; nice and consistent
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    # If it’s already a string (or anything else), stringify then trim
+    s = str(v)
+    return s[:19]
+
 # =========================
 # Admin dashboard
 # =========================
