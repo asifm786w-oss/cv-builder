@@ -2800,9 +2800,6 @@ if email:
     st.session_state["user_id"] = uid
 
 
-
-
-
 # =========================
 # Referral code (ONLY when logged in)
 # =========================
@@ -2818,26 +2815,28 @@ if is_logged_in and user_email:
     my_ref_count = int((st.session_state.get("user") or {}).get("referrals_count", 0) or 0)
     my_ref_count = min(my_ref_count, REFERRAL_CAP)
 
+
+
+
+# =========================
+# Admin dashboard (SINGLE SOURCE OF TRUTH)
+# =========================
 from datetime import datetime
 
 def _fmt_ts(v) -> str:
-    """Safe timestamp formatting for admin tables."""
+    """Safe timestamp formatting for admin tables (datetime/None/str)."""
     if not v:
         return ""
     if isinstance(v, datetime):
-        # seconds precision; nice and consistent
         return v.strftime("%Y-%m-%d %H:%M:%S")
-    # If it’s already a string (or anything else), stringify then trim
     s = str(v)
     return s[:19]
 
-# =========================
-# Admin dashboard
-# =========================
 def render_admin_dashboard() -> None:
     st.title("👨‍💻 Admin Dashboard")
 
     users = get_all_users() or []
+
     total_users = len(users)
     total_paid = sum(
         1 for u in users
@@ -2860,60 +2859,71 @@ def render_admin_dashboard() -> None:
     c4.metric("AI actions used", total_ai)
 
     st.subheader("User list")
-    if users:
-        table_rows = []
-        for u in users:
-            table_rows.append({
-                "Email": u.get("email", ""),
-                "Name": u.get("full_name") or "",
-                "Plan": u.get("plan", "free"),
-                "Role": u.get("role", "user"),
-                "Banned": "Yes" if u.get("is_banned") else "No",
-                "Policies accepted": "Yes" if u.get("accepted_policies") else "No",
-                "Accepted at": (u.get("accepted_policies_at") or "")[:19],
-                "Created": (u.get("created_at") or "")[:19],
-                "CVs": u.get("cv_generations", 0),
-                "Summaries": u.get("summary_uses", 0),
-                "Covers": u.get("cover_uses", 0),
-                "Bullets": u.get("bullets_uses", 0),
-                "Job summaries": u.get("job_summary_uses", 0),
-                "Uploads": u.get("upload_parses", 0),
-                "Referrals": u.get("referrals_count", 0),
-                "Referred by": u.get("referred_by") or "",
-            })
 
-        st.dataframe(table_rows, use_container_width=True, height=420)
-
-        csv_buffer = io.StringIO()
-        writer = csv.DictWriter(csv_buffer, fieldnames=table_rows[0].keys())
-        writer.writeheader()
-        writer.writerows(table_rows)
-        st.download_button(
-            "Download users as CSV",
-            data=csv_buffer.getvalue(),
-            file_name="users.csv",
-            mime="text/csv",
-        )
-    else:
+    if not users:
         st.info("No users yet.")
         return
+
+    # Build rows
+    table_rows = []
+    for u in users:
+        table_rows.append({
+            "Email": u.get("email", ""),
+            "Name": u.get("full_name") or "",
+            "Plan": u.get("plan", "free"),
+            "Role": u.get("role", "user"),
+            "Banned": "Yes" if u.get("is_banned") else "No",
+            "Policies accepted": "Yes" if u.get("accepted_policies") else "No",
+            "Accepted at": _fmt_ts(u.get("accepted_policies_at")),
+            "Created": _fmt_ts(u.get("created_at")),
+            "CVs": u.get("cv_generations", 0),
+            "Summaries": u.get("summary_uses", 0),
+            "Covers": u.get("cover_uses", 0),
+            "Bullets": u.get("bullets_uses", 0),
+            "Job summaries": u.get("job_summary_uses", 0),
+            "Uploads": u.get("upload_parses", 0),
+            "Referrals": u.get("referrals_count", 0),
+            "Referred by": u.get("referred_by") or "",
+        })
+
+    st.dataframe(table_rows, use_container_width=True, height=420)
+
+    # CSV export
+    csv_buffer = io.StringIO()
+    writer = csv.DictWriter(csv_buffer, fieldnames=table_rows[0].keys())
+    writer.writeheader()
+    writer.writerows(table_rows)
+
+    st.download_button(
+        "Download users as CSV",
+        data=csv_buffer.getvalue(),
+        file_name="users.csv",
+        mime="text/csv",
+    )
 
     st.markdown("---")
     st.subheader("Manage user plans & status")
 
+    emails = [u.get("email") for u in users if u.get("email")]
+    if not emails:
+        st.info("No user emails available.")
+        return
+
     selected_email = st.selectbox(
         "Select a user",
-        [u["email"] for u in users if u.get("email")],
+        emails,
         key="admin_select_user",
     )
+
     selected_user = next((u for u in users if u.get("email") == selected_email), None)
     if not selected_user:
+        st.info("User not found.")
         return
 
     role = selected_user.get("role", "user")
     banned = bool(selected_user.get("is_banned"))
     policies_ok = bool(selected_user.get("accepted_policies"))
-    accepted_at = (selected_user.get("accepted_policies_at") or "")[:19]
+    accepted_at = _fmt_ts(selected_user.get("accepted_policies_at"))
 
     st.write(
         f"**User:** {selected_user.get('full_name') or selected_email}\n\n"
@@ -2928,12 +2938,22 @@ def render_admin_dashboard() -> None:
     current_plan = selected_user.get("plan", "free")
     if current_plan not in plan_options:
         current_plan = "free"
-    new_plan = st.selectbox("New plan", plan_options, index=plan_options.index(current_plan), key="admin_new_plan")
+    new_plan = st.selectbox(
+        "New plan",
+        plan_options,
+        index=plan_options.index(current_plan),
+        key="admin_new_plan",
+    )
 
     role_options = ["owner", "admin", "helper", "user"]
     if role not in role_options:
         role = "user"
-    new_role = st.selectbox("New role", role_options, index=role_options.index(role), key="admin_new_role")
+    new_role = st.selectbox(
+        "New role",
+        role_options,
+        index=role_options.index(role),
+        key="admin_new_role",
+    )
 
     col_a, col_b, col_c = st.columns(3)
 
@@ -2953,6 +2973,7 @@ def render_admin_dashboard() -> None:
                 if helper_count >= 4:
                     st.error("You already have 4 helpers. Remove one before adding another.")
                     st.stop()
+
             set_role(selected_email, new_role)
             st.success(f"Role updated to `{new_role}` for {selected_email}.")
             st.rerun()
@@ -2974,41 +2995,23 @@ def render_admin_dashboard() -> None:
                 st.session_state["user"] = None
             st.rerun()
 
+
 # =========================
-# Mode select (ADMIN ONLY)
+# Mode select (ADMIN ONLY) — SINGLE
 # =========================
 if is_admin:
-    mode = st.sidebar.radio("Mode", ["Use app", "Admin dashboard"], index=0, key="mode_select")
+    mode = st.sidebar.radio(
+        "Mode",
+        ["Use app", "Admin dashboard"],
+        index=0,
+        key="mode_select",
+    )
 else:
     mode = "Use app"
 
 if mode == "Admin dashboard":
     render_admin_dashboard()
     st.stop()
-
-
-
-def render_mulyba_brand_header(is_logged_in: bool):
-    st.markdown(
-        """
-        <div class="sb-card">
-            <div style="font-size:20px; font-weight:900;">🏷️ Mulyba</div>
-            <div class="sb-muted">Career Suite • CV Builder • AI tools</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if not is_logged_in:
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🔐 Sign in", key="brand_signin_btn"):
-                open_auth_modal("Sign in")
-                st.rerun()
-        with c2:
-            if st.button("✨ Create", key="brand_create_btn"):
-                open_auth_modal("Create account")
-                st.rerun()
 
 
 
