@@ -3032,9 +3032,6 @@ with st.sidebar:
 
     sidebar_role = (session_user or {}).get("role", "user")
 
-    # Brand header (your existing function)
-    render_mulyba_brand_header(sidebar_logged_in)
-
     # Mode badge
     if sidebar_logged_in:
         st.markdown(
