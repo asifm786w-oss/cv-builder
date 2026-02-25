@@ -19,7 +19,8 @@ from openai import OpenAI
 from adzuna_client import search_jobs
 from datetime import datetime, timezone
 
-
+from email_utils import send_password_reset_email
+from email_utils import send_resend_email
 from utils import verify_postgres_connection
 from models import CV, Experience, Education
 from utils import (
