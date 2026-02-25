@@ -2414,12 +2414,13 @@ def verify_email_otp(email: str, code: str, purpose: str = "verify") -> bool:
         """
         SELECT id, code_hash, expires_at, attempts
         FROM email_otps
-        WHERE LOWER(email)=LOWER(%s) AND purpose=%s
+        WHERE LOWER(email) = LOWER(%s) AND purpose = %s
         ORDER BY created_at DESC
         LIMIT 1
         """,
         (email_n, purpose),
     )
+
     if not row:
         return False
 
@@ -2433,7 +2434,8 @@ def verify_email_otp(email: str, code: str, purpose: str = "verify") -> bool:
     expires_at = row.get("expires_at")
     if not expires_at:
         return False
-    # if your db returns string, parse it; if it returns datetime, ok
+
+    # If DB returns string, parse it
     if isinstance(expires_at, str):
         try:
             expires_at = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
@@ -2444,34 +2446,27 @@ def verify_email_otp(email: str, code: str, purpose: str = "verify") -> bool:
         return False
 
     if str(row.get("code_hash") or "") != code_hash:
-        execute("UPDATE email_otps SET attempts = attempts + 1 WHERE id=%s", (otp_id,))
+        execute(
+            "UPDATE email_otps SET attempts = attempts + 1 WHERE id = %s",
+            (otp_id,),
+        )
         return False
 
-    # ✅ mark user verified
+    # Mark user verified
     execute(
         """
         UPDATE users
         SET email_verified = TRUE,
             email_verified_at = COALESCE(email_verified_at, %s)
-        WHERE LOWER(email)=LOWER(%s)
+        WHERE LOWER(email) = LOWER(%s)
         """,
         (_now_utc().isoformat(), email_n),
     )
 
     return True
-(email: str, code: str) -> None:
-    html = f"""
-    <p>Verify your email address</p>
-    <p>Your verification code is:</p>
-    <h2>{code}</h2>
-    <p>This code expires in 10 minutes.</p>
-    """
 
-    send_email_brevo(
-        to_email=email,
-        subject="Verify your email",
-        html=html,
-    )
+
+
 
 def send_email_verification_code(email: str, code: str) -> None:
     html = f"""
