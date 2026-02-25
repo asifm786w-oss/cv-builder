@@ -4085,11 +4085,10 @@ references = st.text_area(
         "Line breaks will be preserved in the PDF."
     ),
 )
-
 # =========================
 # Job Search (Adzuna) — Expander (FREE search)
 # ✅ No AI credit spend for searching
-# ✅ No st.stop() (won't hide other features)
+# ✅ "Clear search" resets ONLY job search state (adzuna_* + job_*)
 # ✅ "Use this job" only loads JD into Target Job
 # =========================
 
@@ -4112,6 +4111,54 @@ def _format_salary(smin, smax) -> str:
         return f"Salary: up to £{int(smax):,}"
     except Exception:
         return "Salary: available"
+
+def _as_text(x):
+    if x is None:
+        return ""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        return (
+            x.get("display_name")
+            or x.get("name")
+            or x.get("area")
+            or x.get("label")
+            or str(x)
+        )
+    return str(x)
+
+def _normalize_jobs(jobs_raw):
+    """Adzuna wrappers vary. Ensure we end up with: list[dict]"""
+    if jobs_raw is None:
+        return []
+    if isinstance(jobs_raw, dict):
+        jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
+    if not isinstance(jobs_raw, list):
+        return []
+    return [j for j in jobs_raw if isinstance(j, dict)]
+
+def _clear_adzuna_only():
+    """
+    Surgical reset: clears ONLY job-search state.
+    Does NOT touch cv_* keys or auth/session keys.
+    """
+    for k in (
+        "adzuna_results",
+        "adzuna_keywords",
+        "adzuna_location",
+        "selected_job",
+        "job_description",
+        "_last_jd_fp",
+        "job_summary_ai",
+        "cover_letter",
+        "cover_letter_box",
+    ):
+        st.session_state.pop(k, None)
+
+    # also remove per-job "Use this job" button keys (optional)
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("use_job_"):
+            st.session_state.pop(k, None)
 
 # -----------------------------
 # UI (Expander)
@@ -4139,7 +4186,8 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
     # Inputs
     with st.container(border=True):
-        col1, col2, col3 = st.columns([3, 3, 1.4])
+        col1, col2, col3, col4 = st.columns([3, 3, 1.3, 1.3])
+
         with col1:
             keywords = st.text_input(
                 "Keywords",
@@ -4154,6 +4202,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 placeholder="e.g. Walsall or WS2",
                 disabled=not can_use,
             )
+
         with col3:
             st.write("")
             st.write("")
@@ -4165,33 +4214,24 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 disabled=not can_use,
             )
 
+        with col4:
+            st.write("")
+            st.write("")
+            clear_clicked = st.button(
+                "🧹 Clear",
+                key="adzuna_clear_btn",
+                use_container_width=True,
+                disabled=not can_use,
+            )
+
         st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
 
-    def _as_text(x):
-        if x is None:
-            return ""
-        if isinstance(x, str):
-            return x
-        if isinstance(x, dict):
-            return (
-                x.get("display_name")
-                or x.get("name")
-                or x.get("area")
-                or x.get("label")
-                or str(x)
-            )
-        return str(x)
+    # Clear handler (no rerun drama; we rerun once at the end)
+    if clear_clicked and can_use:
+        _clear_adzuna_only()
+        st.rerun()
 
-    def _normalize_jobs(jobs_raw):
-        """Adzuna wrappers vary. Ensure we end up with: list[dict]"""
-        if jobs_raw is None:
-            return []
-        if isinstance(jobs_raw, dict):
-            jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
-        if not isinstance(jobs_raw, list):
-            return []
-        return [j for j in jobs_raw if isinstance(j, dict)]
-
+    # Search handler
     if search_clicked and can_use:
         query_clean = (keywords or "").strip()
         loc_clean = (location or "").strip()
@@ -4221,7 +4261,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 st.error(f"Job search failed: {e}")
 
     # -----------------------------
-    # Results (each job collapsible)
+    # Results
     # -----------------------------
     jobs = st.session_state.get("adzuna_results") or []
     jobs = _normalize_jobs(jobs)
@@ -4249,6 +4289,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
                 with st.container(border=True):
                     top = st.columns([4, 1])
+
                     with top[0]:
                         if created:
                             st.caption(f"Posted: {created}")
