@@ -4064,8 +4064,8 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
 
-if st.session_state.get("_just_autofilled_from_cv"):
-    restore_experience_from_parsed()
+
+restore_experience_from_parsed()
 st.header("3. Experience (multiple roles)")
 # -------------------------
 # 3. Experience (multiple roles)
