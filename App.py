@@ -167,6 +167,38 @@ def get_user_by_email(email: str) -> dict | None:
         (email,),
     )
 
+def _canon_state_snapshot(label: str) -> None:
+    """Debug: capture minimal canonical state and show diffs across reruns."""
+    import copy
+
+    snap = {
+        "label": label,
+        "form_epoch": st.session_state.get("form_epoch"),
+        "cover_epoch": st.session_state.get("cover_epoch"),
+        "policy_view": st.session_state.get("policy_view"),
+        "template_label": st.session_state.get("template_label"),
+        "num_experiences": st.session_state.get("num_experiences"),
+        "num_education": st.session_state.get("num_education"),
+        "experiences_type": type(st.session_state.get("experiences")).__name__,
+        "experiences_len": len(st.session_state.get("experiences") or []),
+        "education_len": len(st.session_state.get("education_items") or []),
+        "skills_len": len(st.session_state.get("skills") or []),
+        "has_cv_pdf_bytes": bool(st.session_state.get("cv_pdf_bytes")),
+        "has_cv_docx_bytes": bool(st.session_state.get("cv_docx_bytes")),
+    }
+
+    history = st.session_state.get("_debug_state_history")
+    if not isinstance(history, list):
+        history = []
+    history.append(copy.deepcopy(snap))
+    st.session_state["_debug_state_history"] = history
+
+def _show_debug_state_history():
+    hist = st.session_state.get("_debug_state_history") or []
+    if not hist:
+        return
+    st.markdown("### DEBUG state history (most recent last)")
+    st.json(hist[-8:])  # last 8 steps only
 
 def get_user_row_by_id(user_id: int) -> dict | None:
     return fetchone(
@@ -4755,8 +4787,8 @@ template_label = st.selectbox(
 # -------------------------
 st.session_state.setdefault("cv_pdf_bytes", None)
 st.session_state.setdefault("cv_docx_bytes", None)
-st.session_state.setdefault("cv_last_template", None)  # optional
-st.session_state.setdefault("cv_last_fingerprint", None)  # optional
+st.session_state.setdefault("cv_last_template", None)      # optional
+st.session_state.setdefault("cv_last_fingerprint", None)   # optional
 
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
@@ -4787,8 +4819,10 @@ def _cv_fingerprint() -> str:
     return hashlib.sha256(dumped.encode("utf-8", errors="ignore")).hexdigest()
 
 if generate_clicked:
+    # DEBUG: capture canonical state before CV generation
+    _canon_state_snapshot("before_generate_cv")
+
     # If this clears anything CV-related, it must be fixed/removed.
-    # But leave it for now since you said system works.
     clear_ai_upload_state_only()
 
     email_for_usage = (st.session_state.get("user") or {}).get("email")
@@ -4852,13 +4886,16 @@ if generate_clicked:
         pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
         docx_bytes = render_cv_docx_bytes(cv)
 
-        # ✅ STORE BYTES IN SESSION (THIS IS THE KEY FIX)
+        # ✅ STORE BYTES IN SESSION
         st.session_state["cv_pdf_bytes"] = pdf_bytes
         st.session_state["cv_docx_bytes"] = docx_bytes
 
         # optional: store “what this CV represents”
         st.session_state["cv_last_template"] = st.session_state.get("template_label")
         st.session_state["cv_last_fingerprint"] = _cv_fingerprint()
+
+        # DEBUG: capture canonical state after generation (before rerun)
+        _canon_state_snapshot("after_generate_cv_before_rerun")
 
         st.success("CV generated successfully! 🎉")
 
@@ -4938,7 +4975,7 @@ with col_monthly:
         "- PDF + Word downloads\n"
         "- Email support\n"
         "- Cancel anytime\n"
-        "\n"       
+        "\n"
     )
 
     if st.button("Start Monthly Subscription", key="start_monthly_sub"):
@@ -4970,7 +5007,7 @@ with col_pro:
         "- PDF + Word downloads\n"
         "- Priority support\n"
         "- Cancel anytime\n"
-        "\n"        
+        "\n"
     )
 
     if st.button("Start Pro Subscription", key="start_pro_sub"):
@@ -5011,35 +5048,51 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
+with st.expander("Debug (temporary)", expanded=True):
+    _show_debug_state_history()
+
+if st.session_state.get("_just_returned_from_policy"):
+    _canon_state_snapshot("policy_return_before_restore")
+    restore_form_state()
+    _canon_state_snapshot("policy_return_after_restore")
+    st.session_state["_just_returned_from_policy"] = False
+
 def open_policy(scope: str, slug: str) -> None:
+    # DEBUG: capture before opening policy
+    _canon_state_snapshot("before_open_policy")
     snapshot_form_state()
     st.session_state["_just_returned_from_policy"] = True
 
     # ... your existing modal-open state set logic ...
+
+
 # ==============================================
 # FOOTER POLICY BUTTONS (snapshot before navigate)
-# ============================================================
+# ==============================================
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
+        _canon_state_snapshot("before_open_policy")
         snapshot_form_state()
         st.session_state["policy_view"] = "accessibility"
         st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
+        _canon_state_snapshot("before_open_policy")
         snapshot_form_state()
         st.session_state["policy_view"] = "cookies"
         st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
+        _canon_state_snapshot("before_open_policy")
         snapshot_form_state()
         st.session_state["policy_view"] = "privacy"
         st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
+        _canon_state_snapshot("before_open_policy")
         snapshot_form_state()
         st.session_state["policy_view"] = "terms"
         st.rerun()
-		
