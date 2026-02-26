@@ -10,8 +10,10 @@ import psycopg2
 import stripe
 import psycopg2.extras
 import datetime
-from db import get_conn
 
+
+from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
+from db import get_conn
 from ai_v2 import rewrite_cover_letter_tone_ai
 from db import get_conn, get_db_connection, fetchone, fetchall, execute
 from psycopg2.extras import RealDictCursor
@@ -782,6 +784,72 @@ def get_credits_by_user_id(user_id: int) -> dict:
     ) or {}
 
     return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
+
+
+# -------- Helpers --------
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_adzuna_search(query: str, location: str, results: int = 10):
+    return search_jobs(query=query, location=location, results=results)
+
+def _format_salary(smin, smax) -> str:
+    if smin is None and smax is None:
+        return ""
+    try:
+        if smin is not None and smax is not None:
+            return f"Salary: £{int(smin):,} – £{int(smax):,}"
+        if smin is not None:
+            return f"Salary: from £{int(smin):,}"
+        return f"Salary: up to £{int(smax):,}"
+    except Exception:
+        return "Salary: available"
+
+def _as_text(x):
+    if x is None:
+        return ""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        return (
+            x.get("display_name")
+            or x.get("name")
+            or x.get("area")
+            or x.get("label")
+            or str(x)
+        )
+    return str(x)
+
+def _normalize_jobs(jobs_raw):
+    """Adzuna wrappers vary. Ensure: list[dict]"""
+    if jobs_raw is None:
+        return []
+    if isinstance(jobs_raw, dict):
+        jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
+    if not isinstance(jobs_raw, list):
+        return []
+    return [j for j in jobs_raw if isinstance(j, dict)]
+
+def _clear_adzuna_only():
+    """
+    Surgical reset: clears ONLY job-search state.
+    Does NOT touch cv_* keys or auth/session keys.
+    """
+    for k in (
+        "adzuna_results",
+        "adzuna_keywords",
+        "adzuna_location",
+        "selected_job",
+        "job_description",
+        "_last_jd_fp",
+        "job_summary_ai",
+        "cover_letter",
+        "cover_letter_box",
+    ):
+        st.session_state.pop(k, None)
+
+    # remove per-job button keys
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("use_job_"):
+            st.session_state.pop(k, None)
 
 
 def get_user_credits(email: str) -> dict:
@@ -4150,83 +4218,16 @@ references = st.text_area(
 # =========================
 # Job Search (Adzuna) — Expander (FREE search)
 # ✅ No AI credit spend for searching
-# ✅ "Clear search" resets ONLY job search state (adzuna_* + job_*)
-# ✅ "Use this job" only loads JD into Target Job
+# ✅ "Clear search" resets ONLY job search state (adzuna_* + job_* outputs)
+# ✅ "Create tailored cover letter" loads JD into Target Job
 # =========================
 
-import streamlit as st
-from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
-
-# -------- Helpers --------
-@st.cache_data(ttl=300, show_spinner=False)
-def _cached_adzuna_search(query: str, location: str, results: int = 10):
-    return search_jobs(query=query, location=location, results=results)
-
-def _format_salary(smin, smax) -> str:
-    if smin is None and smax is None:
-        return ""
-    try:
-        if smin is not None and smax is not None:
-            return f"Salary: £{int(smin):,} - £{int(smax):,}"
-        if smin is not None:
-            return f"Salary: from £{int(smin):,}"
-        return f"Salary: up to £{int(smax):,}"
-    except Exception:
-        return "Salary: available"
-
-def _as_text(x):
-    if x is None:
-        return ""
-    if isinstance(x, str):
-        return x
-    if isinstance(x, dict):
-        return (
-            x.get("display_name")
-            or x.get("name")
-            or x.get("area")
-            or x.get("label")
-            or str(x)
-        )
-    return str(x)
-
-def _normalize_jobs(jobs_raw):
-    """Adzuna wrappers vary. Ensure we end up with: list[dict]"""
-    if jobs_raw is None:
-        return []
-    if isinstance(jobs_raw, dict):
-        jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
-    if not isinstance(jobs_raw, list):
-        return []
-    return [j for j in jobs_raw if isinstance(j, dict)]
-
-def _clear_adzuna_only():
-    """
-    Surgical reset: clears ONLY job-search state.
-    Does NOT touch cv_* keys or auth/session keys.
-    """
-    for k in (
-        "adzuna_results",
-        "adzuna_keywords",
-        "adzuna_location",
-        "selected_job",
-        "job_description",
-        "_last_jd_fp",
-        "job_summary_ai",
-        "cover_letter",
-        "cover_letter_box",
-    ):
-        st.session_state.pop(k, None)
-
-    # also remove per-job "Use this job" button keys (optional)
-    for k in list(st.session_state.keys()):
-        if isinstance(k, str) and k.startswith("use_job_"):
-            st.session_state.pop(k, None)
 
 # -----------------------------
 # UI (Expander)
 # -----------------------------
 expanded = bool(st.session_state.get("adzuna_results"))
-with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
+with st.expander("Job search (Adzuna)", expanded=expanded):
 
     st.session_state.setdefault("adzuna_results", [])
 
@@ -4236,7 +4237,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
     can_use = True
     if not email:
-        st.warning("Please sign in to use Job Search.")
+        st.info("Sign in to search and load job descriptions.")
         can_use = False
 
     uid = None
@@ -4246,28 +4247,29 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
             st.warning("Couldn’t find your account. Please sign out and sign in again.")
             can_use = False
 
-    # Inputs
+    # Search form container
     with st.container(border=True):
-        col1, col2, col3, col4 = st.columns([3, 3, 1.3, 1.3])
+        st.markdown("### Search for jobs")
+        st.caption("Search is free. You only spend credits when generating AI outputs.")
 
+        col1, col2 = st.columns(2)
         with col1:
             keywords = st.text_input(
                 "Keywords",
                 key="adzuna_keywords",
-                placeholder="e.g. marketing manager / software engineer",
+                placeholder="e.g. sales executive, marketing assistant, software engineer",
                 disabled=not can_use,
             )
         with col2:
             location = st.text_input(
-                "Location",
+                "Location (optional)",
                 key="adzuna_location",
-                placeholder="e.g. Walsall or WS2",
+                placeholder="e.g. Walsall, Birmingham, or WS2",
                 disabled=not can_use,
             )
 
-        with col3:
-            st.write("")
-            st.write("")
+        a, b, c = st.columns([1.2, 1.2, 3])
+        with a:
             search_clicked = st.button(
                 "Search",
                 type="primary",
@@ -4275,39 +4277,32 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 use_container_width=True,
                 disabled=not can_use,
             )
-
-        with col4:
-            st.write("")
-            st.write("")
+        with b:
             clear_clicked = st.button(
-                "🧹 Clear",
+                "Clear results",
                 key="adzuna_clear_btn",
                 use_container_width=True,
                 disabled=not can_use,
             )
+        with c:
+            st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
 
-        st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
-
-    # Clear handler (no rerun drama; we rerun once at the end)
     if clear_clicked and can_use:
         _clear_adzuna_only()
         st.rerun()
 
-    # Search handler
     if search_clicked and can_use:
         query_clean = (keywords or "").strip()
         loc_clean = (location or "").strip()
 
         if not query_clean:
-            st.info("Enter keywords to search (e.g., “marketing manager”).")
+            st.warning("Enter keywords to search (for example: “sales executive”).")
         else:
             try:
-                with st.spinner("Searching jobs..."):
+                with st.spinner("Searching job listings…"):
                     jobs_raw = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
                 jobs = _normalize_jobs(jobs_raw)
-
-                # ✅ FREE SEARCH: DO NOT spend credits here
                 st.session_state["adzuna_results"] = jobs
 
                 if not jobs:
@@ -4316,7 +4311,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                 st.rerun()
 
             except AdzunaConfigError:
-                st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
+                st.error("Job search is not configured (missing Adzuna keys in Railway Variables).")
             except AdzunaAPIError:
                 st.error("Job search is temporarily unavailable. Please try again shortly.")
             except Exception as e:
@@ -4325,49 +4320,56 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
     # -----------------------------
     # Results
     # -----------------------------
-    jobs = st.session_state.get("adzuna_results") or []
-    jobs = _normalize_jobs(jobs)
+    jobs = _normalize_jobs(st.session_state.get("adzuna_results") or [])
 
     if jobs:
         st.divider()
-        st.caption(f"Showing up to {min(len(jobs), 10)} results.")
+        st.markdown("### Results")
+        st.caption(f"Showing up to {min(len(jobs), 10)} listings.")
 
         for idx, job in enumerate(jobs):
-            title = _as_text(job.get("title")) or "Untitled"
-
-            company_val = job.get("company")
-            company = _as_text(company_val) or "Unknown company"
-
-            loc_val = job.get("location") or job.get("candidate_required_location") or job.get("area")
-            loc = _as_text(loc_val) or "Unknown location"
-
+            title = _as_text(job.get("title")) or "Untitled role"
+            company = _as_text(job.get("company")) or "Unknown employer"
+            loc = _as_text(job.get("location") or job.get("candidate_required_location") or job.get("area")) or "Location not stated"
             created = _as_text(job.get("created") or job.get("created_at") or "")
             url = _as_text(job.get("redirect_url") or job.get("url") or "")
             smin = job.get("salary_min")
             smax = job.get("salary_max")
             desc = _as_text(job.get("description") or "")
 
-            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
+            header_line = f"{title} — {company} ({loc})"
+            with st.expander(header_line, expanded=(idx == 0)):
 
+                # Top metadata + actions
                 with st.container(border=True):
-                    top = st.columns([4, 1])
+                    left, right = st.columns([3, 1.2])
 
-                    with top[0]:
+                    with left:
+                        meta_lines = []
                         if created:
-                            st.caption(f"Posted: {created}")
+                            meta_lines.append(f"Posted: {created}")
                         sal = _format_salary(smin, smax)
                         if sal:
-                            st.caption(sal)
-                        if url:
-                            st.link_button("Open listing", url)
+                            meta_lines.append(sal)
+                        if meta_lines:
+                            st.caption(" • ".join(meta_lines))
 
-                    with top[1]:
-                        if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
-                            # FREE: just load JD into Target Job
+                        if url:
+                            st.link_button("Open full listing", url)
+
+                    with right:
+                        # Primary action: load JD for AI tools
+                        if st.button(
+                            "Create tailored cover letter",
+                            key=f"use_job_{idx}",
+                            type="primary",
+                            use_container_width=True,
+                            disabled=not can_use,
+                        ):
                             st.session_state["job_description"] = desc
                             st.session_state["_last_jd_fp"] = None
 
-                            # Optional: clear outputs so user generates fresh ones for this JD
+                            # Clear outputs so user generates fresh ones for this JD
                             st.session_state.pop("job_summary_ai", None)
                             st.session_state.pop("cover_letter", None)
                             st.session_state.pop("cover_letter_box", None)
@@ -4379,11 +4381,13 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                                 "location": loc,
                             }
 
-                            st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
+                            st.success("Job description loaded. Scroll to ‘Target Job’ to generate your summary and cover letter.")
                             st.rerun()
 
-                st.markdown("**Preview description**")
-                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
+                # Description preview
+                st.markdown("**Preview**")
+                with st.container(border=True):
+                    st.write(desc[:2500] + ("…" if len(desc) > 2500 else ""))
 
 
 # -------------------------
