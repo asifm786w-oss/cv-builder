@@ -1901,7 +1901,39 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+st.markdown(
+    """
+<style>
+/* -------------------------------------------------
+   FIX: Selectbox internal input (BaseWeb Select)
+   Your global input CSS makes it white -> looks like asterisk/box.
+   ------------------------------------------------- */
+[data-testid="stAppViewContainer"] div[data-baseweb="select"] input{
+  background: transparent !important;
+  background-color: transparent !important;
+  color: rgba(255,255,255,0.92) !important;
+  -webkit-text-fill-color: rgba(255,255,255,0.92) !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
 
+/* Keep the select "pill" dark (optional, but makes it consistent) */
+[data-testid="stAppViewContainer"] div[data-baseweb="select"] > div{
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  border-radius: 999px !important;
+}
+
+/* Dropdown menu surface */
+[data-testid="stAppViewContainer"] ul[role="listbox"]{
+  background: rgba(11,15,25,0.98) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 # -------------------------
 # AUTH MODAL OVERRIDES (WHITE INPUTS + BLACK TEXT INSIDE MODAL)
 # Put this after the general input CSS so it wins inside dialogs.
