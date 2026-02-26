@@ -232,6 +232,14 @@ def refresh_session_user_from_db() -> None:
             db_u[k] = u[k]
 
     st.session_state["user"] = dict(db_u)
+
+# ---- Canonical state guarantees (never allow None) ----
+if st.session_state.get("experiences") is None:
+    st.session_state["experiences"] = []
+if st.session_state.get("education_items") is None:
+    st.session_state["education_items"] = []
+if st.session_state.get("skills") is None:
+    st.session_state["skills"] = []
   
 def get_active_subscription_plan_by_user_id(user_id: int) -> str | None:
     """
@@ -4038,7 +4046,7 @@ num_experiences = st.number_input(
     key="num_experiences",
 )
 
-experiences = []
+experiences: list[Experience] = []
 
 # ---- Render roles ----
 for i in range(int(num_experiences)):
@@ -4103,7 +4111,8 @@ for i in range(int(num_experiences)):
                 description=(st.session_state.get(desc_key) or None),
             )
         )
-
+# ✅ Persist canonical experiences for snapshot/restore + downstream (CV generation, cover letters)
+st.session_state["experiences"] = experiences
 
 # ---------- Run AI AFTER the loop (single, correct) ----------
 role_to_improve = st.session_state.get("ai_running_role")
