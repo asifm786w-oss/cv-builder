@@ -4528,43 +4528,53 @@ if ai_cover_letter_clicked:
 epoch = int(st.session_state.get("form_epoch", 0) or 0)
 cl_box_key = f"cover_letter_box__{epoch}"
 
+# Canonical cover letter
 cover_text = (st.session_state.get("cover_letter") or "").strip()
 
-# Seed editor key before render
+# Seed editor state BEFORE render (only if missing)
 if cover_text and cl_box_key not in st.session_state:
     st.session_state[cl_box_key] = cover_text
 
+# Only show section if we have something to edit
 if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     st.subheader("Cover letter")
 
     # --- Tone controls (premium) ---
     TONE_OPTIONS = {
-        "Professional": "professional",
-        "Formal": "formal",
-        "Confident": "confident",
-        "Friendly": "friendly",
-        "Concise": "concise",
-        "Direct": "direct",
-        "Warm": "warm",
+        "Professional":    "professional",
+        "Formal":          "formal",
+        "Confident":       "confident",
+        "Friendly":        "friendly",
+        "Concise":         "concise",
+        "Direct":          "direct",
+        "Warm":            "warm",
+        "Persuasive":      "persuasive",
+        "Neutral":         "neutral",
     }
 
-    st.caption("Optional: rewrite the tone without changing the facts. (Costs 1 AI credit per rewrite.)")
+    def _is_valid_tone(t: str) -> bool:
+        return (t or "").strip().lower() in set(TONE_OPTIONS.values())
 
-    t1, t2 = st.columns([2.2, 1])
-    with t1:
+    st.caption(
+        "Optional: rewrite the tone without changing the facts. "
+        "(Costs 1 AI credit per rewrite.)"
+    )
+
+    c1, c2 = st.columns([2.2, 1])
+    with c1:
         tone_label = st.selectbox(
             "Rewrite style",
             options=list(TONE_OPTIONS.keys()),
             key=f"cl_tone_label__{epoch}",
         )
-    with t2:
+    with c2:
         rewrite_clicked = st.button(
             "Rewrite tone (AI)",
             key=f"btn_cl_rewrite_tone__{epoch}",
             use_container_width=True,
         )
 
-    # Handle rewrite BEFORE text_area renders
+    # ---- Handle rewrite BEFORE the editor widget renders ----
     if rewrite_clicked:
         if not gate_premium("rewrite a cover letter"):
             st.stop()
@@ -4578,6 +4588,9 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
             st.stop()
 
         tone = TONE_OPTIONS.get(tone_label, "professional")
+        if not _is_valid_tone(tone):
+            st.error("Invalid tone.")
+            st.stop()
 
         email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
         uid = get_user_id(email_for_usage) if email_for_usage else None
@@ -4592,11 +4605,18 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
         with st.spinner(f"Rewriting in {tone_label.lower()} style..."):
             try:
-                rewritten = rewrite_cover_letter_tone_ai(letter_text=current_letter, tone=tone)
+                rewritten = rewrite_cover_letter_tone_ai(
+                    letter_text=current_letter,
+                    tone=tone,
+                )
                 cleaned = clean_cover_letter_body(rewritten)
-                final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
+                final_letter = enforce_word_limit(
+                    cleaned,
+                    MAX_LETTER_WORDS,
+                    label="cover letter",
+                )
 
-                # Update canonical
+                # Update canonical + editor seed (safe: editor not rendered yet this run)
                 st.session_state["cover_letter"] = final_letter
                 st.session_state[cl_box_key] = final_letter
 
@@ -4606,9 +4626,59 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
                 st.success(f"Cover letter rewritten ({tone_label}).")
                 st.rerun()
+
             except Exception as e:
                 st.error(f"AI error (cover rewrite): {e}")
                 st.stop()
+
+    # ---- Editor (renders AFTER rewrite logic) ----
+    edited = st.text_area(
+        "You can edit this before downloading:",
+        key=cl_box_key,
+        height=260,
+    )
+
+    # Sync editor -> canonical
+    st.session_state["cover_letter"] = edited
+
+    # ---- Downloads (FREE) ----
+    try:
+        letter_pdf = render_cover_letter_pdf_bytes(
+            full_name=full_name_ss or "Candidate",
+            letter_body=st.session_state["cover_letter"],
+            location=location_ss,
+            email=email_ss,
+            phone=phone_ss,
+        )
+
+        letter_docx = render_cover_letter_docx_bytes(
+            full_name=full_name_ss or "Candidate",
+            letter_body=st.session_state["cover_letter"],
+            location=location_ss,
+            email=email_ss,
+            phone=phone_ss,
+        )
+
+        d1, d2 = st.columns(2)
+        with d1:
+            st.download_button(
+                label="📄 Download cover letter as PDF",
+                data=letter_pdf,
+                file_name="cover_letter.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        with d2:
+            st.download_button(
+                label="📝 Download cover letter as Word (.docx)",
+                data=letter_docx,
+                file_name="cover_letter.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+            )
+
+    except Exception as e:
+        st.error(f"Error generating cover letter files: {e!r}")
 
     # --- Editor (downloads are FREE) ---
     edited = st.text_area(
