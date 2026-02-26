@@ -135,6 +135,69 @@ Return ONLY the summary text. No headings, no bullets.
     return response.choices[0].message.content.strip()
 
 # -------------------------------------------------------------------
+# NEW: Rewrite cover letter tone (ledger-connected from app.py)
+# -------------------------------------------------------------------
+TONE_GUIDES = {
+    "professional": "Professional, polished UK business tone. Clear structure. No slang.",
+    "formal": "Highly formal tone. No contractions. Conservative wording. Very respectful.",
+    "confident": "Confident and assertive, outcome-focused. Not arrogant. Strong verbs.",
+    "friendly": "Warm and approachable but still professional. Human tone.",
+    "concise": "Shorter and tighter. Remove filler. Keep it one page maximum.",
+}
+
+def rewrite_cover_letter_tone_ai(letter_text: str, tone: str) -> str:
+    """
+    Rewrite an existing cover letter body in a new tone.
+    Hard rules: preserve facts, do not invent, no greeting/signoff.
+    """
+    client = _get_client()
+
+    tone_key = (tone or "").strip().lower()
+    guide = TONE_GUIDES.get(tone_key)
+    if not guide:
+        raise ValueError("Invalid tone")
+
+    prompt = f"""
+You are an expert UK cover letter editor.
+
+Task:
+Rewrite the cover letter body below to match the requested tone.
+
+Hard truth rules (must follow):
+- Do NOT invent experience, employers, qualifications, dates, tools, achievements, or metrics.
+- Do NOT remove factual content; keep the meaning and key points the same.
+- You may reorder sentences for clarity, but do not change facts.
+- Keep it ATS-friendly.
+- UK spelling.
+
+Tone requirements:
+{guide}
+
+Formatting rules:
+- Output ONLY the cover letter BODY text.
+- Do NOT include any greeting lines ("Dear ...").
+- Do NOT include address/date.
+- Do NOT add the candidate name at the end.
+- 4 short paragraphs maximum.
+
+Cover letter body:
+\"\"\"{letter_text}\"\"\"
+
+Now output ONLY the rewritten body text:
+""".strip()
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You rewrite UK cover letter bodies without inventing facts. You never add greetings or sign-offs."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.25,
+    )
+
+    raw_text = response.choices[0].message.content.strip()
+    return _clean_cover_letter_body(raw_text)
+# -------------------------------------------------------------------
 # 1b. Job summary (unchanged)
 # -------------------------------------------------------------------
 def generate_job_summary(job_description: str) -> str:
