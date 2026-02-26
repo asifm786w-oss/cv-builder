@@ -4516,25 +4516,21 @@ if ai_cover_letter_clicked:
 # -------------------------
 # Cover letter editor + downloads (epoch-safe) + Tone rewrite (ledger-safe)
 # -------------------------
+
+# Always compute epoch BEFORE using it anywhere
 epoch = int(st.session_state.get("form_epoch", 0) or 0)
 cl_box_key = f"cover_letter_box__{epoch}"
 
+# Canonical cover letter
 cover_text = (st.session_state.get("cover_letter") or "").strip()
 
+# Seed the current epoch editor key once
 if cover_text and cl_box_key not in st.session_state:
-    st.session_state[cl_box_key] = st.session_state["cover_letter"]
+    st.session_state[cl_box_key] = cover_text
 
+# Show editor if we have something to edit (either canonical or box)
 if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     st.subheader("✏️ Cover letter")
-
-    edited = st.text_area(
-        "You can edit this before using it:",
-        key=cl_box_key,
-        height=260,
-    )
-
-    # sync editor -> canonical
-    st.session_state["cover_letter"] = edited
 
     # ---- Tone rewrite defs + UI ----
     def _norm_tone(x: str) -> str:
@@ -4553,25 +4549,33 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
     st.markdown("**Rewrite tone (AI):**")
     col_t1, col_t2 = st.columns([2, 1])
+
     with col_t1:
         tone_label = st.selectbox(
             "Tone",
             options=list(TONE_OPTIONS.keys()),
             key=f"cl_tone_label__{epoch}",
         )
+
     with col_t2:
         rewrite_tone_clicked = st.button(
             "Rewrite tone (AI)",
             key=f"btn_cl_rewrite_tone__{epoch}",
         )
 
+    # ✅ IMPORTANT: Handle rewrite BEFORE rendering the text_area
     if rewrite_tone_clicked:
         _restore_auth_if_missing()
 
         if not gate_premium("rewrite a cover letter"):
             st.stop()
 
-        current_letter = (st.session_state.get(cl_box_key) or "").strip() or (st.session_state.get("cover_letter") or "").strip()
+        # Pull current text from the editor state (or fallback to canonical)
+        current_letter = (
+            (st.session_state.get(cl_box_key) or "").strip()
+            or (st.session_state.get("cover_letter") or "").strip()
+        )
+
         if not current_letter:
             st.warning("Nothing to rewrite yet.")
             st.stop()
@@ -4598,8 +4602,16 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 cleaned = clean_cover_letter_body(rewritten)
                 final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
+                # Update canonical
                 st.session_state["cover_letter"] = final_letter
-                st.session_state[cl_box_key] = final_letter
+
+                # ✅ Bump epoch so we never touch an already-instantiated widget key
+                st.session_state["form_epoch"] = epoch + 1
+                new_epoch = epoch + 1
+                new_key = f"cover_letter_box__{new_epoch}"
+
+                # Seed next editor key BEFORE it renders
+                st.session_state[new_key] = final_letter
 
                 st.session_state["cover_rewrite_uses"] = st.session_state.get("cover_rewrite_uses", 0) + 1
                 if email_for_usage:
@@ -4610,6 +4622,21 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
             except Exception as e:
                 st.error(f"AI error (cover rewrite): {e}")
+                st.stop()
+
+    # ---- Editor (renders AFTER any rewrite logic) ----
+    # Refresh epoch/key in case it changed (it will after rewrite + rerun)
+    epoch = int(st.session_state.get("form_epoch", 0) or 0)
+    cl_box_key = f"cover_letter_box__{epoch}"
+
+    edited = st.text_area(
+        "You can edit this before using it:",
+        key=cl_box_key,
+        height=260,
+    )
+
+    # Sync editor -> canonical
+    st.session_state["cover_letter"] = edited
 
     # ---- Downloads ----
     try:
