@@ -146,6 +146,7 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
+FORM_EPOCH_KEY = "form_epoch"
 
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
@@ -276,7 +277,7 @@ def clear_ai_upload_state_only():
         if k.startswith(SAFE_PREFIXES):
             st.session_state.pop(k, None)
 
-FORM_EPOCH_KEY = "form_epoch"
+
 
 def _hard_reset_to_guest() -> None:
     next_epoch = int(st.session_state.get(FORM_EPOCH_KEY, 0) or 0) + 1
@@ -4381,7 +4382,7 @@ with st.expander("Job search (Adzuna)", expanded=expanded):
 
 
 # -------------------------
-# 5. Target Job (optional, for AI)  [TRIP-WIRE HARDENED]
+# 5. Target Job (optional, for AI)  [EPOCH FIXED]
 # -------------------------
 st.header("5. Target Job (optional)")
 
@@ -4392,10 +4393,18 @@ title_ss     = get_personal_value("title", "cv_title")
 phone_ss     = get_personal_value("phone", "cv_phone")
 location_ss  = get_personal_value("location", "cv_location")
 
-epoch = int(st.session_state.get("form_epoch", 0) or 0)
-jd_key = f"job_description__{epoch}"
+# -------------------------------------------------------
+# form_epoch: used for JD widget stability (OK)
+# cover_epoch: used ONLY for cover letter editor stability
+# -------------------------------------------------------
+form_epoch  = int(st.session_state.get("form_epoch", 0) or 0)
+cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
 
-# seed epoch key BEFORE widget renders
+# -------------------------
+# Job description input (epoch-safe)
+# -------------------------
+jd_key = f"job_description__{form_epoch}"
+
 if jd_key not in st.session_state:
     st.session_state[jd_key] = st.session_state.get("job_description", "")
 
@@ -4408,7 +4417,7 @@ job_description = st.text_area(
 jd_fp = _fingerprint(job_description)
 last_jd_fp = st.session_state.get("_last_jd_fp")
 
-# If JD changed, clear ONLY explicit AI outputs (and the current epoch editor key)
+# If JD changed, clear ONLY explicit AI outputs + current cover editor key
 if last_jd_fp and jd_fp != last_jd_fp:
     st.session_state.pop("job_summary_ai", None)
     st.session_state.pop("cover_letter", None)
@@ -4416,8 +4425,9 @@ if last_jd_fp and jd_fp != last_jd_fp:
     # legacy key (if you still have it anywhere)
     st.session_state.pop("cover_letter_box", None)
 
-    # epoch-safe editor key for current epoch
-    st.session_state.pop(f"cover_letter_box__{epoch}", None)
+    # clear current cover editor widget key (cover_epoch-based)
+    ce = int(st.session_state.get("cover_epoch", 0) or 0)
+    st.session_state.pop(f"cover_letter_box__{ce}", None)
 
 st.session_state["_last_jd_fp"] = jd_fp
 
@@ -4431,9 +4441,9 @@ st.caption(
 
 col_jd1, col_jd2 = st.columns(2)
 with col_jd1:
-    job_summary_clicked = st.button("Suggest tailored summary (AI)", key=f"btn_job_summary__{epoch}")
+    job_summary_clicked = st.button("Suggest tailored summary (AI)", key=f"btn_job_summary__{form_epoch}")
 with col_jd2:
-    ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key=f"btn_cover__{epoch}")
+    ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key=f"btn_cover__{form_epoch}")
 
 # -------------------------
 # AI job-description summary
@@ -4479,7 +4489,6 @@ if job_summary_clicked:
         except Exception as e:
             st.error(f"AI error (job summary): {e}")
 
-# Display job summary
 job_summary_text = st.session_state.get("job_summary_ai", "")
 if job_summary_text:
     st.markdown("**AI job summary for this role (read-only):**")
@@ -4535,9 +4544,10 @@ if ai_cover_letter_clicked:
             # canonical
             st.session_state["cover_letter"] = final_letter
 
-            # seed epoch editor key immediately
-            cl_box_key = f"cover_letter_box__{epoch}"
-            st.session_state[cl_box_key] = final_letter
+            # ✅ bump cover_epoch (NOT form_epoch) to avoid widget-key collision
+            st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
+            new_ce = st.session_state["cover_epoch"]
+            st.session_state[f"cover_letter_box__{new_ce}"] = final_letter
 
             st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
             if email_for_usage:
@@ -4550,25 +4560,21 @@ if ai_cover_letter_clicked:
             st.error(f"AI error (cover letter): {e}")
 
 # -------------------------
-# Cover letter editor + downloads (epoch-safe) + Tone rewrite (ledger-safe)
+# Cover letter editor + downloads + Tone rewrite (cover_epoch-safe)
 # -------------------------
+cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
+cl_box_key = f"cover_letter_box__{cover_epoch}"
 
-# Always compute epoch BEFORE using it anywhere
-epoch = int(st.session_state.get("form_epoch", 0) or 0)
-cl_box_key = f"cover_letter_box__{epoch}"
-
-# Canonical cover letter
 cover_text = (st.session_state.get("cover_letter") or "").strip()
 
-# Seed the current epoch editor key once
+# Seed the current cover editor key once (safe)
 if cover_text and cl_box_key not in st.session_state:
     st.session_state[cl_box_key] = cover_text
 
-# Show editor if we have something to edit (either canonical or box)
 if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     st.subheader("✏️ Cover letter")
 
-    # ---- Tone rewrite defs + UI ----
+    # Tone rewrite defs
     def _norm_tone(x: str) -> str:
         return (x or "").strip().lower()
 
@@ -4590,28 +4596,26 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         tone_label = st.selectbox(
             "Tone",
             options=list(TONE_OPTIONS.keys()),
-            key=f"cl_tone_label__{epoch}",
+            key=f"cl_tone_label__{cover_epoch}",
         )
 
     with col_t2:
         rewrite_tone_clicked = st.button(
             "Rewrite tone (AI)",
-            key=f"btn_cl_rewrite_tone__{epoch}",
+            key=f"btn_cl_rewrite_tone__{cover_epoch}",
         )
 
-    # ✅ IMPORTANT: Handle rewrite BEFORE rendering the text_area
+    # ✅ Rewrite BEFORE rendering the text_area
     if rewrite_tone_clicked:
         _restore_auth_if_missing()
 
         if not gate_premium("rewrite a cover letter"):
             st.stop()
 
-        # Pull current text from the editor state (or fallback to canonical)
         current_letter = (
             (st.session_state.get(cl_box_key) or "").strip()
             or (st.session_state.get("cover_letter") or "").strip()
         )
-
         if not current_letter:
             st.warning("Nothing to rewrite yet.")
             st.stop()
@@ -4641,13 +4645,10 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 # Update canonical
                 st.session_state["cover_letter"] = final_letter
 
-                # ✅ Bump epoch so we never touch an already-instantiated widget key
-                st.session_state["form_epoch"] = epoch + 1
-                new_epoch = epoch + 1
-                new_key = f"cover_letter_box__{new_epoch}"
-
-                # Seed next editor key BEFORE it renders
-                st.session_state[new_key] = final_letter
+                # ✅ bump cover_epoch to switch editor key safely
+                st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
+                new_ce = st.session_state["cover_epoch"]
+                st.session_state[f"cover_letter_box__{new_ce}"] = final_letter
 
                 st.session_state["cover_rewrite_uses"] = st.session_state.get("cover_rewrite_uses", 0) + 1
                 if email_for_usage:
@@ -4660,10 +4661,9 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 st.error(f"AI error (cover rewrite): {e}")
                 st.stop()
 
-    # ---- Editor (renders AFTER any rewrite logic) ----
-    # Refresh epoch/key in case it changed (it will after rewrite + rerun)
-    epoch = int(st.session_state.get("form_epoch", 0) or 0)
-    cl_box_key = f"cover_letter_box__{epoch}"
+    # Refresh editor key (after possible rerun-causing actions)
+    cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
+    cl_box_key = f"cover_letter_box__{cover_epoch}"
 
     edited = st.text_area(
         "You can edit this before using it:",
@@ -4674,7 +4674,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     # Sync editor -> canonical
     st.session_state["cover_letter"] = edited
 
-    # ---- Downloads ----
+    # Downloads
     try:
         letter_pdf = render_cover_letter_pdf_bytes(
             full_name=full_name_ss or "Candidate",
