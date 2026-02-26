@@ -944,42 +944,6 @@ def _clear_education_persistence_for_new_cv():
     st.session_state.pop("_edu_backup", None)
 
 
-def restore_experience_from_parsed():
-    """Restore experience fields from last parsed CV if they went blank after reruns."""
-    if not st.session_state.get("_cv_autofill_enabled"):
-        return
-
-    parsed = st.session_state.get("_cv_parsed")
-    if not isinstance(parsed, dict):
-        return
-
-    exps = parsed.get("experiences") or []
-    if not isinstance(exps, list) or not exps:
-        return
-
-    count = min(len(exps), 5)
-
-    if st.session_state.get("num_experiences") in (None, 0, ""):
-        st.session_state["num_experiences"] = count
-
-    for i in range(count):
-        exp = exps[i] or {}
-
-        def _restore(key, value):
-            if st.session_state.get(key) in (None, "") and isinstance(value, str) and value.strip():
-                st.session_state[key] = value
-
-        _restore(f"job_title_{i}", exp.get("job_title", "") or "")
-        _restore(f"company_{i}", exp.get("company", "") or "")
-        _restore(f"exp_location_{i}", exp.get("location", "") or "")
-        _restore(f"start_date_{i}", exp.get("start_date", "") or "")
-        _restore(f"end_date_{i}", exp.get("end_date", "") or "")
-
-        desc = exp.get("description", "") or ""
-        if isinstance(desc, list):
-            desc = "\n".join([str(x) for x in desc if str(x).strip()])
-        _restore(f"description_{i}", desc)
-
 
 def _reset_outputs_on_new_cv():
     """
@@ -1585,7 +1549,41 @@ def sync_session_plan_and_credits() -> None:
 
     credits = get_credits_by_user_id(int(uid))
    
+def restore_experience_from_parsed():
+    """Restore experience fields from last parsed CV if they went blank after reruns."""
+    if not st.session_state.get("_cv_autofill_enabled"):
+        return
 
+    parsed = st.session_state.get("_cv_parsed")
+    if not isinstance(parsed, dict):
+        return
+
+    exps = parsed.get("experiences") or []
+    if not isinstance(exps, list) or not exps:
+        return
+
+    count = min(len(exps), 5)
+
+    if st.session_state.get("num_experiences") in (None, 0, ""):
+        st.session_state["num_experiences"] = count
+
+    for i in range(count):
+        exp = exps[i] or {}
+
+        def _restore(key, value):
+            if st.session_state.get(key) in (None, "") and isinstance(value, str) and value.strip():
+                st.session_state[key] = value
+
+        _restore(f"job_title_{i}", exp.get("job_title", "") or "")
+        _restore(f"company_{i}", exp.get("company", "") or "")
+        _restore(f"exp_location_{i}", exp.get("location", "") or "")
+        _restore(f"start_date_{i}", exp.get("start_date", "") or "")
+        _restore(f"end_date_{i}", exp.get("end_date", "") or "")
+
+        desc = exp.get("description", "") or ""
+        if isinstance(desc, list):
+            desc = "\n".join([str(x) for x in desc if str(x).strip()])
+        _restore(f"description_{i}", desc)
 
 def _as_utc_dt(ts):
     if not ts:
@@ -4115,10 +4113,7 @@ if run_now and role_to_improve is not None:
             st.error(f"AI error: {e}")
 
 
-# ✅ Keep your existing pop (ensures sync only happens once after autofill)
-if not st.session_state.pop("_just_autofilled_from_cv", False):
-    pass
-
+st.session_state.pop("_just_autofilled_from_cv", False)
 
     restore_education_state()
 
