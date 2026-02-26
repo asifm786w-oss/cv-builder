@@ -1644,40 +1644,42 @@ def sync_session_plan_and_credits() -> None:
     credits = get_credits_by_user_id(int(uid))
    
 def restore_experience_from_parsed():
-    """Restore experience fields from last parsed CV if they went blank after reruns."""
-    if not st.session_state.get("_cv_autofill_enabled"):
-        return
-
+    """
+    Non-destructive restore:
+    - Only hydrate experiences from parsed CV when parsed experiences exist.
+    - Never overwrite existing user-entered experiences with empty/None.
+    """
     parsed = st.session_state.get("_cv_parsed")
     if not isinstance(parsed, dict):
         return
 
-    exps = parsed.get("experiences") or []
-    if not isinstance(exps, list) or not exps:
+    parsed_exps = parsed.get("experiences")
+    if not isinstance(parsed_exps, list) or len(parsed_exps) == 0:
+        return  # <- CRITICAL: do not wipe
+
+    # If user already has experiences, do not overwrite unless explicitly requested
+    existing = st.session_state.get("experiences")
+    if isinstance(existing, list) and len(existing) > 0:
         return
 
-    count = min(len(exps), 5)
+    # Otherwise hydrate canonical experiences from parsed dicts
+    hydrated = []
+    for exp in parsed_exps[:5]:
+        if not isinstance(exp, dict):
+            continue
+        hydrated.append(
+            Experience(
+                job_title=(exp.get("job_title") or "").strip(),
+                company=(exp.get("company") or "").strip(),
+                location=(exp.get("location") or None),
+                start_date=(exp.get("start_date") or ""),
+                end_date=(exp.get("end_date") or None),
+                description=(exp.get("description") or None),
+            )
+        )
 
-    if st.session_state.get("num_experiences") in (None, 0, ""):
-        st.session_state["num_experiences"] = count
-
-    for i in range(count):
-        exp = exps[i] or {}
-
-        def _restore(key, value):
-            if st.session_state.get(key) in (None, "") and isinstance(value, str) and value.strip():
-                st.session_state[key] = value
-
-        _restore(f"job_title_{i}", exp.get("job_title", "") or "")
-        _restore(f"company_{i}", exp.get("company", "") or "")
-        _restore(f"exp_location_{i}", exp.get("location", "") or "")
-        _restore(f"start_date_{i}", exp.get("start_date", "") or "")
-        _restore(f"end_date_{i}", exp.get("end_date", "") or "")
-
-        desc = exp.get("description", "") or ""
-        if isinstance(desc, list):
-            desc = "\n".join([str(x) for x in desc if str(x).strip()])
-        _restore(f"description_{i}", desc)
+    st.session_state["experiences"] = hydrated
+    st.session_state["num_experiences"] = max(1, min(5, len(hydrated)))
 
 def _as_utc_dt(ts):
     if not ts:
@@ -4062,9 +4064,9 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
 
-restore_experience_from_parsed()
+if st.session_state.get("_just_autofilled_from_cv"):
+    restore_experience_from_parsed()
 st.header("3. Experience (multiple roles)")
-
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
