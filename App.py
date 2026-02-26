@@ -4523,58 +4523,55 @@ if ai_cover_letter_clicked:
             st.error(f"AI error (cover letter): {e}")
 
 # -------------------------
-# Cover letter editor + downloads + Tone upgrade (AI spend)
+# Cover letter editor + downloads + Tone upgrade (AI spend)  ✅ no duplicate keys
 # -------------------------
-epoch = int(st.session_state.get("form_epoch", 0) or 0)
-cl_box_key = f"cover_letter_box__{epoch}"
 
-# Canonical cover letter
+# Dedicated epoch for cover letter editor keys (keeps it isolated)
+st.session_state.setdefault("cover_epoch", 0)
+cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
+cl_box_key = f"cover_letter_box__{cover_epoch}"
+
 cover_text = (st.session_state.get("cover_letter") or "").strip()
 
-# Seed editor state BEFORE render (only if missing)
+# Seed editor key BEFORE widget renders (only if missing)
 if cover_text and cl_box_key not in st.session_state:
     st.session_state[cl_box_key] = cover_text
 
-# Only show section if we have something to edit
 if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     st.subheader("Cover letter")
 
     # --- Tone controls (premium) ---
     TONE_OPTIONS = {
-        "Professional":    "professional",
-        "Formal":          "formal",
-        "Confident":       "confident",
-        "Friendly":        "friendly",
-        "Concise":         "concise",
-        "Direct":          "direct",
-        "Warm":            "warm",
-        "Persuasive":      "persuasive",
-        "Neutral":         "neutral",
+        "Professional": "professional",
+        "Formal": "formal",
+        "Confident": "confident",
+        "Friendly": "friendly",
+        "Concise": "concise",
+        "Direct": "direct",
+        "Warm": "warm",
+        "Persuasive": "persuasive",
     }
 
     def _is_valid_tone(t: str) -> bool:
         return (t or "").strip().lower() in set(TONE_OPTIONS.values())
 
-    st.caption(
-        "Optional: rewrite the tone without changing the facts. "
-        "(Costs 1 AI credit per rewrite.)"
-    )
+    st.caption("Optional: rewrite the tone without changing the facts. (Costs 1 AI credit per rewrite.)")
 
-    c1, c2 = st.columns([2.2, 1])
-    with c1:
+    t1, t2 = st.columns([2.2, 1])
+    with t1:
         tone_label = st.selectbox(
             "Rewrite style",
             options=list(TONE_OPTIONS.keys()),
-            key=f"cl_tone_label__{epoch}",
+            key=f"cl_tone_label__{cover_epoch}",
         )
-    with c2:
+    with t2:
         rewrite_clicked = st.button(
             "Rewrite tone (AI)",
-            key=f"btn_cl_rewrite_tone__{epoch}",
+            key=f"btn_cl_rewrite_tone__{cover_epoch}",
             use_container_width=True,
         )
 
-    # ---- Handle rewrite BEFORE the editor widget renders ----
+    # ✅ Handle rewrite BEFORE the text_area renders
     if rewrite_clicked:
         if not gate_premium("rewrite a cover letter"):
             st.stop()
@@ -4605,20 +4602,17 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
         with st.spinner(f"Rewriting in {tone_label.lower()} style..."):
             try:
-                rewritten = rewrite_cover_letter_tone_ai(
-                    letter_text=current_letter,
-                    tone=tone,
-                )
+                rewritten = rewrite_cover_letter_tone_ai(letter_text=current_letter, tone=tone)
                 cleaned = clean_cover_letter_body(rewritten)
-                final_letter = enforce_word_limit(
-                    cleaned,
-                    MAX_LETTER_WORDS,
-                    label="cover letter",
-                )
+                final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-                # Update canonical + editor seed (safe: editor not rendered yet this run)
+                # Canonical update
                 st.session_state["cover_letter"] = final_letter
-                st.session_state[cl_box_key] = final_letter
+
+                # ✅ bump cover_epoch so the next editor key is guaranteed unique
+                st.session_state["cover_epoch"] = cover_epoch + 1
+                new_epoch = cover_epoch + 1
+                st.session_state[f"cover_letter_box__{new_epoch}"] = final_letter
 
                 st.session_state["cover_rewrite_uses"] = st.session_state.get("cover_rewrite_uses", 0) + 1
                 if email_for_usage:
@@ -4631,9 +4625,12 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 st.error(f"AI error (cover rewrite): {e}")
                 st.stop()
 
-    # ---- Editor (renders AFTER rewrite logic) ----
+    # Refresh after possible rewrite bump
+    cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
+    cl_box_key = f"cover_letter_box__{cover_epoch}"
+
     edited = st.text_area(
-        "You can edit this before downloading:",
+        "You can edit this before using it:",
         key=cl_box_key,
         height=260,
     )
@@ -4641,7 +4638,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     # Sync editor -> canonical
     st.session_state["cover_letter"] = edited
 
-    # ---- Downloads (FREE) ----
+    # Downloads (NO AI spend)
     try:
         letter_pdf = render_cover_letter_pdf_bytes(
             full_name=full_name_ss or "Candidate",
@@ -4650,54 +4647,6 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
             email=email_ss,
             phone=phone_ss,
         )
-
-        letter_docx = render_cover_letter_docx_bytes(
-            full_name=full_name_ss or "Candidate",
-            letter_body=st.session_state["cover_letter"],
-            location=location_ss,
-            email=email_ss,
-            phone=phone_ss,
-        )
-
-        d1, d2 = st.columns(2)
-        with d1:
-            st.download_button(
-                label="📄 Download cover letter as PDF",
-                data=letter_pdf,
-                file_name="cover_letter.pdf",
-                mime="application/pdf",
-                use_container_width=True,
-            )
-        with d2:
-            st.download_button(
-                label="📝 Download cover letter as Word (.docx)",
-                data=letter_docx,
-                file_name="cover_letter.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
-            )
-
-    except Exception as e:
-        st.error(f"Error generating cover letter files: {e!r}")
-
-    # --- Editor (downloads are FREE) ---
-    edited = st.text_area(
-        "Edit your cover letter (optional)",
-        key=cl_box_key,
-        height=260,
-    )
-    st.session_state["cover_letter"] = edited
-
-    # --- Downloads (FREE) ---
-    try:
-        letter_pdf = render_cover_letter_pdf_bytes(
-            full_name=full_name_ss or "Candidate",
-            letter_body=st.session_state["cover_letter"],
-            location=location_ss,
-            email=email_ss,
-            phone=phone_ss,
-        )
-
         letter_docx = render_cover_letter_docx_bytes(
             full_name=full_name_ss or "Candidate",
             letter_body=st.session_state["cover_letter"],
@@ -4709,19 +4658,19 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         col_d11, col_d12 = st.columns(2)
         with col_d11:
             st.download_button(
-                label="Download cover letter (PDF)",
+                label="📄 Download cover letter as PDF",
                 data=letter_pdf,
                 file_name="cover_letter.pdf",
                 mime="application/pdf",
-                use_container_width=True,
+                key=f"dl_cover_pdf__{cover_epoch}",
             )
         with col_d12:
             st.download_button(
-                label="Download cover letter (Word)",
+                label="📝 Download cover letter as Word (.docx)",
                 data=letter_docx,
                 file_name="cover_letter.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True,
+                key=f"dl_cover_docx__{cover_epoch}",
             )
 
     except Exception as e:
