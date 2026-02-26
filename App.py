@@ -2152,74 +2152,77 @@ if show_policy_page():
 
 
 # =========================
-# FORM SNAPSHOT / RESTORE
+# FORM SNAPSHOT / RESTORE  (SURGICAL + SAFE)
 # =========================
 
 FORM_KEYS_TO_PRESERVE = [
-    # Section 1
+    # Section 1 (legacy)
     "full_name", "title", "email", "phone", "location", "summary",
-    
-	# CV personal details (these are the ones your UI is using)
+
+    # Canonical CV personal details (UI uses these)
     "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
-    
-	# CV upload / parsing (IMPORTANT: do NOT include widget keys like "cv_uploader")
+
+    # CV upload / parsing (do NOT include widget keys like "cv_uploader")
     "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
     "_last_cv_fingerprint", "cv_upload_bytes", "cv_upload_name",
 
-    # Education/experience/skills structures you use
+    # Canonical structures (THIS is what matters for Section 3)
     "skills", "experiences", "education_items", "references", "skills_text",
+
+    # Counts / helpers (optional but ok)
     "num_experiences", "num_education", "parsed_num_experiences",
 
-    # Target job / cover letter
+    # Target job / cover letter (canonical only)
     "job_description", "_last_jd_fp", "job_summary_ai",
-    "cover_letter", "cover_letter_box", "selected_job",
+    "cover_letter", "selected_job",
 
-    # Template
+    # Template (canonical)
     "template_label",
 
-    # ✅ Consent / policies
+    # Consent / policies
     "accepted_policies", "accepted_policies_at",
     "chk_policy_agree", "accepted_policies_this_session",
     "consent_gate_open", "staged_values",
 
-    # ✅ Policy modal state (adjust to match your actual keys)
-    "footer_policy_open", "footer_policy_slug",
+    # Policy navigation flags
+    "policy_view", "footer_policy_open", "footer_policy_slug",
     "policy_open", "policy_slug", "_just_returned_from_policy",
 ]
 
 def _is_widget_key_like(k: str) -> bool:
-    # Anything that is a widget key or looks like one should not be restored.
-    # Buttons, uploaders, inputs, radios etc.
-    return k.endswith("_btn") or k.endswith("_button") or k.endswith("_uploader") or k in {
-        "sb_logout_btn", "cv_uploader", "auth_btn_login", "auth_btn_register"
-    }
+    # Never snapshot/restore widget keys (per-run ephemeral)
+    if not isinstance(k, str):
+        return True
+    return (
+        k.endswith("_btn") or k.endswith("_button") or k.endswith("_uploader")
+        or "__" in k  # IMPORTANT: excludes epoch-bound widget keys like cv_full_name__3
+        or k in {"sb_logout_btn", "cv_uploader", "auth_btn_login", "auth_btn_register"}
+    )
 
 def snapshot_form_state():
     snap = {}
     for k in FORM_KEYS_TO_PRESERVE:
-        if k in st.session_state:
-            if _is_widget_key_like(k):
-                continue
+        if k in st.session_state and not _is_widget_key_like(k):
             snap[k] = st.session_state[k]
     st.session_state["_form_snapshot"] = snap
 
 def restore_form_state():
-    snap = st.session_state.get("_form_snapshot", {})
+    snap = st.session_state.get("_form_snapshot")
     if not isinstance(snap, dict):
         return
 
+    # Restore canonical keys ONLY (never widget keys)
     for k, v in snap.items():
-        # never restore widget keys
         if _is_widget_key_like(k):
             continue
         st.session_state[k] = v
 
-if st.session_state.get("_just_returned_from_policy"):
-    # Only restore snapshot if the user is still logged in
-    u = st.session_state.get("user") or {}
-    if _is_logged_in_user(u):
-        restore_form_state()
+    # Important: do NOT mutate form_epoch here.
+    # The form should render from canonical data after restore.
 
+# Restore immediately after returning from policies — DO NOT gate on login
+if st.session_state.get("_just_returned_from_policy"):
+    restore_form_state()
     st.session_state["_just_returned_from_policy"] = False
 
 
