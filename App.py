@@ -4659,8 +4659,6 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
 
 
-
-
 # -------------------------
 # CV Template mapping
 # -------------------------
@@ -4673,20 +4671,14 @@ TEMPLATE_MAP = {
     "Classic Grey": "classic_grey.html",
 }
 
-# ✅ Ensure a default template label exists
-if "template_label" not in st.session_state or not st.session_state["template_label"]:
-    st.session_state["template_label"] = "Blue"
+# ✅ Seed once ONLY (before widget renders)
+st.session_state.setdefault("template_label", "Blue")
 
-# ✅ UI: Template dropdown
+# ✅ UI: Template dropdown (NO index, NO default logic)
 template_label = st.selectbox(
     "Choose a CV template",
     options=list(TEMPLATE_MAP.keys()),
     key="template_label",
-    index=(
-        list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
-        if st.session_state["template_label"] in TEMPLATE_MAP
-        else 0
-    ),
 )
 
 
@@ -4814,12 +4806,20 @@ if generate_clicked:
         st.stop()
 
 # -------------------------
-# Downloads (always shown if bytes exist)
+# Downloads (hide after download)
 # -------------------------
+def _clear_cv_download_artifacts():
+    # Clear only download artifacts (NOT form fields, NOT experiences, NOT credits)
+    st.session_state.pop("cv_pdf_bytes", None)
+    st.session_state.pop("cv_docx_bytes", None)
+    st.session_state["cv_downloaded"] = True
+
 pdf_bytes = st.session_state.get("cv_pdf_bytes")
 docx_bytes = st.session_state.get("cv_docx_bytes")
 
 if pdf_bytes and docx_bytes:
+    st.session_state["cv_downloaded"] = False  # reset if new bytes exist
+
     col_cv1, col_cv2 = st.columns(2)
 
     with col_cv1:
@@ -4829,6 +4829,8 @@ if pdf_bytes and docx_bytes:
             file_name="cv.pdf",
             mime="application/pdf",
             key="dl_cv_pdf",
+            on_click=_clear_cv_download_artifacts,
+            use_container_width=True,
         )
 
     with col_cv2:
@@ -4838,7 +4840,12 @@ if pdf_bytes and docx_bytes:
             file_name="cv.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             key="dl_cv_docx",
+            on_click=_clear_cv_download_artifacts,
+            use_container_width=True,
         )
+
+elif st.session_state.get("cv_downloaded"):
+    st.caption("Downloaded. If you need it again, click “Generate CV (PDF + Word)” above.")
 
 
 # -------------------------
