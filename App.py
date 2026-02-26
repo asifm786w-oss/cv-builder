@@ -144,7 +144,17 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
-
+# -------------------------
+# CV Template mapping (GLOBAL)
+# -------------------------
+TEMPLATE_MAP = {
+    "Blue": "Blue Theme.html",
+    "Green": "Green Theme.html",
+    "Purple": "Purple Theme.html",
+    "Red": "Red Theme.html",
+    "Elegant": "cv_elegant.html",
+    "Classic Grey": "classic_grey.html",
+}
 
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
