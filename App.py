@@ -4695,9 +4695,12 @@ TEMPLATE_MAP = {
 if "template_label" not in st.session_state or not st.session_state["template_label"]:
     st.session_state["template_label"] = "Blue"
 
-# ✅ UI: Template dropdown
+# ✅ Render our own label (prevents any CSS label::* hacks adding an asterisk)
+st.markdown("Choose a CV template")
+
+# ✅ UI: Template dropdown (label hidden)
 template_label = st.selectbox(
-    "Choose a CV template",
+    label="",
     options=list(TEMPLATE_MAP.keys()),
     key="template_label",
     index=(
@@ -4705,6 +4708,7 @@ template_label = st.selectbox(
         if st.session_state["template_label"] in TEMPLATE_MAP
         else 0
     ),
+    label_visibility="collapsed",
 )
 
 
