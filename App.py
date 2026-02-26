@@ -386,6 +386,26 @@ def mark_policies_accepted(email: str) -> None:
 
 
 
+# ---- AUTH GUARD (prevents "logout on rerun" if some other code clears session_state) ----
+_AUTH_KEYS = ["user", "auth_user", "access_token", "refresh_token", "is_authenticated"]
+_auth_snapshot = {k: st.session_state.get(k) for k in _AUTH_KEYS if k in st.session_state}
+
+def _restore_auth_if_missing() -> None:
+    # Restore only if missing (never overwrite)
+    for k, v in _auth_snapshot.items():
+        if k not in st.session_state and v is not None:
+            st.session_state[k] = v
+
+def _fingerprint(text: str) -> str:
+    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
+
+def get_personal_value(primary_key: str, fallback_key: str) -> str:
+    """Read personal details from either the main Section 1 keys OR cv_* keys."""
+    return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
+
+def _norm(s: str) -> str:
+    return (s or "").strip()
+
 
 def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
     app_url = (os.getenv("APP_URL") or "http://localhost:8501").rstrip("/")
@@ -4328,28 +4348,6 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 # 5. Target Job (optional, for AI)  [TRIP-WIRE HARDENED]
 # -------------------------
 st.header("5. Target Job (optional)")
-
-import hashlib
-
-# ---- AUTH GUARD (prevents "logout on rerun" if some other code clears session_state) ----
-_AUTH_KEYS = ["user", "auth_user", "access_token", "refresh_token", "is_authenticated"]
-_auth_snapshot = {k: st.session_state.get(k) for k in _AUTH_KEYS if k in st.session_state}
-
-def _restore_auth_if_missing() -> None:
-    # Restore only if missing (never overwrite)
-    for k, v in _auth_snapshot.items():
-        if k not in st.session_state and v is not None:
-            st.session_state[k] = v
-
-def _fingerprint(text: str) -> str:
-    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
-
-def get_personal_value(primary_key: str, fallback_key: str) -> str:
-    """Read personal details from either the main Section 1 keys OR cv_* keys."""
-    return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
-
-def _norm(s: str) -> str:
-    return (s or "").strip()
 
 # Pull personal details safely (works with either key system)
 full_name_ss = get_personal_value("full_name", "cv_full_name")
