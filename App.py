@@ -12,7 +12,7 @@ import psycopg2.extras
 import datetime
 from db import get_conn
 
-
+from ai_v2 import rewrite_cover_letter_tone_ai
 from db import get_conn, get_db_connection, fetchone, fetchall, execute
 from psycopg2.extras import RealDictCursor
 from openai import OpenAI
