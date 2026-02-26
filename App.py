@@ -4861,30 +4861,41 @@ if generate_clicked:
         st.stop()
 
 # -------------------------
-# Downloads (always shown if bytes exist)
+# Downloads (shown only while bytes exist)
 # -------------------------
+def _clear_cv_download_bytes():
+    # Clear only download artifacts (NOT experiences, NOT cv_* form data)
+    st.session_state.pop("cv_pdf_bytes", None)
+    st.session_state.pop("cv_docx_bytes", None)
+
 pdf_bytes = st.session_state.get("cv_pdf_bytes")
 docx_bytes = st.session_state.get("cv_docx_bytes")
 
 if pdf_bytes and docx_bytes:
+    st.info("Your CV is ready. Download your files below.")
+
     col_cv1, col_cv2 = st.columns(2)
 
     with col_cv1:
         st.download_button(
-            "📄 Download CV as PDF",
+            "Download CV as PDF",
             data=pdf_bytes,
             file_name="cv.pdf",
             mime="application/pdf",
-            key="dl_cv_pdf",
+            key=f"dl_cv_pdf__{st.session_state.get('cv_last_fingerprint') or 'na'}",
+            on_click=_clear_cv_download_bytes,
+            use_container_width=True,
         )
 
     with col_cv2:
         st.download_button(
-            "📝 Download CV as Word (.docx)",
+            "Download CV as Word (.docx)",
             data=docx_bytes,
             file_name="cv.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key="dl_cv_docx",
+            key=f"dl_cv_docx__{st.session_state.get('cv_last_fingerprint') or 'na'}",
+            on_click=_clear_cv_download_bytes,
+            use_container_width=True,
         )
 
 
