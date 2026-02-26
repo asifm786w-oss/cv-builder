@@ -4215,6 +4215,7 @@ references = st.text_area(
         "Line breaks will be preserved in the PDF."
     ),
 )
+
 # =========================
 # Job Search (Adzuna) — Expander (FREE search)
 # ✅ No AI credit spend for searching
@@ -4360,7 +4361,7 @@ with st.expander("Job search (Adzuna)", expanded=expanded):
                     with right:
                         # Primary action: load JD for AI tools
                         if st.button(
-                            "Create tailored cover letter",
+                            "Use this job to Create tailored cover letter below",
                             key=f"use_job_{idx}",
                             type="primary",
                             use_container_width=True,
