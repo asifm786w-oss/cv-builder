@@ -4066,7 +4066,6 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
 restore_experience_from_parsed()
-st.header("3. Experience (multiple roles)")
 # -------------------------
 # 3. Experience (multiple roles)  ✅ CANONICAL + UPLOAD-SAFE
 # Canonical: st.session_state["experiences"] = list[dict]
