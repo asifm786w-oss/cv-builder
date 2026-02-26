@@ -1891,7 +1891,35 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+st.markdown("""
+<style>
+/* 1) Make the entire page dark (kills white gutters) */
+html, body, [data-testid="stAppViewContainer"], .stApp {
+  background: #0e0e11 !important;
+}
 
+/* 2) Remove Streamlit's default padding that can reveal white on mobile */
+[data-testid="stAppViewContainer"] > .main {
+  padding-left: 0rem !important;
+  padding-right: 0rem !important;
+}
+
+/* 3) Keep your content nicely padded inside (so it doesn't touch edges) */
+section.main > div.block-container {
+  padding-left: 1rem !important;
+  padding-right: 1rem !important;
+  max-width: 1100px;   /* optional: prevents super wide stretching on desktop */
+}
+
+/* 4) Remove any accidental borders/seams */
+div, section {
+  border: 0 !important;
+}
+
+/* Optional: hide any stray horizontal rules */
+hr { display: none !important; }
+</style>
+""", unsafe_allow_html=True)
 # -------------------------
 # AUTH MODAL OVERRIDES (WHITE INPUTS + BLACK TEXT INSIDE MODAL)
 # Put this after the general input CSS so it wins inside dialogs.
