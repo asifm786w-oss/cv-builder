@@ -1,5 +1,5 @@
 from __future__ import annotations
-
+from html import escape
 from io import BytesIO
 from pathlib import Path
 from datetime import date
