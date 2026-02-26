@@ -10,11 +10,9 @@ import psycopg2
 import stripe
 import psycopg2.extras
 import datetime
-
-
-from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
 from db import get_conn
-from ai_v2 import rewrite_cover_letter_tone_ai
+
+
 from db import get_conn, get_db_connection, fetchone, fetchall, execute
 from psycopg2.extras import RealDictCursor
 from openai import OpenAI
@@ -146,7 +144,7 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
-FORM_EPOCH_KEY = "form_epoch"
+
 
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
@@ -167,38 +165,6 @@ def get_user_by_email(email: str) -> dict | None:
         (email,),
     )
 
-def _canon_state_snapshot(label: str) -> None:
-    """Debug: capture minimal canonical state and show diffs across reruns."""
-    import copy
-
-    snap = {
-        "label": label,
-        "form_epoch": st.session_state.get("form_epoch"),
-        "cover_epoch": st.session_state.get("cover_epoch"),
-        "policy_view": st.session_state.get("policy_view"),
-        "template_label": st.session_state.get("template_label"),
-        "num_experiences": st.session_state.get("num_experiences"),
-        "num_education": st.session_state.get("num_education"),
-        "experiences_type": type(st.session_state.get("experiences")).__name__,
-        "experiences_len": len(st.session_state.get("experiences") or []),
-        "education_len": len(st.session_state.get("education_items") or []),
-        "skills_len": len(st.session_state.get("skills") or []),
-        "has_cv_pdf_bytes": bool(st.session_state.get("cv_pdf_bytes")),
-        "has_cv_docx_bytes": bool(st.session_state.get("cv_docx_bytes")),
-    }
-
-    history = st.session_state.get("_debug_state_history")
-    if not isinstance(history, list):
-        history = []
-    history.append(copy.deepcopy(snap))
-    st.session_state["_debug_state_history"] = history
-
-def _show_debug_state_history():
-    hist = st.session_state.get("_debug_state_history") or []
-    if not hist:
-        return
-    st.markdown("### DEBUG state history (most recent last)")
-    st.json(hist[-8:])  # last 8 steps only
 
 def get_user_row_by_id(user_id: int) -> dict | None:
     return fetchone(
@@ -232,51 +198,6 @@ def refresh_session_user_from_db() -> None:
             db_u[k] = u[k]
 
     st.session_state["user"] = dict(db_u)
-
-def _seed_experience_widgets_from_canonical():
-    """
-    When returning from policies (or any navigation rerun),
-    repopulate the experience widget keys (job_title_0 etc)
-    from canonical st.session_state["experiences"] list.
-    """
-    exps = st.session_state.get("experiences") or []
-    if not isinstance(exps, list) or not exps:
-        return
-
-    # Ensure UI count matches canonical
-    st.session_state["num_experiences"] = max(1, min(5, len(exps)))
-
-    for i, e in enumerate(exps[:5]):
-        # Support both dataclass/pydantic objects and dicts
-        if isinstance(e, dict):
-            job_title = e.get("job_title") or ""
-            company   = e.get("company") or ""
-            location  = e.get("location") or ""
-            start_dt  = e.get("start_date") or ""
-            end_dt    = e.get("end_date") or ""
-            desc      = e.get("description") or ""
-        else:
-            job_title = getattr(e, "job_title", "") or ""
-            company   = getattr(e, "company", "") or ""
-            location  = getattr(e, "location", "") or ""
-            start_dt  = getattr(e, "start_date", "") or ""
-            end_dt    = getattr(e, "end_date", "") or ""
-            desc      = getattr(e, "description", "") or ""
-
-        st.session_state[f"job_title_{i}"]     = job_title
-        st.session_state[f"company_{i}"]       = company
-        st.session_state[f"exp_location_{i}"]  = location
-        st.session_state[f"start_date_{i}"]    = start_dt
-        st.session_state[f"end_date_{i}"]      = end_dt
-        st.session_state[f"description_{i}"]    = desc
-
-# ---- Canonical state guarantees (never allow None) ----
-if st.session_state.get("experiences") is None:
-    st.session_state["experiences"] = []
-if st.session_state.get("education_items") is None:
-    st.session_state["education_items"] = []
-if st.session_state.get("skills") is None:
-    st.session_state["skills"] = []
   
 def get_active_subscription_plan_by_user_id(user_id: int) -> str | None:
     """
@@ -339,39 +260,22 @@ def improve_skills(skills_text: str) -> str:
 
 def clear_ai_upload_state_only():
     """
-    Surgical clear:
-    - Clears ONLY known transient AI/upload artifacts.
-    - Never scans all session keys.
-    - Never touches canonical form data (cv_*), experiences, education_items, skills, auth, or policies.
+    Clear ONLY transient AI / upload / parse state.
+    Never touch CV form, job search, or selected job.
     """
-    KEYS_TO_CLEAR = (
-        # AI outputs / intermediate
-        "ai_last_error",
-        "ai_debug",
-        "ai_result",
-        "ai_prompt_cache",
-
-        # CV upload widget + transient read results (DO NOT clear cv_* fields)
-        "cv_uploader",          # uploader widget (optional)
-        "cv_upload_bytes",      # if you store raw file bytes
-        "cv_upload_name",       # if you store filename
-        "_last_cv_fingerprint", # OK to clear if you want new uploads treated as new
-
-        # Parser flags (do NOT clear canonical parsed payload unless you truly mean to)
-        "_cv_parsed",
-        "_cv_autofill_enabled",
-        "_just_autofilled_from_cv",
-        "_skip_restore_personal_once",
-
-        # Any temp parse-only buffers you created
-        "parsed_cv_text",
-        "parsed_cv_raw",
+    SAFE_PREFIXES = (
+        "ai_",              # AI intermediate outputs
+        "upload_",          # file upload temp state
+        "parsed_",          # parsed CV temp data
+        "_cv_parsed",       # specific parser flags
+        "_just_autofilled", # autofill flags
     )
 
-    for k in KEYS_TO_CLEAR:
-        st.session_state.pop(k, None)
+    for k in list(st.session_state.keys()):
+        if k.startswith(SAFE_PREFIXES):
+            st.session_state.pop(k, None)
 
-
+FORM_EPOCH_KEY = "form_epoch"
 
 def _hard_reset_to_guest() -> None:
     next_epoch = int(st.session_state.get(FORM_EPOCH_KEY, 0) or 0) + 1
@@ -481,26 +385,6 @@ def mark_policies_accepted(email: str) -> None:
     )
 
 
-
-# ---- AUTH GUARD (prevents "logout on rerun" if some other code clears session_state) ----
-_AUTH_KEYS = ["user", "auth_user", "access_token", "refresh_token", "is_authenticated"]
-_auth_snapshot = {k: st.session_state.get(k) for k in _AUTH_KEYS if k in st.session_state}
-
-def _restore_auth_if_missing() -> None:
-    # Restore only if missing (never overwrite)
-    for k, v in _auth_snapshot.items():
-        if k not in st.session_state and v is not None:
-            st.session_state[k] = v
-
-def _fingerprint(text: str) -> str:
-    return hashlib.sha256((text or "").strip().encode("utf-8", errors="ignore")).hexdigest()
-
-def get_personal_value(primary_key: str, fallback_key: str) -> str:
-    """Read personal details from either the main Section 1 keys OR cv_* keys."""
-    return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
-
-def _norm(s: str) -> str:
-    return (s or "").strip()
 
 
 def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
@@ -870,72 +754,6 @@ def get_credits_by_user_id(user_id: int) -> dict:
     return {"cv": int(row.get("cv", 0) or 0), "ai": int(row.get("ai", 0) or 0)}
 
 
-# -------- Helpers --------
-@st.cache_data(ttl=300, show_spinner=False)
-def _cached_adzuna_search(query: str, location: str, results: int = 10):
-    return search_jobs(query=query, location=location, results=results)
-
-def _format_salary(smin, smax) -> str:
-    if smin is None and smax is None:
-        return ""
-    try:
-        if smin is not None and smax is not None:
-            return f"Salary: £{int(smin):,} – £{int(smax):,}"
-        if smin is not None:
-            return f"Salary: from £{int(smin):,}"
-        return f"Salary: up to £{int(smax):,}"
-    except Exception:
-        return "Salary: available"
-
-def _as_text(x):
-    if x is None:
-        return ""
-    if isinstance(x, str):
-        return x
-    if isinstance(x, dict):
-        return (
-            x.get("display_name")
-            or x.get("name")
-            or x.get("area")
-            or x.get("label")
-            or str(x)
-        )
-    return str(x)
-
-def _normalize_jobs(jobs_raw):
-    """Adzuna wrappers vary. Ensure: list[dict]"""
-    if jobs_raw is None:
-        return []
-    if isinstance(jobs_raw, dict):
-        jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
-    if not isinstance(jobs_raw, list):
-        return []
-    return [j for j in jobs_raw if isinstance(j, dict)]
-
-def _clear_adzuna_only():
-    """
-    Surgical reset: clears ONLY job-search state.
-    Does NOT touch cv_* keys or auth/session keys.
-    """
-    for k in (
-        "adzuna_results",
-        "adzuna_keywords",
-        "adzuna_location",
-        "selected_job",
-        "job_description",
-        "_last_jd_fp",
-        "job_summary_ai",
-        "cover_letter",
-        "cover_letter_box",
-    ):
-        st.session_state.pop(k, None)
-
-    # remove per-job button keys
-    for k in list(st.session_state.keys()):
-        if isinstance(k, str) and k.startswith("use_job_"):
-            st.session_state.pop(k, None)
-
-
 def get_user_credits(email: str) -> dict:
     email = (email or "").strip().lower()
     if not email:
@@ -1037,6 +855,42 @@ def _clear_education_persistence_for_new_cv():
     st.session_state.pop("education_items", None)
     st.session_state.pop("_edu_backup", None)
 
+
+def restore_experience_from_parsed():
+    """Restore experience fields from last parsed CV if they went blank after reruns."""
+    if not st.session_state.get("_cv_autofill_enabled"):
+        return
+
+    parsed = st.session_state.get("_cv_parsed")
+    if not isinstance(parsed, dict):
+        return
+
+    exps = parsed.get("experiences") or []
+    if not isinstance(exps, list) or not exps:
+        return
+
+    count = min(len(exps), 5)
+
+    if st.session_state.get("num_experiences") in (None, 0, ""):
+        st.session_state["num_experiences"] = count
+
+    for i in range(count):
+        exp = exps[i] or {}
+
+        def _restore(key, value):
+            if st.session_state.get(key) in (None, "") and isinstance(value, str) and value.strip():
+                st.session_state[key] = value
+
+        _restore(f"job_title_{i}", exp.get("job_title", "") or "")
+        _restore(f"company_{i}", exp.get("company", "") or "")
+        _restore(f"exp_location_{i}", exp.get("location", "") or "")
+        _restore(f"start_date_{i}", exp.get("start_date", "") or "")
+        _restore(f"end_date_{i}", exp.get("end_date", "") or "")
+
+        desc = exp.get("description", "") or ""
+        if isinstance(desc, list):
+            desc = "\n".join([str(x) for x in desc if str(x).strip()])
+        _restore(f"description_{i}", desc)
 
 
 def _reset_outputs_on_new_cv():
@@ -1643,43 +1497,7 @@ def sync_session_plan_and_credits() -> None:
 
     credits = get_credits_by_user_id(int(uid))
    
-def restore_experience_from_parsed():
-    """
-    Non-destructive restore:
-    - Only hydrate experiences from parsed CV when parsed experiences exist.
-    - Never overwrite existing user-entered experiences with empty/None.
-    """
-    parsed = st.session_state.get("_cv_parsed")
-    if not isinstance(parsed, dict):
-        return
 
-    parsed_exps = parsed.get("experiences")
-    if not isinstance(parsed_exps, list) or len(parsed_exps) == 0:
-        return  # <- CRITICAL: do not wipe
-
-    # If user already has experiences, do not overwrite unless explicitly requested
-    existing = st.session_state.get("experiences")
-    if isinstance(existing, list) and len(existing) > 0:
-        return
-
-    # Otherwise hydrate canonical experiences from parsed dicts
-    hydrated = []
-    for exp in parsed_exps[:5]:
-        if not isinstance(exp, dict):
-            continue
-        hydrated.append(
-            Experience(
-                job_title=(exp.get("job_title") or "").strip(),
-                company=(exp.get("company") or "").strip(),
-                location=(exp.get("location") or None),
-                start_date=(exp.get("start_date") or ""),
-                end_date=(exp.get("end_date") or None),
-                description=(exp.get("description") or None),
-            )
-        )
-
-    st.session_state["experiences"] = hydrated
-    st.session_state["num_experiences"] = max(1, min(5, len(hydrated)))
 
 def _as_utc_dt(ts):
     if not ts:
@@ -2053,39 +1871,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.markdown(
-    """
-<style>
-/* -------------------------------------------------
-   FIX: Selectbox internal input (BaseWeb Select)
-   Your global input CSS makes it white -> looks like asterisk/box.
-   ------------------------------------------------- */
-[data-testid="stAppViewContainer"] div[data-baseweb="select"] input{
-  background: transparent !important;
-  background-color: transparent !important;
-  color: rgba(255,255,255,0.92) !important;
-  -webkit-text-fill-color: rgba(255,255,255,0.92) !important;
-  border: none !important;
-  box-shadow: none !important;
-  outline: none !important;
-}
 
-/* Keep the select "pill" dark (optional, but makes it consistent) */
-[data-testid="stAppViewContainer"] div[data-baseweb="select"] > div{
-  background: rgba(255,255,255,0.06) !important;
-  border: 1px solid rgba(255,255,255,0.14) !important;
-  border-radius: 999px !important;
-}
-
-/* Dropdown menu surface */
-[data-testid="stAppViewContainer"] ul[role="listbox"]{
-  background: rgba(11,15,25,0.98) !important;
-  border: 1px solid rgba(255,255,255,0.12) !important;
-}
-</style>
-""",
-    unsafe_allow_html=True,
-)
 # -------------------------
 # AUTH MODAL OVERRIDES (WHITE INPUTS + BLACK TEXT INSIDE MODAL)
 # Put this after the general input CSS so it wins inside dialogs.
@@ -2247,73 +2033,75 @@ if show_policy_page():
     st.stop()
 
 
+# =========================
+# FORM SNAPSHOT / RESTORE
+# =========================
+
 FORM_KEYS_TO_PRESERVE = [
-    # Section 1 (legacy)
+    # Section 1
     "full_name", "title", "email", "phone", "location", "summary",
-
-    # Canonical CV personal details (UI uses these)
+    
+	# CV personal details (these are the ones your UI is using)
     "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
-
-    # CV parsing flags only (NO file bytes, NO uploader widget)
+    
+	# CV upload / parsing (IMPORTANT: do NOT include widget keys like "cv_uploader")
     "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
+    "_last_cv_fingerprint", "cv_upload_bytes", "cv_upload_name",
 
-    # Canonical structures (Section 3)
+    # Education/experience/skills structures you use
     "skills", "experiences", "education_items", "references", "skills_text",
-
-    # Counts (only if your UI uses them)
-    "num_experiences", "num_education",
+    "num_experiences", "num_education", "parsed_num_experiences",
 
     # Target job / cover letter
     "job_description", "_last_jd_fp", "job_summary_ai",
-    "cover_letter", "selected_job",
+    "cover_letter", "cover_letter_box", "selected_job",
 
     # Template
     "template_label",
 
-    # Consent / policies
+    # ✅ Consent / policies
     "accepted_policies", "accepted_policies_at",
     "chk_policy_agree", "accepted_policies_this_session",
     "consent_gate_open", "staged_values",
 
-    # Policy navigation flags
-    "policy_view", "footer_policy_open", "footer_policy_slug",
+    # ✅ Policy modal state (adjust to match your actual keys)
+    "footer_policy_open", "footer_policy_slug",
     "policy_open", "policy_slug", "_just_returned_from_policy",
 ]
 
 def _is_widget_key_like(k: str) -> bool:
-    # Never snapshot/restore widget keys (per-run ephemeral)
-    if not isinstance(k, str):
-        return True
-    return (
-        k.endswith("_btn") or k.endswith("_button") or k.endswith("_uploader")
-        or "__" in k  # IMPORTANT: excludes epoch-bound widget keys like cv_full_name__3
-        or k in {"sb_logout_btn", "cv_uploader", "auth_btn_login", "auth_btn_register"}
-    )
+    # Anything that is a widget key or looks like one should not be restored.
+    # Buttons, uploaders, inputs, radios etc.
+    return k.endswith("_btn") or k.endswith("_button") or k.endswith("_uploader") or k in {
+        "sb_logout_btn", "cv_uploader", "auth_btn_login", "auth_btn_register"
+    }
 
 def snapshot_form_state():
     snap = {}
     for k in FORM_KEYS_TO_PRESERVE:
-        if k in st.session_state and not _is_widget_key_like(k):
+        if k in st.session_state:
+            if _is_widget_key_like(k):
+                continue
             snap[k] = st.session_state[k]
     st.session_state["_form_snapshot"] = snap
 
 def restore_form_state():
-    snap = st.session_state.get("_form_snapshot")
+    snap = st.session_state.get("_form_snapshot", {})
     if not isinstance(snap, dict):
         return
 
-    # Restore canonical keys ONLY (never widget keys)
     for k, v in snap.items():
+        # never restore widget keys
         if _is_widget_key_like(k):
             continue
         st.session_state[k] = v
 
-    # Important: do NOT mutate form_epoch here.
-    # The form should render from canonical data after restore.
-
-# Restore immediately after returning from policies — DO NOT gate on login
 if st.session_state.get("_just_returned_from_policy"):
-    restore_form_state()
+    # Only restore snapshot if the user is still logged in
+    u = st.session_state.get("user") or {}
+    if _is_logged_in_user(u):
+        restore_form_state()
+
     st.session_state["_just_returned_from_policy"] = False
 
 
@@ -3798,13 +3586,6 @@ if not just_autofilled:
 backup_skills_state()
 
 restore_form_state_if_needed()
-# restore on return BEFORE widgets render
-if st.session_state.get("_just_returned_from_policy"):
-    _canon_state_snapshot("policy_return_before_restore")
-    restore_form_state()
-    _seed_experience_widgets_from_canonical()
-    _canon_state_snapshot("policy_return_after_restore")
-    st.session_state["_just_returned_from_policy"] = False
 
 # -------------------------
 # 1. Personal details (epoch-safe + AI summary update)
@@ -4064,9 +3845,9 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
 
-
 restore_experience_from_parsed()
 st.header("3. Experience (multiple roles)")
+
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
@@ -4092,7 +3873,7 @@ num_experiences = st.number_input(
     key="num_experiences",
 )
 
-experiences: list[Experience] = []
+experiences = []
 
 # ---- Render roles ----
 for i in range(int(num_experiences)):
@@ -4157,8 +3938,7 @@ for i in range(int(num_experiences)):
                 description=(st.session_state.get(desc_key) or None),
             )
         )
-# ✅ Persist canonical experiences for snapshot/restore + downstream (CV generation, cover letters)
-st.session_state["experiences"] = experiences
+
 
 # ---------- Run AI AFTER the loop (single, correct) ----------
 role_to_improve = st.session_state.get("ai_running_role")
@@ -4215,10 +3995,12 @@ if run_now and role_to_improve is not None:
             st.error(f"AI error: {e}")
 
 
-st.session_state.pop("_just_autofilled_from_cv", False)
+# ✅ Keep your existing pop (ensures sync only happens once after autofill)
+if not st.session_state.pop("_just_autofilled_from_cv", False):
+    pass
 
 
-restore_education_state()
+    restore_education_state()
 
 # -------------------------
 # 4. Education (multiple entries)
@@ -4303,20 +4085,86 @@ references = st.text_area(
         "Line breaks will be preserved in the PDF."
     ),
 )
-
 # =========================
 # Job Search (Adzuna) — Expander (FREE search)
 # ✅ No AI credit spend for searching
-# ✅ "Clear search" resets ONLY job search state (adzuna_* + job_* outputs)
-# ✅ "Create tailored cover letter" loads JD into Target Job
+# ✅ "Clear search" resets ONLY job search state (adzuna_* + job_*)
+# ✅ "Use this job" only loads JD into Target Job
 # =========================
 
+import streamlit as st
+from adzuna_client import search_jobs, AdzunaConfigError, AdzunaAPIError
+
+# -------- Helpers --------
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_adzuna_search(query: str, location: str, results: int = 10):
+    return search_jobs(query=query, location=location, results=results)
+
+def _format_salary(smin, smax) -> str:
+    if smin is None and smax is None:
+        return ""
+    try:
+        if smin is not None and smax is not None:
+            return f"Salary: £{int(smin):,} - £{int(smax):,}"
+        if smin is not None:
+            return f"Salary: from £{int(smin):,}"
+        return f"Salary: up to £{int(smax):,}"
+    except Exception:
+        return "Salary: available"
+
+def _as_text(x):
+    if x is None:
+        return ""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict):
+        return (
+            x.get("display_name")
+            or x.get("name")
+            or x.get("area")
+            or x.get("label")
+            or str(x)
+        )
+    return str(x)
+
+def _normalize_jobs(jobs_raw):
+    """Adzuna wrappers vary. Ensure we end up with: list[dict]"""
+    if jobs_raw is None:
+        return []
+    if isinstance(jobs_raw, dict):
+        jobs_raw = jobs_raw.get("results") or jobs_raw.get("data") or jobs_raw.get("jobs") or []
+    if not isinstance(jobs_raw, list):
+        return []
+    return [j for j in jobs_raw if isinstance(j, dict)]
+
+def _clear_adzuna_only():
+    """
+    Surgical reset: clears ONLY job-search state.
+    Does NOT touch cv_* keys or auth/session keys.
+    """
+    for k in (
+        "adzuna_results",
+        "adzuna_keywords",
+        "adzuna_location",
+        "selected_job",
+        "job_description",
+        "_last_jd_fp",
+        "job_summary_ai",
+        "cover_letter",
+        "cover_letter_box",
+    ):
+        st.session_state.pop(k, None)
+
+    # also remove per-job "Use this job" button keys (optional)
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("use_job_"):
+            st.session_state.pop(k, None)
 
 # -----------------------------
 # UI (Expander)
 # -----------------------------
 expanded = bool(st.session_state.get("adzuna_results"))
-with st.expander("Job search (Adzuna)", expanded=expanded):
+with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
     st.session_state.setdefault("adzuna_results", [])
 
@@ -4326,7 +4174,7 @@ with st.expander("Job search (Adzuna)", expanded=expanded):
 
     can_use = True
     if not email:
-        st.info("Sign in to search and load job descriptions.")
+        st.warning("Please sign in to use Job Search.")
         can_use = False
 
     uid = None
@@ -4336,29 +4184,28 @@ with st.expander("Job search (Adzuna)", expanded=expanded):
             st.warning("Couldn’t find your account. Please sign out and sign in again.")
             can_use = False
 
-    # Search form container
+    # Inputs
     with st.container(border=True):
-        st.markdown("### Search for jobs")
-        st.caption("Search is free. You only spend credits when generating AI outputs.")
+        col1, col2, col3, col4 = st.columns([3, 3, 1.3, 1.3])
 
-        col1, col2 = st.columns(2)
         with col1:
             keywords = st.text_input(
                 "Keywords",
                 key="adzuna_keywords",
-                placeholder="e.g. sales executive, marketing assistant, software engineer",
+                placeholder="e.g. marketing manager / software engineer",
                 disabled=not can_use,
             )
         with col2:
             location = st.text_input(
-                "Location (optional)",
+                "Location",
                 key="adzuna_location",
-                placeholder="e.g. Walsall, Birmingham, or WS2",
+                placeholder="e.g. Walsall or WS2",
                 disabled=not can_use,
             )
 
-        a, b, c = st.columns([1.2, 1.2, 3])
-        with a:
+        with col3:
+            st.write("")
+            st.write("")
             search_clicked = st.button(
                 "Search",
                 type="primary",
@@ -4366,32 +4213,39 @@ with st.expander("Job search (Adzuna)", expanded=expanded):
                 use_container_width=True,
                 disabled=not can_use,
             )
-        with b:
+
+        with col4:
+            st.write("")
+            st.write("")
             clear_clicked = st.button(
-                "Clear results",
+                "🧹 Clear",
                 key="adzuna_clear_btn",
                 use_container_width=True,
                 disabled=not can_use,
             )
-        with c:
-            st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
 
+        st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
+
+    # Clear handler (no rerun drama; we rerun once at the end)
     if clear_clicked and can_use:
         _clear_adzuna_only()
         st.rerun()
 
+    # Search handler
     if search_clicked and can_use:
         query_clean = (keywords or "").strip()
         loc_clean = (location or "").strip()
 
         if not query_clean:
-            st.warning("Enter keywords to search (for example: “sales executive”).")
+            st.info("Enter keywords to search (e.g., “marketing manager”).")
         else:
             try:
-                with st.spinner("Searching job listings…"):
+                with st.spinner("Searching jobs..."):
                     jobs_raw = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
                 jobs = _normalize_jobs(jobs_raw)
+
+                # ✅ FREE SEARCH: DO NOT spend credits here
                 st.session_state["adzuna_results"] = jobs
 
                 if not jobs:
@@ -4400,7 +4254,7 @@ with st.expander("Job search (Adzuna)", expanded=expanded):
                 st.rerun()
 
             except AdzunaConfigError:
-                st.error("Job search is not configured (missing Adzuna keys in Railway Variables).")
+                st.error("Job search is not configured. Missing Adzuna keys in Railway Variables.")
             except AdzunaAPIError:
                 st.error("Job search is temporarily unavailable. Please try again shortly.")
             except Exception as e:
@@ -4409,56 +4263,49 @@ with st.expander("Job search (Adzuna)", expanded=expanded):
     # -----------------------------
     # Results
     # -----------------------------
-    jobs = _normalize_jobs(st.session_state.get("adzuna_results") or [])
+    jobs = st.session_state.get("adzuna_results") or []
+    jobs = _normalize_jobs(jobs)
 
     if jobs:
         st.divider()
-        st.markdown("### Results")
-        st.caption(f"Showing up to {min(len(jobs), 10)} listings.")
+        st.caption(f"Showing up to {min(len(jobs), 10)} results.")
 
         for idx, job in enumerate(jobs):
-            title = _as_text(job.get("title")) or "Untitled role"
-            company = _as_text(job.get("company")) or "Unknown employer"
-            loc = _as_text(job.get("location") or job.get("candidate_required_location") or job.get("area")) or "Location not stated"
+            title = _as_text(job.get("title")) or "Untitled"
+
+            company_val = job.get("company")
+            company = _as_text(company_val) or "Unknown company"
+
+            loc_val = job.get("location") or job.get("candidate_required_location") or job.get("area")
+            loc = _as_text(loc_val) or "Unknown location"
+
             created = _as_text(job.get("created") or job.get("created_at") or "")
             url = _as_text(job.get("redirect_url") or job.get("url") or "")
             smin = job.get("salary_min")
             smax = job.get("salary_max")
             desc = _as_text(job.get("description") or "")
 
-            header_line = f"{title} — {company} ({loc})"
-            with st.expander(header_line, expanded=(idx == 0)):
+            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
 
-                # Top metadata + actions
                 with st.container(border=True):
-                    left, right = st.columns([3, 1.2])
+                    top = st.columns([4, 1])
 
-                    with left:
-                        meta_lines = []
+                    with top[0]:
                         if created:
-                            meta_lines.append(f"Posted: {created}")
+                            st.caption(f"Posted: {created}")
                         sal = _format_salary(smin, smax)
                         if sal:
-                            meta_lines.append(sal)
-                        if meta_lines:
-                            st.caption(" • ".join(meta_lines))
-
+                            st.caption(sal)
                         if url:
-                            st.link_button("Open full listing", url)
+                            st.link_button("Open listing", url)
 
-                    with right:
-                        # Primary action: load JD for AI tools
-                        if st.button(
-                            "Use this job to Create tailored cover letter below",
-                            key=f"use_job_{idx}",
-                            type="primary",
-                            use_container_width=True,
-                            disabled=not can_use,
-                        ):
+                    with top[1]:
+                        if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
+                            # FREE: just load JD into Target Job
                             st.session_state["job_description"] = desc
                             st.session_state["_last_jd_fp"] = None
 
-                            # Clear outputs so user generates fresh ones for this JD
+                            # Optional: clear outputs so user generates fresh ones for this JD
                             st.session_state.pop("job_summary_ai", None)
                             st.session_state.pop("cover_letter", None)
                             st.session_state.pop("cover_letter_box", None)
@@ -4470,13 +4317,11 @@ with st.expander("Job search (Adzuna)", expanded=expanded):
                                 "location": loc,
                             }
 
-                            st.success("Job description loaded. Scroll to ‘Target Job’ to generate your summary and cover letter.")
+                            st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
                             st.rerun()
 
-                # Description preview
-                st.markdown("**Preview**")
-                with st.container(border=True):
-                    st.write(desc[:2500] + ("…" if len(desc) > 2500 else ""))
+                st.markdown("**Preview description**")
+                st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
 
 
 # -------------------------
@@ -4811,6 +4656,8 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
 
 
+
+
 # -------------------------
 # CV Template mapping
 # -------------------------
@@ -4823,18 +4670,22 @@ TEMPLATE_MAP = {
     "Classic Grey": "classic_grey.html",
 }
 
-# ✅ Set default ONCE, before widget exists
-st.session_state.setdefault("template_label", "Blue")
+# ✅ Ensure a default template label exists
+if "template_label" not in st.session_state or not st.session_state["template_label"]:
+    st.session_state["template_label"] = "Blue"
 
-# Optional: custom label (prevents any label CSS weirdness)
-st.markdown("Choose a CV template")
-
+# ✅ UI: Template dropdown
 template_label = st.selectbox(
-    label="",
+    "Choose a CV template",
     options=list(TEMPLATE_MAP.keys()),
     key="template_label",
-    label_visibility="collapsed",
+    index=(
+        list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
+        if st.session_state["template_label"] in TEMPLATE_MAP
+        else 0
+    ),
 )
+
 
 
 # -------------------------
@@ -4842,8 +4693,8 @@ template_label = st.selectbox(
 # -------------------------
 st.session_state.setdefault("cv_pdf_bytes", None)
 st.session_state.setdefault("cv_docx_bytes", None)
-st.session_state.setdefault("cv_last_template", None)      # optional
-st.session_state.setdefault("cv_last_fingerprint", None)   # optional
+st.session_state.setdefault("cv_last_template", None)  # optional
+st.session_state.setdefault("cv_last_fingerprint", None)  # optional
 
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
@@ -4874,10 +4725,8 @@ def _cv_fingerprint() -> str:
     return hashlib.sha256(dumped.encode("utf-8", errors="ignore")).hexdigest()
 
 if generate_clicked:
-    # DEBUG: capture canonical state before CV generation
-    _canon_state_snapshot("before_generate_cv")
-
     # If this clears anything CV-related, it must be fixed/removed.
+    # But leave it for now since you said system works.
     clear_ai_upload_state_only()
 
     email_for_usage = (st.session_state.get("user") or {}).get("email")
@@ -4941,16 +4790,13 @@ if generate_clicked:
         pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
         docx_bytes = render_cv_docx_bytes(cv)
 
-        # ✅ STORE BYTES IN SESSION
+        # ✅ STORE BYTES IN SESSION (THIS IS THE KEY FIX)
         st.session_state["cv_pdf_bytes"] = pdf_bytes
         st.session_state["cv_docx_bytes"] = docx_bytes
 
         # optional: store “what this CV represents”
         st.session_state["cv_last_template"] = st.session_state.get("template_label")
         st.session_state["cv_last_fingerprint"] = _cv_fingerprint()
-
-        # DEBUG: capture canonical state after generation (before rerun)
-        _canon_state_snapshot("after_generate_cv_before_rerun")
 
         st.success("CV generated successfully! 🎉")
 
@@ -4965,41 +4811,30 @@ if generate_clicked:
         st.stop()
 
 # -------------------------
-# Downloads (shown only while bytes exist)
+# Downloads (always shown if bytes exist)
 # -------------------------
-def _clear_cv_download_bytes():
-    # Clear only download artifacts (NOT experiences, NOT cv_* form data)
-    st.session_state.pop("cv_pdf_bytes", None)
-    st.session_state.pop("cv_docx_bytes", None)
-
 pdf_bytes = st.session_state.get("cv_pdf_bytes")
 docx_bytes = st.session_state.get("cv_docx_bytes")
 
 if pdf_bytes and docx_bytes:
-    st.info("Your CV is ready. Download your files below.")
-
     col_cv1, col_cv2 = st.columns(2)
 
     with col_cv1:
         st.download_button(
-            "Download CV as PDF",
+            "📄 Download CV as PDF",
             data=pdf_bytes,
             file_name="cv.pdf",
             mime="application/pdf",
-            key=f"dl_cv_pdf__{st.session_state.get('cv_last_fingerprint') or 'na'}",
-            on_click=_clear_cv_download_bytes,
-            use_container_width=True,
+            key="dl_cv_pdf",
         )
 
     with col_cv2:
         st.download_button(
-            "Download CV as Word (.docx)",
+            "📝 Download CV as Word (.docx)",
             data=docx_bytes,
             file_name="cv.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key=f"dl_cv_docx__{st.session_state.get('cv_last_fingerprint') or 'na'}",
-            on_click=_clear_cv_download_bytes,
-            use_container_width=True,
+            key="dl_cv_docx",
         )
 
 
@@ -5030,7 +4865,7 @@ with col_monthly:
         "- PDF + Word downloads\n"
         "- Email support\n"
         "- Cancel anytime\n"
-        "\n"
+        "\n"       
     )
 
     if st.button("Start Monthly Subscription", key="start_monthly_sub"):
@@ -5062,7 +4897,7 @@ with col_pro:
         "- PDF + Word downloads\n"
         "- Priority support\n"
         "- Cancel anytime\n"
-        "\n"
+        "\n"        
     )
 
     if st.button("Start Pro Subscription", key="start_pro_sub"):
@@ -5103,47 +4938,35 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
-with st.expander("Debug (temporary)", expanded=True):
-    _show_debug_state_history()
-
-
-
 def open_policy(scope: str, slug: str) -> None:
-    # DEBUG: capture before opening policy
-    _canon_state_snapshot("before_open_policy")
     snapshot_form_state()
     st.session_state["_just_returned_from_policy"] = True
 
     # ... your existing modal-open state set logic ...
-
-
 # ==============================================
 # FOOTER POLICY BUTTONS (snapshot before navigate)
-# ==============================================
+# ============================================================
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 
 fc1, fc2, fc3, fc4 = st.columns(4)
 with fc1:
     if st.button("Accessibility", key="footer_accessibility"):
-        _canon_state_snapshot("before_open_policy")
         snapshot_form_state()
         st.session_state["policy_view"] = "accessibility"
         st.rerun()
 with fc2:
     if st.button("Cookie Policy", key="footer_cookies"):
-        _canon_state_snapshot("before_open_policy")
         snapshot_form_state()
         st.session_state["policy_view"] = "cookies"
         st.rerun()
 with fc3:
     if st.button("Privacy Policy", key="footer_privacy"):
-        _canon_state_snapshot("before_open_policy")
         snapshot_form_state()
         st.session_state["policy_view"] = "privacy"
         st.rerun()
 with fc4:
     if st.button("Terms of Use", key="footer_terms"):
-        _canon_state_snapshot("before_open_policy")
         snapshot_form_state()
         st.session_state["policy_view"] = "terms"
         st.rerun()
+		
