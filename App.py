@@ -4115,7 +4115,8 @@ if run_now and role_to_improve is not None:
 
 st.session_state.pop("_just_autofilled_from_cv", False)
 
-    restore_education_state()
+
+restore_education_state()
 
 # -------------------------
 # 4. Education (multiple entries)
