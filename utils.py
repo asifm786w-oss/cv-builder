@@ -244,7 +244,65 @@ def render_cv_docx_bytes(cv: CV) -> bytes:
     bio.seek(0)
     return bio.getvalue()
 
+def _letter_body_to_html(letter_body: str) -> str:
+    """
+    Convert plain text cover letter body into clean HTML:
+    - Blank lines => paragraphs
+    - Bullet-like lines => <ul><li>...</li></ul>
+    - Escapes HTML
+    """
+    text = (letter_body or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return ""
 
+    lines = text.split("\n")
+
+    def is_bullet(line: str) -> bool:
+        s = line.strip()
+        return bool(re.match(r"^(?:[•\-\–\*]\s+)", s))
+
+    out: list[str] = []
+    para_buf: list[str] = []
+    list_buf: list[str] = []
+
+    def flush_para():
+        nonlocal para_buf
+        if para_buf:
+            p = " ".join(x.strip() for x in para_buf if x.strip())
+            if p:
+                out.append(f"<p>{escape(p)}</p>")
+            para_buf = []
+
+    def flush_list():
+        nonlocal list_buf
+        if list_buf:
+            items = "".join(f"<li>{escape(x)}</li>" for x in list_buf if x)
+            if items:
+                out.append(f"<ul>{items}</ul>")
+            list_buf = []
+
+    for raw in lines:
+        s = raw.strip()
+        if not s:
+            flush_list()
+            flush_para()
+            continue
+
+        if is_bullet(s):
+            flush_para()
+            item = re.sub(r"^(?:[•\-\–\*]\s+)", "", s).strip()
+            if item:
+                list_buf.append(item)
+            continue
+
+        flush_list()
+        para_buf.append(s)
+
+    flush_list()
+    flush_para()
+    return "\n".join(out)
+
+	
 # ============================================================
 # PDF: Cover letter (Playwright-only)
 # ============================================================
@@ -258,7 +316,7 @@ def render_cover_letter_pdf_bytes(
     employer_company: str = "",
     employer_location: str = "",
     greeting_name: str = "Hiring Manager",
-    template_name: str = "cover_letter_basic.html",
+    template_name: str = "cover_letter_premium.html",  # ✅ switch default
 ) -> bytes:
     today_str = date.today().strftime("%d %B %Y")
 
@@ -281,6 +339,9 @@ def render_cover_letter_pdf_bytes(
 
     cleaned_body = "\n".join(cleaned_lines).strip()
 
+    # ✅ NEW: body formatted into premium HTML blocks (paragraphs + bullets)
+    letter_body_html = _letter_body_to_html(cleaned_body)
+
     template = env.get_template(template_name)
     html_str = template.render(
         full_name=full_name,
@@ -292,7 +353,10 @@ def render_cover_letter_pdf_bytes(
         employer_location=employer_location,
         greeting_name=greeting_name,
         today=today_str,
+        # keep plain body for fallback/debug
         letter_body=cleaned_body,
+        # ✅ new html body
+        letter_body_html=letter_body_html,
     )
 
     return _render_pdf_with_playwright(html_str)

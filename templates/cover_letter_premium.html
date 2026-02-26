@@ -1,0 +1,121 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Cover Letter</title>
+  <style>
+    @page { size: A4; margin: 18mm 18mm 18mm 18mm; }
+
+    :root{
+      --text:#111;
+      --muted:#444;
+      --rule:#e7e7e7;
+    }
+
+    html,body{
+      margin:0; padding:0;
+      font-family: Calibri, Arial, sans-serif;
+      font-size: 11pt;
+      line-height: 1.48;
+      color: var(--text);
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    .wrap{ width:100%; }
+
+    .top{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:16mm;
+      margin-bottom: 8mm;
+    }
+
+    .from{
+      margin-left:auto;
+      text-align:right;
+      font-size: 10.5pt;
+      color: var(--muted);
+    }
+    .from .name{
+      display:block;
+      font-weight:700;
+      font-size:14pt;
+      color:var(--text);
+      margin-bottom:2mm;
+      line-height:1.15;
+    }
+
+    .date{
+      margin: 6mm 0 6mm 0;
+      color: var(--muted);
+      font-size: 10.5pt;
+    }
+
+    .to{
+      margin: 0 0 6mm 0;
+      color: var(--muted);
+      font-size: 10.5pt;
+    }
+
+    .rule{
+      height:1px;
+      background: var(--rule);
+      margin: 6mm 0 6mm 0;
+    }
+
+    .greeting{ margin: 0 0 5mm 0; }
+
+    .body p{ margin: 0 0 4mm 0; }
+    .body ul{
+      margin: 0 0 4mm 6mm;
+      padding: 0;
+    }
+    .body li{ margin: 0 0 2mm 0; }
+
+    .closing{ margin-top: 6mm; }
+    .signoff{ margin-top: 8mm; font-weight:700; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div></div>
+      <div class="from">
+        <span class="name">{{ full_name }}</span>
+        {% if location %}{{ location }}<br/>{% endif %}
+        {% if email %}{{ email }}<br/>{% endif %}
+        {% if phone %}{{ phone }}{% endif %}
+      </div>
+    </div>
+
+    <div class="date">{{ today }}</div>
+
+    {% if employer_name or employer_company or employer_location %}
+      <div class="to">
+        {% if employer_name %}{{ employer_name }}<br/>{% endif %}
+        {% if employer_company %}{{ employer_company }}<br/>{% endif %}
+        {% if employer_location %}{{ employer_location }}{% endif %}
+      </div>
+    {% endif %}
+
+    <div class="rule"></div>
+
+    <div class="greeting">Dear {{ greeting_name }},</div>
+
+    <div class="body">
+      {% if letter_body_html %}
+        {{ letter_body_html | safe }}
+      {% else %}
+        <p style="white-space: pre-line;">{{ letter_body }}</p>
+      {% endif %}
+    </div>
+
+    <div class="closing">
+      Kind regards,
+      <div class="signoff">{{ full_name }}</div>
+    </div>
+  </div>
+</body>
+</html>
