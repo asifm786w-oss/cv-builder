@@ -147,7 +147,6 @@ CV_USAGE_KEYS = {"cv_generations"}
 COOLDOWN_SECONDS = 5
 
 
-
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
 
@@ -841,6 +840,27 @@ def _clear_adzuna_only():
         if isinstance(k, str) and k.startswith("use_job_"):
             st.session_state.pop(k, None)
 
+def _cv_fingerprint() -> str:
+    """
+    Optional: helps you decide whether to regenerate.
+    Keep it simple and only use canonical keys (cv_* + main lists).
+    """
+    import json, hashlib
+    payload = {
+        "cv_full_name": get_cv_field("cv_full_name"),
+        "cv_title": get_cv_field("cv_title"),
+        "cv_email": get_cv_field("cv_email"),
+        "cv_phone": get_cv_field("cv_phone"),
+        "cv_location": get_cv_field("cv_location"),
+        "cv_summary": get_cv_field("cv_summary", ""),
+        "skills": skills,
+        "experiences": [e.dict() for e in experiences],
+        "education": education_items,
+        "references": references,
+        "template_label": st.session_state.get("template_label"),
+    }
+    dumped = json.dumps(payload, default=str, sort_keys=True)
+    return hashlib.sha256(dumped.encode("utf-8", errors="ignore")).hexdigest()
 
 def get_user_credits(email: str) -> dict:
     email = (email or "").strip().lower()
@@ -4714,8 +4734,6 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
 
 
-
-
 # -------------------------
 # CV Template mapping
 # -------------------------
@@ -4728,17 +4746,20 @@ TEMPLATE_MAP = {
     "Classic Grey": "classic_grey.html",
 }
 
-# ✅ Set default ONCE, before widget exists
-st.session_state.setdefault("template_label", "Blue")
+# ✅ Ensure a default template label exists
+if "template_label" not in st.session_state or not st.session_state["template_label"]:
+    st.session_state["template_label"] = "Blue"
 
-# Optional: custom label (prevents any label CSS weirdness)
-st.markdown("Choose a CV template")
-
+# ✅ UI: Template dropdown
 template_label = st.selectbox(
-    label="",
+    "Choose a CV template",
     options=list(TEMPLATE_MAP.keys()),
     key="template_label",
-    label_visibility="collapsed",
+    index=(
+        list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
+        if st.session_state["template_label"] in TEMPLATE_MAP
+        else 0
+    ),
 )
 
 
@@ -4756,27 +4777,7 @@ generate_clicked = locked_action_button(
     key="btn_generate_cv",
 )
 
-def _cv_fingerprint() -> str:
-    """
-    Optional: helps you decide whether to regenerate.
-    Keep it simple and only use canonical keys (cv_* + main lists).
-    """
-    import json, hashlib
-    payload = {
-        "cv_full_name": get_cv_field("cv_full_name"),
-        "cv_title": get_cv_field("cv_title"),
-        "cv_email": get_cv_field("cv_email"),
-        "cv_phone": get_cv_field("cv_phone"),
-        "cv_location": get_cv_field("cv_location"),
-        "cv_summary": get_cv_field("cv_summary", ""),
-        "skills": skills,
-        "experiences": [e.dict() for e in experiences],
-        "education": education_items,
-        "references": references,
-        "template_label": st.session_state.get("template_label"),
-    }
-    dumped = json.dumps(payload, default=str, sort_keys=True)
-    return hashlib.sha256(dumped.encode("utf-8", errors="ignore")).hexdigest()
+
 
 if generate_clicked:
     # If this clears anything CV-related, it must be fixed/removed.
