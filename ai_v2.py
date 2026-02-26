@@ -143,6 +143,11 @@ TONE_GUIDES = {
     "confident": "Confident and assertive, outcome-focused. Not arrogant. Strong verbs.",
     "friendly": "Warm and approachable but still professional. Human tone.",
     "concise": "Shorter and tighter. Remove filler. Keep it one page maximum.",
+
+    # ✅ NEW TONES
+    "direct": "Straight to the point, clear and decisive. Short sentences. No fluff.",
+    "warm": "Supportive and empathetic, still professional. Slightly more personal.",
+    "persuasive": "More compelling and sales-like. Strong reasons, clear value, still truthful.",
 }
 
 def rewrite_cover_letter_tone_ai(letter_text: str, tone: str) -> str:
