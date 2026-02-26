@@ -260,19 +260,22 @@ def improve_skills(skills_text: str) -> str:
 
 def clear_ai_upload_state_only():
     """
-    Clear ONLY transient AI / upload / parse state.
-    Never touch CV form, job search, or selected job.
+    Clear ONLY transient AI / upload state.
+    Keep parsed CV data because the form uses it for restore/seed.
     """
     SAFE_PREFIXES = (
-        "ai_",              # AI intermediate outputs
-        "upload_",          # file upload temp state
-        "parsed_",          # parsed CV temp data
-        "_cv_parsed",       # specific parser flags
-        "_just_autofilled", # autofill flags
+        "ai_",
+        "upload_",
     )
 
+    SAFE_EXACT = {
+        "_just_autofilled_from_cv",  # optional: you can clear this AFTER you finish seeding
+    }
+
     for k in list(st.session_state.keys()):
-        if k.startswith(SAFE_PREFIXES):
+        if k in SAFE_EXACT:
+            st.session_state.pop(k, None)
+        elif k.startswith(SAFE_PREFIXES):
             st.session_state.pop(k, None)
 
 FORM_EPOCH_KEY = "form_epoch"
