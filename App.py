@@ -1874,7 +1874,39 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+st.markdown(
+    """
+<style>
+/* -------------------------------------------------
+   FIX: Selectbox internal input (BaseWeb Select)
+   Your global input CSS makes it white -> looks like asterisk/box.
+   ------------------------------------------------- */
+[data-testid="stAppViewContainer"] div[data-baseweb="select"] input{
+  background: transparent !important;
+  background-color: transparent !important;
+  color: rgba(255,255,255,0.92) !important;
+  -webkit-text-fill-color: rgba(255,255,255,0.92) !important;
+  border: none !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
 
+/* Keep the select "pill" dark (optional, but makes it consistent) */
+[data-testid="stAppViewContainer"] div[data-baseweb="select"] > div{
+  background: rgba(255,255,255,0.06) !important;
+  border: 1px solid rgba(255,255,255,0.14) !important;
+  border-radius: 999px !important;
+}
+
+/* Dropdown menu surface */
+[data-testid="stAppViewContainer"] ul[role="listbox"]{
+  background: rgba(11,15,25,0.98) !important;
+  border: 1px solid rgba(255,255,255,0.12) !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 # -------------------------
 # AUTH MODAL OVERRIDES (WHITE INPUTS + BLACK TEXT INSIDE MODAL)
 # Put this after the general input CSS so it wins inside dialogs.
@@ -4089,10 +4121,10 @@ references = st.text_area(
     ),
 )
 # =========================
-# Job Search (Adzuna) — Expander (FREE search)
+# Job Search (Adzuna) — Expander (FREE search)  ✅ PREMIUM UI
 # ✅ No AI credit spend for searching
 # ✅ "Clear search" resets ONLY job search state (adzuna_* + job_*)
-# ✅ "Use this job" only loads JD into Target Job
+# ✅ "Use this job advert" only loads JD into Target Job
 # =========================
 
 import streamlit as st
@@ -4108,7 +4140,7 @@ def _format_salary(smin, smax) -> str:
         return ""
     try:
         if smin is not None and smax is not None:
-            return f"Salary: £{int(smin):,} - £{int(smax):,}"
+            return f"Salary: £{int(smin):,}–£{int(smax):,}"
         if smin is not None:
             return f"Salary: from £{int(smin):,}"
         return f"Salary: up to £{int(smax):,}"
@@ -4131,7 +4163,6 @@ def _as_text(x):
     return str(x)
 
 def _normalize_jobs(jobs_raw):
-    """Adzuna wrappers vary. Ensure we end up with: list[dict]"""
     if jobs_raw is None:
         return []
     if isinstance(jobs_raw, dict):
@@ -4141,10 +4172,7 @@ def _normalize_jobs(jobs_raw):
     return [j for j in jobs_raw if isinstance(j, dict)]
 
 def _clear_adzuna_only():
-    """
-    Surgical reset: clears ONLY job-search state.
-    Does NOT touch cv_* keys or auth/session keys.
-    """
+    """Surgical reset: clears ONLY job-search state."""
     for k in (
         "adzuna_results",
         "adzuna_keywords",
@@ -4158,7 +4186,6 @@ def _clear_adzuna_only():
     ):
         st.session_state.pop(k, None)
 
-    # also remove per-job "Use this job" button keys (optional)
     for k in list(st.session_state.keys()):
         if isinstance(k, str) and k.startswith("use_job_"):
             st.session_state.pop(k, None)
@@ -4167,7 +4194,7 @@ def _clear_adzuna_only():
 # UI (Expander)
 # -----------------------------
 expanded = bool(st.session_state.get("adzuna_results"))
-with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
+with st.expander("Job search (Adzuna)", expanded=expanded):
 
     st.session_state.setdefault("adzuna_results", [])
 
@@ -4177,7 +4204,7 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
 
     can_use = True
     if not email:
-        st.warning("Please sign in to use Job Search.")
+        st.info("Sign in to search job adverts and load them into your cover letter.")
         can_use = False
 
     uid = None
@@ -4187,73 +4214,70 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
             st.warning("Couldn’t find your account. Please sign out and sign in again.")
             can_use = False
 
+    st.caption("Search is free. Loading an advert helps you generate a tailored summary and cover letter.")
+
     # Inputs
     with st.container(border=True):
-        col1, col2, col3, col4 = st.columns([3, 3, 1.3, 1.3])
+        c1, c2, c3, c4 = st.columns([3, 3, 1.4, 1.2])
 
-        with col1:
+        with c1:
             keywords = st.text_input(
                 "Keywords",
                 key="adzuna_keywords",
                 placeholder="e.g. marketing manager / software engineer",
                 disabled=not can_use,
             )
-        with col2:
+        with c2:
             location = st.text_input(
-                "Location",
+                "Location (optional)",
                 key="adzuna_location",
                 placeholder="e.g. Walsall or WS2",
                 disabled=not can_use,
             )
 
-        with col3:
+        with c3:
             st.write("")
             st.write("")
             search_clicked = st.button(
-                "Search",
+                "Search adverts",
                 type="primary",
                 key="adzuna_search_btn",
                 use_container_width=True,
                 disabled=not can_use,
             )
 
-        with col4:
+        with c4:
             st.write("")
             st.write("")
             clear_clicked = st.button(
-                "🧹 Clear",
+                "Clear",
                 key="adzuna_clear_btn",
                 use_container_width=True,
                 disabled=not can_use,
             )
 
-        st.caption("Tip: leave Location blank to search broadly, or use a postcode for local roles.")
+        st.caption("Tip: leave Location blank to search UK-wide, or use a postcode for local roles.")
 
-    # Clear handler (no rerun drama; we rerun once at the end)
     if clear_clicked and can_use:
         _clear_adzuna_only()
         st.rerun()
 
-    # Search handler
     if search_clicked and can_use:
         query_clean = (keywords or "").strip()
         loc_clean = (location or "").strip()
 
         if not query_clean:
-            st.info("Enter keywords to search (e.g., “marketing manager”).")
+            st.warning("Enter keywords to search (for example: “Marketing Assistant”).")
         else:
             try:
-                with st.spinner("Searching jobs..."):
+                with st.spinner("Searching job adverts..."):
                     jobs_raw = _cached_adzuna_search(query_clean, loc_clean, results=10)
 
                 jobs = _normalize_jobs(jobs_raw)
-
-                # ✅ FREE SEARCH: DO NOT spend credits here
                 st.session_state["adzuna_results"] = jobs
 
                 if not jobs:
-                    st.info("No results found. Try different keywords or a nearby location.")
-
+                    st.info("No results found. Try different keywords or broaden the location.")
                 st.rerun()
 
             except AdzunaConfigError:
@@ -4266,21 +4290,20 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
     # -----------------------------
     # Results
     # -----------------------------
-    jobs = st.session_state.get("adzuna_results") or []
-    jobs = _normalize_jobs(jobs)
+    jobs = _normalize_jobs(st.session_state.get("adzuna_results") or [])
 
     if jobs:
         st.divider()
-        st.caption(f"Showing up to {min(len(jobs), 10)} results.")
+        st.caption(f"Showing up to {min(len(jobs), 10)} results")
 
         for idx, job in enumerate(jobs):
-            title = _as_text(job.get("title")) or "Untitled"
+            title = _as_text(job.get("title")) or "Untitled role"
 
             company_val = job.get("company")
-            company = _as_text(company_val) or "Unknown company"
+            company = _as_text(company_val) or "Employer not listed"
 
             loc_val = job.get("location") or job.get("candidate_required_location") or job.get("area")
-            loc = _as_text(loc_val) or "Unknown location"
+            loc = _as_text(loc_val) or "Location not listed"
 
             created = _as_text(job.get("created") or job.get("created_at") or "")
             url = _as_text(job.get("redirect_url") or job.get("url") or "")
@@ -4288,27 +4311,31 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
             smax = job.get("salary_max")
             desc = _as_text(job.get("description") or "")
 
-            with st.expander(f"{title} — {company} ({loc})", expanded=(idx == 0)):
+            header_line = f"{title} — {company} ({loc})"
+            with st.expander(header_line, expanded=(idx == 0)):
 
                 with st.container(border=True):
-                    top = st.columns([4, 1])
+                    left, right = st.columns([4, 1.2])
 
-                    with top[0]:
+                    with left:
+                        meta_lines = []
                         if created:
-                            st.caption(f"Posted: {created}")
+                            meta_lines.append(f"Posted: {created}")
                         sal = _format_salary(smin, smax)
                         if sal:
-                            st.caption(sal)
+                            meta_lines.append(sal)
+                        if meta_lines:
+                            st.caption(" • ".join(meta_lines))
                         if url:
-                            st.link_button("Open listing", url)
+                            st.link_button("Open advert", url)
 
-                    with top[1]:
-                        if st.button("Use this job", key=f"use_job_{idx}", use_container_width=True):
+                    with right:
+                        if st.button("Use this job advert", key=f"use_job_{idx}", use_container_width=True):
                             # FREE: just load JD into Target Job
                             st.session_state["job_description"] = desc
                             st.session_state["_last_jd_fp"] = None
 
-                            # Optional: clear outputs so user generates fresh ones for this JD
+                            # Clear AI outputs for fresh generation
                             st.session_state.pop("job_summary_ai", None)
                             st.session_state.pop("cover_letter", None)
                             st.session_state.pop("cover_letter_box", None)
@@ -4320,15 +4347,15 @@ with st.expander("🔎 Job Search (Adzuna)", expanded=expanded):
                                 "location": loc,
                             }
 
-                            st.success("Job loaded into Target Job. Now generate Summary / Cover Letter.")
+                            st.success("Job advert loaded. Next step: let’s make a tailored cover letter in Section 5.")
                             st.rerun()
 
-                st.markdown("**Preview description**")
+                st.markdown("**Advert preview**")
                 st.write(desc[:2500] + ("..." if len(desc) > 2500 else ""))
 
 
 # -------------------------
-# 5. Target Job (optional, for AI)
+# 5. Target Job (optional, for AI)  ✅ + Tone Improver (ledger)
 # -------------------------
 st.header("5. Target Job (optional)")
 
@@ -4341,7 +4368,8 @@ def get_personal_value(primary_key: str, fallback_key: str) -> str:
     """Read personal details from either the main Section 1 keys OR cv_* keys."""
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
 
-
+def _norm(x) -> str:
+    return (x or "").strip()
 
 # Pull personal details safely (works with either key system)
 full_name_ss = get_personal_value("full_name", "cv_full_name")
@@ -4358,7 +4386,7 @@ if jd_key not in st.session_state:
     st.session_state[jd_key] = st.session_state.get("job_description", "")
 
 job_description = st.text_area(
-    "Paste the job description here",
+    "Paste the job advert / job description here",
     height=200,
     key=jd_key,
 )
@@ -4371,6 +4399,8 @@ if last_jd_fp and jd_fp != last_jd_fp:
     st.session_state.pop("job_summary_ai", None)
     st.session_state.pop("cover_letter", None)
     st.session_state.pop("cover_letter_box", None)
+    # also clear current epoch editor key (if present)
+    st.session_state.pop(f"cover_letter_box__{epoch}", None)
 
 st.session_state["_last_jd_fp"] = jd_fp
 
@@ -4381,9 +4411,9 @@ st.caption(
 
 col_jd1, col_jd2 = st.columns(2)
 with col_jd1:
-    job_summary_clicked = st.button("Suggest tailored summary (AI)", key="btn_job_summary")
+    job_summary_clicked = st.button("Suggest tailored summary (AI)", key=f"btn_job_summary__{epoch}")
 with col_jd2:
-    ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key="btn_cover")
+    ai_cover_letter_clicked = st.button("Generate cover letter (AI)", key=f"btn_cover__{epoch}")
 
 # -------------------------
 # AI job-description summary
@@ -4392,12 +4422,11 @@ if job_summary_clicked:
     if not gate_premium("generate a job summary"):
         st.stop()
 
-    # ✅ use safe personal values
-    if not (full_name_ss and email_ss):
+    if not (_norm(full_name_ss) and _norm(email_ss)):
         st.warning("Complete Section 1 (Full name + Email) first — these are used in outputs.")
         st.stop()
 
-    if not job_description.strip():
+    if not _norm(job_description):
         st.error("Please paste a job description first.")
         st.stop()
 
@@ -4420,8 +4449,6 @@ if job_summary_clicked:
 
             st.session_state["job_summary_ai"] = job_summary_text
             st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
-
-            # Optional analytics only (won't affect credits)
             if email_for_usage:
                 increment_usage(email_for_usage, "job_summary_uses")
 
@@ -4429,7 +4456,6 @@ if job_summary_clicked:
         except Exception as e:
             st.error(f"AI error (job summary): {e}")
 
-# Display job summary
 job_summary_text = st.session_state.get("job_summary_ai", "")
 if job_summary_text:
     st.markdown("**AI job summary for this role (read-only):**")
@@ -4442,12 +4468,11 @@ if ai_cover_letter_clicked:
     if not gate_premium("generate a cover letter"):
         st.stop()
 
-    # ✅ use safe personal values
-    if not (full_name_ss and email_ss):
+    if not (_norm(full_name_ss) and _norm(email_ss)):
         st.warning("Complete Section 1 (Full name + Email) first — added to cover letter.")
         st.stop()
 
-    if not job_description.strip():
+    if not _norm(job_description):
         st.error("Please paste a job description first.")
         st.stop()
 
@@ -4482,49 +4507,119 @@ if ai_cover_letter_clicked:
             final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
             st.session_state["cover_letter"] = final_letter
-            st.session_state["cover_letter_box"] = final_letter
+
+            # Seed the epoch editor key so it renders immediately
+            cl_box_key = f"cover_letter_box__{epoch}"
+            st.session_state[cl_box_key] = final_letter
 
             st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
             if email_for_usage:
                 increment_usage(email_for_usage, "cover_uses")
 
-            st.success("AI cover letter generated below. You can edit it before downloading.")
+            st.success("Cover letter generated below. You can edit it before downloading.")
             st.rerun()
 
         except Exception as e:
             st.error(f"AI error (cover letter): {e}")
 
-
 # -------------------------
-# Cover letter editor + downloads (epoch-safe)
+# Cover letter editor + downloads + Tone upgrade (AI spend)
 # -------------------------
 epoch = int(st.session_state.get("form_epoch", 0) or 0)
 cl_box_key = f"cover_letter_box__{epoch}"
 
-# Canonical cover letter text (source of truth)
 cover_text = (st.session_state.get("cover_letter") or "").strip()
 
-# If we have a cover letter but the epoch widget isn't seeded yet, seed it BEFORE render
+# Seed editor key before render
 if cover_text and cl_box_key not in st.session_state:
-    st.session_state[cl_box_key] = st.session_state["cover_letter"]
+    st.session_state[cl_box_key] = cover_text
 
-# Render editor if either canonical has text OR widget already has text
 if cover_text or (st.session_state.get(cl_box_key) or "").strip():
-    st.subheader("✏️ Cover letter")
+    st.subheader("Cover letter")
 
+    # --- Tone controls (premium) ---
+    TONE_OPTIONS = {
+        "Professional": "professional",
+        "Formal": "formal",
+        "Confident": "confident",
+        "Friendly": "friendly",
+        "Concise": "concise",
+        "Direct": "direct",
+        "Warm": "warm",
+    }
+
+    st.caption("Optional: rewrite the tone without changing the facts. (Costs 1 AI credit per rewrite.)")
+
+    t1, t2 = st.columns([2.2, 1])
+    with t1:
+        tone_label = st.selectbox(
+            "Rewrite style",
+            options=list(TONE_OPTIONS.keys()),
+            key=f"cl_tone_label__{epoch}",
+        )
+    with t2:
+        rewrite_clicked = st.button(
+            "Rewrite tone (AI)",
+            key=f"btn_cl_rewrite_tone__{epoch}",
+            use_container_width=True,
+        )
+
+    # Handle rewrite BEFORE text_area renders
+    if rewrite_clicked:
+        if not gate_premium("rewrite a cover letter"):
+            st.stop()
+
+        current_letter = (
+            (st.session_state.get(cl_box_key) or "").strip()
+            or (st.session_state.get("cover_letter") or "").strip()
+        )
+        if not current_letter:
+            st.warning("Nothing to rewrite yet.")
+            st.stop()
+
+        tone = TONE_OPTIONS.get(tone_label, "professional")
+
+        email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
+        uid = get_user_id(email_for_usage) if email_for_usage else None
+        if not uid:
+            st.error("Please sign in again.")
+            st.stop()
+
+        spent = try_spend(uid, source="cover_letter_rewrite", ai=1)
+        if not spent:
+            st.warning("You don’t have enough AI credits to rewrite the cover letter.")
+            st.stop()
+
+        with st.spinner(f"Rewriting in {tone_label.lower()} style..."):
+            try:
+                rewritten = rewrite_cover_letter_tone_ai(letter_text=current_letter, tone=tone)
+                cleaned = clean_cover_letter_body(rewritten)
+                final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
+
+                # Update canonical
+                st.session_state["cover_letter"] = final_letter
+                st.session_state[cl_box_key] = final_letter
+
+                st.session_state["cover_rewrite_uses"] = st.session_state.get("cover_rewrite_uses", 0) + 1
+                if email_for_usage:
+                    increment_usage(email_for_usage, "cover_rewrite_uses")
+
+                st.success(f"Cover letter rewritten ({tone_label}).")
+                st.rerun()
+            except Exception as e:
+                st.error(f"AI error (cover rewrite): {e}")
+                st.stop()
+
+    # --- Editor (downloads are FREE) ---
     edited = st.text_area(
-        "You can edit this before using it:",
+        "Edit your cover letter (optional)",
         key=cl_box_key,
         height=260,
     )
-
-    # Sync widget -> canonical AFTER render (allowed)
     st.session_state["cover_letter"] = edited
 
-    # sync edited text back into canonical state
-    st.session_state["cover_letter"] = edited
+    # --- Downloads (FREE) ---
     try:
-        # ✅ use safe values so we never hit NameError or blank fields
         letter_pdf = render_cover_letter_pdf_bytes(
             full_name=full_name_ss or "Candidate",
             letter_body=st.session_state["cover_letter"],
@@ -4544,17 +4639,19 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         col_d11, col_d12 = st.columns(2)
         with col_d11:
             st.download_button(
-                label="📄 Download cover letter as PDF",
+                label="Download cover letter (PDF)",
                 data=letter_pdf,
                 file_name="cover_letter.pdf",
                 mime="application/pdf",
+                use_container_width=True,
             )
         with col_d12:
             st.download_button(
-                label="📝 Download cover letter as Word (.docx)",
+                label="Download cover letter (Word)",
                 data=letter_docx,
                 file_name="cover_letter.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
             )
 
     except Exception as e:
