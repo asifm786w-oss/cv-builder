@@ -146,17 +146,7 @@ CV_USAGE_KEYS = {"cv_generations"}
 
 COOLDOWN_SECONDS = 5
 
-# -------------------------
-# CV Template mapping (GLOBAL)
-# -------------------------
-TEMPLATE_MAP = {
-    "Blue": "Blue Theme.html",
-    "Green": "Green Theme.html",
-    "Purple": "Purple Theme.html",
-    "Red": "Red Theme.html",
-    "Elegant": "cv_elegant.html",
-    "Classic Grey": "classic_grey.html",
-}
+
 
 def get_personal_value(primary_key: str, fallback_key: str) -> str:
     return (st.session_state.get(primary_key) or st.session_state.get(fallback_key) or "").strip()
@@ -4726,25 +4716,30 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
 
 
-# ✅ Ensure a default template label exists
-if "template_label" not in st.session_state or not st.session_state["template_label"]:
-    st.session_state["template_label"] = "Blue"
+# -------------------------
+# CV Template mapping
+# -------------------------
+TEMPLATE_MAP = {
+    "Blue": "Blue Theme.html",
+    "Green": "Green Theme.html",
+    "Purple": "Purple Theme.html",
+    "Red": "Red Theme.html",
+    "Elegant": "cv_elegant.html",
+    "Classic Grey": "classic_grey.html",
+}
 
-# ✅ Custom label (won't get asterisk)
+# ✅ Set default ONCE, before widget exists
+st.session_state.setdefault("template_label", "Blue")
+
+# Optional: custom label (prevents any label CSS weirdness)
 st.markdown("Choose a CV template")
 
 template_label = st.selectbox(
     label="",
     options=list(TEMPLATE_MAP.keys()),
     key="template_label",
-    index=(
-        list(TEMPLATE_MAP.keys()).index(st.session_state["template_label"])
-        if st.session_state["template_label"] in TEMPLATE_MAP
-        else 0
-    ),
     label_visibility="collapsed",
 )
-
 
 
 # -------------------------
