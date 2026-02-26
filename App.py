@@ -262,20 +262,37 @@ def improve_skills(skills_text: str) -> str:
 
 def clear_ai_upload_state_only():
     """
-    Clear ONLY transient AI / upload / parse state.
-    Never touch CV form, job search, or selected job.
+    Surgical clear:
+    - Clears ONLY known transient AI/upload artifacts.
+    - Never scans all session keys.
+    - Never touches canonical form data (cv_*), experiences, education_items, skills, auth, or policies.
     """
-    SAFE_PREFIXES = (
-        "ai_",              # AI intermediate outputs
-        "upload_",          # file upload temp state
-        "parsed_",          # parsed CV temp data
-        "_cv_parsed",       # specific parser flags
-        "_just_autofilled", # autofill flags
+    KEYS_TO_CLEAR = (
+        # AI outputs / intermediate
+        "ai_last_error",
+        "ai_debug",
+        "ai_result",
+        "ai_prompt_cache",
+
+        # CV upload widget + transient read results (DO NOT clear cv_* fields)
+        "cv_uploader",          # uploader widget (optional)
+        "cv_upload_bytes",      # if you store raw file bytes
+        "cv_upload_name",       # if you store filename
+        "_last_cv_fingerprint", # OK to clear if you want new uploads treated as new
+
+        # Parser flags (do NOT clear canonical parsed payload unless you truly mean to)
+        "_cv_parsed",
+        "_cv_autofill_enabled",
+        "_just_autofilled_from_cv",
+        "_skip_restore_personal_once",
+
+        # Any temp parse-only buffers you created
+        "parsed_cv_text",
+        "parsed_cv_raw",
     )
 
-    for k in list(st.session_state.keys()):
-        if k.startswith(SAFE_PREFIXES):
-            st.session_state.pop(k, None)
+    for k in KEYS_TO_CLEAR:
+        st.session_state.pop(k, None)
 
 
 
@@ -2151,10 +2168,6 @@ if show_policy_page():
     st.stop()
 
 
-# =========================
-# FORM SNAPSHOT / RESTORE  (SURGICAL + SAFE)
-# =========================
-
 FORM_KEYS_TO_PRESERVE = [
     # Section 1 (legacy)
     "full_name", "title", "email", "phone", "location", "summary",
@@ -2162,21 +2175,20 @@ FORM_KEYS_TO_PRESERVE = [
     # Canonical CV personal details (UI uses these)
     "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
 
-    # CV upload / parsing (do NOT include widget keys like "cv_uploader")
+    # CV parsing flags only (NO file bytes, NO uploader widget)
     "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
-    "_last_cv_fingerprint", "cv_upload_bytes", "cv_upload_name",
 
-    # Canonical structures (THIS is what matters for Section 3)
+    # Canonical structures (Section 3)
     "skills", "experiences", "education_items", "references", "skills_text",
 
-    # Counts / helpers (optional but ok)
-    "num_experiences", "num_education", "parsed_num_experiences",
+    # Counts (only if your UI uses them)
+    "num_experiences", "num_education",
 
-    # Target job / cover letter (canonical only)
+    # Target job / cover letter
     "job_description", "_last_jd_fp", "job_summary_ai",
     "cover_letter", "selected_job",
 
-    # Template (canonical)
+    # Template
     "template_label",
 
     # Consent / policies
