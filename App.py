@@ -1891,35 +1891,7 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-st.markdown("""
-<style>
-/* 1) Make the entire page dark (kills white gutters) */
-html, body, [data-testid="stAppViewContainer"], .stApp {
-  background: #0e0e11 !important;
-}
 
-/* 2) Remove Streamlit's default padding that can reveal white on mobile */
-[data-testid="stAppViewContainer"] > .main {
-  padding-left: 0rem !important;
-  padding-right: 0rem !important;
-}
-
-/* 3) Keep your content nicely padded inside (so it doesn't touch edges) */
-section.main > div.block-container {
-  padding-left: 1rem !important;
-  padding-right: 1rem !important;
-  max-width: 1100px;   /* optional: prevents super wide stretching on desktop */
-}
-
-/* 4) Remove any accidental borders/seams */
-div, section {
-  border: 0 !important;
-}
-
-/* Optional: hide any stray horizontal rules */
-hr { display: none !important; }
-</style>
-""", unsafe_allow_html=True)
 # -------------------------
 # AUTH MODAL OVERRIDES (WHITE INPUTS + BLACK TEXT INSIDE MODAL)
 # Put this after the general input CSS so it wins inside dialogs.
@@ -4707,26 +4679,13 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
 
 
-# -------------------------
-# CV Template mapping
-# -------------------------
-TEMPLATE_MAP = {
-    "Blue": "Blue Theme.html",
-    "Green": "Green Theme.html",
-    "Purple": "Purple Theme.html",
-    "Red": "Red Theme.html",
-    "Elegant": "cv_elegant.html",
-    "Classic Grey": "classic_grey.html",
-}
-
 # ✅ Ensure a default template label exists
 if "template_label" not in st.session_state or not st.session_state["template_label"]:
     st.session_state["template_label"] = "Blue"
 
-# ✅ Render our own label (prevents any CSS label::* hacks adding an asterisk)
+# ✅ Custom label (won't get asterisk)
 st.markdown("Choose a CV template")
 
-# ✅ UI: Template dropdown (label hidden)
 template_label = st.selectbox(
     label="",
     options=list(TEMPLATE_MAP.keys()),
