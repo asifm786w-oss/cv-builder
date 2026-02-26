@@ -233,6 +233,43 @@ def refresh_session_user_from_db() -> None:
 
     st.session_state["user"] = dict(db_u)
 
+def _seed_experience_widgets_from_canonical():
+    """
+    When returning from policies (or any navigation rerun),
+    repopulate the experience widget keys (job_title_0 etc)
+    from canonical st.session_state["experiences"] list.
+    """
+    exps = st.session_state.get("experiences") or []
+    if not isinstance(exps, list) or not exps:
+        return
+
+    # Ensure UI count matches canonical
+    st.session_state["num_experiences"] = max(1, min(5, len(exps)))
+
+    for i, e in enumerate(exps[:5]):
+        # Support both dataclass/pydantic objects and dicts
+        if isinstance(e, dict):
+            job_title = e.get("job_title") or ""
+            company   = e.get("company") or ""
+            location  = e.get("location") or ""
+            start_dt  = e.get("start_date") or ""
+            end_dt    = e.get("end_date") or ""
+            desc      = e.get("description") or ""
+        else:
+            job_title = getattr(e, "job_title", "") or ""
+            company   = getattr(e, "company", "") or ""
+            location  = getattr(e, "location", "") or ""
+            start_dt  = getattr(e, "start_date", "") or ""
+            end_dt    = getattr(e, "end_date", "") or ""
+            desc      = getattr(e, "description", "") or ""
+
+        st.session_state[f"job_title_{i}"]     = job_title
+        st.session_state[f"company_{i}"]       = company
+        st.session_state[f"exp_location_{i}"]  = location
+        st.session_state[f"start_date_{i}"]    = start_dt
+        st.session_state[f"end_date_{i}"]      = end_dt
+        st.session_state[f"description_{i}"]    = desc
+
 # ---- Canonical state guarantees (never allow None) ----
 if st.session_state.get("experiences") is None:
     st.session_state["experiences"] = []
@@ -3759,6 +3796,13 @@ if not just_autofilled:
 backup_skills_state()
 
 restore_form_state_if_needed()
+# restore on return BEFORE widgets render
+if st.session_state.get("_just_returned_from_policy"):
+    _canon_state_snapshot("policy_return_before_restore")
+    restore_form_state()
+    _seed_experience_widgets_from_canonical()
+    _canon_state_snapshot("policy_return_after_restore")
+    st.session_state["_just_returned_from_policy"] = False
 
 # -------------------------
 # 1. Personal details (epoch-safe + AI summary update)
@@ -5060,11 +5104,7 @@ st.caption(
 with st.expander("Debug (temporary)", expanded=True):
     _show_debug_state_history()
 
-if st.session_state.get("_just_returned_from_policy"):
-    _canon_state_snapshot("policy_return_before_restore")
-    restore_form_state()
-    _canon_state_snapshot("policy_return_after_restore")
-    st.session_state["_just_returned_from_policy"] = False
+
 
 def open_policy(scope: str, slug: str) -> None:
     # DEBUG: capture before opening policy
