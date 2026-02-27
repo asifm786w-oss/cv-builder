@@ -3656,6 +3656,103 @@ with st.container(border=True):
             st.rerun()
 
 
+# ============================================================
+# CV Upload + AI Autofill (ONE block only)  ✅ + reset buttons
+# ============================================================
+
+def _safe_set(key: str, value):
+    """Set session_state[key] only when value is meaningful."""
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return
+    if value is None:
+        return
+    st.session_state[key] = value
+
+# Backwards-compatible alias (if any older code calls __safe_set)
+__safe_set = _safe_set
+
+# ---- Premium reset buttons (do NOT touch subscriptions) ----
+def _reset_cv_only():
+    """
+    Clears CV/form-related state so user can start fresh without logging out.
+    Does NOT touch auth/user/session billing keys.
+    """
+    keys_to_clear = [
+        # uploader + parse flags
+        "cv_uploader",
+        "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
+        "_last_cv_fingerprint", "_skip_restore_personal_once",
+
+        # personal canonical fields
+        "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
+
+        # skills + experience + education structures
+        "skills_text", "skills",
+        "experiences", "num_experiences", "parsed_num_experiences",
+        "education_items", "num_education",
+        "references",
+
+        # per-role widget keys (experience UI)
+        # remove the common keys you use in section 3
+    ]
+
+    # clear the fixed keys above
+    for k in keys_to_clear:
+        st.session_state.pop(k, None)
+
+    # clear dynamic experience widget keys (Role 1..5)
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and (
+            k.startswith("job_title_")
+            or k.startswith("company_")
+            or k.startswith("exp_location_")
+            or k.startswith("start_date_")
+            or k.startswith("end_date_")
+            or k.startswith("description_")
+            or k.startswith("description_pending_")
+            or k.startswith("btn_role_ai_")
+        ):
+            st.session_state.pop(k, None)
+
+    # clear CV outputs only (not credits)
+    for k in ("cv_pdf_bytes", "cv_docx_bytes", "cv_last_template", "cv_last_fingerprint"):
+        st.session_state.pop(k, None)
+
+def _reset_whole_session_soft():
+    """
+    Soft reset: clears most app form data (CV + job + cover letter),
+    but keeps auth/user + subscription keys safe.
+    """
+    preserve_prefixes = ("stripe_",)  # keep if you store stripe stuff in session
+    preserve_keys = {
+        "user", "auth_token", "subscription", "plan", "is_premium",
+        "accepted_policies", "accepted_policies_at", "accepted_policies_this_session",
+    }
+
+    for k in list(st.session_state.keys()):
+        if k in preserve_keys:
+            continue
+        if any(isinstance(k, str) and k.startswith(p) for p in preserve_prefixes):
+            continue
+        st.session_state.pop(k, None)
+
+# UI row for reset buttons (place near uploader)
+r1, r2 = st.columns([1, 1])
+with r1:
+    if st.button("↻ Reset CV", key="btn_reset_cv", use_container_width=True):
+        _reset_cv_only()
+        st.success("CV form reset. You can upload a new CV or type manually.")
+        st.rerun()
+
+with r2:
+    if st.button("↻ Reset whole session", key="btn_reset_whole_session", use_container_width=True):
+        _reset_whole_session_soft()
+        st.success("Session reset (kept login & policies).")
+        st.rerun()
+
+
 fill_clicked = locked_action_button(
     "Fill the form from this CV (AI)",
     key="btn_fill_from_cv",
@@ -3704,7 +3801,7 @@ if uploaded_cv is not None and fill_clicked:
     st.session_state["_cv_parsed"] = parsed
     st.session_state["_cv_autofill_enabled"] = True
     st.session_state["_just_autofilled_from_cv"] = True
-    st.session_state["_skip_restore_personal_once"] = True  # << important
+    st.session_state["_skip_restore_personal_once"] = True
 
     # ✅ usage counting (only for logged-in users)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
