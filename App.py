@@ -3518,148 +3518,14 @@ Please ensure your details are reviewed before downloading.
 
 
 
-# ---------- Premium Reset Buttons (FIXED: clears Section 2 + 4) ----------
+# ============================================================
+# CV Upload + AI Autofill  ✅ + Premium "Reset whole session"
+# (KEEP LOGIN + STRIPE + POLICIES)
+# ============================================================
+
 import hashlib
 
-def _bump_epoch(key: str) -> int:
-    st.session_state[key] = int(st.session_state.get(key, 0) or 0) + 1
-    return int(st.session_state[key])
-
-def _pop_keys_exact(keys: list[str]) -> None:
-    for k in keys:
-        st.session_state.pop(k, None)
-
-def _pop_keys_by_prefix(prefixes: tuple[str, ...]) -> None:
-    for k in list(st.session_state.keys()):
-        if isinstance(k, str) and k.startswith(prefixes):
-            st.session_state.pop(k, None)
-
-def _pop_keys_by_contains(chunks: tuple[str, ...]) -> None:
-    for k in list(st.session_state.keys()):
-        if isinstance(k, str) and any(c in k for c in chunks):
-            st.session_state.pop(k, None)
-
-def reset_cv_sections_1_to_4():
-    """
-    Reset ONLY CV form Sections 1–4 + CV generation bytes.
-    Keeps auth, billing/subscriptions, policies, job-search, target job, cover letter.
-    """
-
-    # --- Canonical section keys ---
-    _pop_keys_exact([
-        # Section 1 (canonical)
-        "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
-        "cv_summary_pending",
-
-        # Section 2 (canonical)
-        "skills_text", "skills_pending",
-
-        # Section 3 (canonical)
-        "num_experiences", "parsed_num_experiences",
-        "ai_running_role", "ai_run_now",
-        "_just_autofilled_from_cv",
-
-        # Section 4 (canonical)
-        "education_items", "num_education",
-        "references",
-
-        # CV upload/parse flags (safe to reset with CV)
-        "_cv_parsed", "_cv_autofill_enabled", "_skip_restore_personal_once",
-        "_last_cv_fingerprint", "cv_upload_bytes", "cv_upload_name",
-
-        # Generated CV download artifacts/buttons
-        "cv_pdf_bytes", "cv_docx_bytes", "cv_last_fingerprint", "cv_last_template",
-    ])
-
-    # --- Wipe per-widget keys for Section 1 epoch keys (cv_*__{epoch}) ---
-    _pop_keys_by_contains(("cv_full_name__", "cv_title__", "cv_email__", "cv_phone__", "cv_location__", "cv_summary__"))
-
-    # --- Wipe per-role widget keys (Section 3) ---
-    # job_title_0, company_0, description_0, description_pending_0, etc.
-    _pop_keys_by_prefix((
-        "job_title_", "company_", "exp_location_", "start_date_", "end_date_",
-        "description_", "description_pending_", "btn_role_ai_",
-    ))
-
-    # --- Wipe common education widget patterns (Section 4) ---
-    # (covers most setups without knowing your exact widget keys)
-    _pop_keys_by_prefix((
-        "edu_", "education_", "degree_", "institution_", "school_", "uni_",
-        "qualification_", "course_", "edu_location_", "edu_start_", "edu_end_",
-    ))
-
-    # --- Wipe common reference widget patterns (if you have them) ---
-    _pop_keys_by_prefix(("ref_", "reference_", "references_"))
-
-    # Reset uploader widget (so file actually clears)
-    _bump_epoch("cv_uploader_epoch")
-
-    # IMPORTANT: bump form_epoch so any epoch-bound widgets rebind cleanly
-    _bump_epoch("form_epoch")
-
-def reset_whole_session_keep_login():
-    """
-    Wipe ALL working state (CV + job search + target job + cover letter + downloads + snapshots/debug),
-    but keep login/session user + subscription/billing config.
-    """
-    PRESERVE = {
-        # auth / identity
-        "user",
-
-        # billing/subscriptions config + stripe objects/keys you may have
-        "PRICE_MONTHLY", "PRICE_PRO", "stripe",
-
-        # policy acceptance (optional: keep consent so you don't force re-accept)
-        "accepted_policies", "accepted_policies_at",
-        "accepted_policies_this_session", "chk_policy_agree",
-    }
-
-    for k in list(st.session_state.keys()):
-        if k in PRESERVE:
-            continue
-        st.session_state.pop(k, None)
-
-    # rebuild epochs so UI rebinds cleanly
-    st.session_state["form_epoch"] = 0
-    st.session_state["cover_epoch"] = 0
-    st.session_state["cv_uploader_epoch"] = 0
-
-
-# --- Uploader + reset row ---
-st.session_state.setdefault("cv_uploader_epoch", 0)
-u_epoch = int(st.session_state.get("cv_uploader_epoch", 0) or 0)
-
-with st.container(border=True):
-    c1, c2, c3 = st.columns([3.2, 1.3, 1.6])
-
-    with c1:
-        uploaded_cv = st.file_uploader(
-            "Upload your current CV (PDF, DOCX or TXT)",
-            type=["pdf", "docx", "txt"],
-            key=f"cv_uploader__{u_epoch}",
-        )
-
-    with c2:
-        st.write("")
-        st.write("")
-        if st.button("↻ Reset CV", key="btn_reset_cv", use_container_width=True):
-            reset_cv_sections_1_to_4()
-            st.success("CV reset: Sections 1–4 cleared.")
-            st.rerun()
-
-    with c3:
-        st.write("")
-        st.write("")
-        if st.button("↻ Reset whole session", key="btn_reset_whole_session", use_container_width=True):
-            reset_whole_session_keep_login()
-            st.success("Session reset. You’re still signed in.")
-            st.rerun()
-
-
-# ============================================================
-# CV Upload + AI Autofill (ONE block only)  ✅ + reset buttons
-# ============================================================
-
+# ---------- safe setter ----------
 def _safe_set(key: str, value):
     """Set session_state[key] only when value is meaningful."""
     if isinstance(value, str):
@@ -3670,109 +3536,104 @@ def _safe_set(key: str, value):
         return
     st.session_state[key] = value
 
-# Backwards-compatible alias (if any older code calls __safe_set)
-__safe_set = _safe_set
 
-# ---- Premium reset buttons (do NOT touch subscriptions) ----
-def _reset_cv_only():
+# ---------- reset whole session (keep login/billing/policies) ----------
+def _reset_whole_session_keep_login():
     """
-    Clears CV/form-related state so user can start fresh without logging out.
-    Does NOT touch auth/user/session billing keys.
+    Clears CV form (Sections 1–4), uploads/parsing, job search, target job,
+    cover letter + downloads + snapshots/debug.
+    Keeps: user login, stripe/subscription config, policy acceptance.
     """
-    keys_to_clear = [
-        # uploader + parse flags
-        "cv_uploader",
-        "_cv_parsed", "_cv_autofill_enabled", "_just_autofilled_from_cv",
-        "_last_cv_fingerprint", "_skip_restore_personal_once",
 
-        # personal canonical fields
-        "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
+    PRESERVE_KEYS = {
+        # auth / identity
+        "user", "auth_token",
 
-        # skills + experience + education structures
-        "skills_text", "skills",
-        "experiences", "num_experiences", "parsed_num_experiences",
-        "education_items", "num_education",
-        "references",
+        # subscription/billing state (keep yours)
+        "subscription", "plan", "is_premium",
+        "PRICE_MONTHLY", "PRICE_PRO", "stripe",
 
-        # per-role widget keys (experience UI)
-        # remove the common keys you use in section 3
-    ]
-
-    # clear the fixed keys above
-    for k in keys_to_clear:
-        st.session_state.pop(k, None)
-
-    # clear dynamic experience widget keys (Role 1..5)
-    for k in list(st.session_state.keys()):
-        if isinstance(k, str) and (
-            k.startswith("job_title_")
-            or k.startswith("company_")
-            or k.startswith("exp_location_")
-            or k.startswith("start_date_")
-            or k.startswith("end_date_")
-            or k.startswith("description_")
-            or k.startswith("description_pending_")
-            or k.startswith("btn_role_ai_")
-        ):
-            st.session_state.pop(k, None)
-
-    # clear CV outputs only (not credits)
-    for k in ("cv_pdf_bytes", "cv_docx_bytes", "cv_last_template", "cv_last_fingerprint"):
-        st.session_state.pop(k, None)
-
-def _reset_whole_session_soft():
-    """
-    Soft reset: clears most app form data (CV + job + cover letter),
-    but keeps auth/user + subscription keys safe.
-    """
-    preserve_prefixes = ("stripe_",)
-    preserve_keys = {
-        "user", "auth_token", "subscription", "plan", "is_premium",
-        "accepted_policies", "accepted_policies_at", "accepted_policies_this_session",
+        # policies / consent
+        "accepted_policies", "accepted_policies_at",
+        "accepted_policies_this_session", "chk_policy_agree",
     }
 
+    PRESERVE_PREFIXES = ("stripe_",)
+
     for k in list(st.session_state.keys()):
-        if k in preserve_keys:
+        if k in PRESERVE_KEYS:
             continue
-        if isinstance(k, str) and k.startswith(preserve_prefixes):
+        if isinstance(k, str) and k.startswith(PRESERVE_PREFIXES):
             continue
         st.session_state.pop(k, None)
 
-
-# --------------------------------------------------
-# UI row for reset buttons (CV Upload area)
-# --------------------------------------------------
-RESET_NS = "cv_upload"  # namespace to avoid collisions
-
-r1, r2 = st.columns([1, 1])
-
-with r1:
-    if st.button(
-        "↻ Reset CV",
-        key=f"{RESET_NS}_reset_cv_btn",
-        use_container_width=True,
-    ):
-        _reset_cv_only()
-        st.success("CV form reset. You can upload a new CV or type manually.")
-        st.rerun()
-
-with r2:
-    if st.button(
-        "↻ Reset whole session",
-        key=f"{RESET_NS}_reset_session_btn",
-        use_container_width=True,
-    ):
-        _reset_whole_session_soft()
-        st.success("Session reset (kept login & policies).")
-        st.rerun()
+    # Reset epochs so widgets re-bind cleanly
+    st.session_state["form_epoch"] = int(st.session_state.get("form_epoch", 0) or 0) + 1
+    st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
+    st.session_state["cv_uploader_epoch"] = int(st.session_state.get("cv_uploader_epoch", 0) or 0) + 1
 
 
+# ---------- premium CTA style (scoped) ----------
+st.markdown(
+    """
+    <style>
+      div[data-testid="stVerticalBlock"] #premium-reset-wrap button {
+        background: linear-gradient(90deg, #ff2d55 0%, #ff3b30 100%) !important;
+        color: #fff !important;
+        border: 1px solid rgba(255,45,85,0.55) !important;
+        border-radius: 999px !important;
+        font-weight: 900 !important;
+        padding: 0.70rem 1.10rem !important;
+        box-shadow: 0 12px 35px rgba(255,45,85,0.22) !important;
+        width: 100% !important;
+      }
+      div[data-testid="stVerticalBlock"] #premium-reset-wrap button:hover {
+        box-shadow: 0 0 0 4px rgba(255,45,85,0.10), 0 18px 50px rgba(0,0,0,0.35) !important;
+        transform: translateY(-1px) !important;
+      }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# ---------- uploader + reset UI ----------
+st.session_state.setdefault("cv_uploader_epoch", 0)
+u_epoch = int(st.session_state.get("cv_uploader_epoch", 0) or 0)
+
+with st.container(border=True):
+    left, right = st.columns([3.2, 1.6])
+
+    with left:
+        uploaded_cv = st.file_uploader(
+            "Upload your current CV (PDF, DOCX or TXT)",
+            type=["pdf", "docx", "txt"],
+            key=f"cv_uploader__{u_epoch}",
+        )
+
+    with right:
+        st.markdown("<div id='premium-reset-wrap'></div>", unsafe_allow_html=True)
+        confirm_reset = st.checkbox(
+            "Confirm reset",
+            key=f"cv_confirm_reset__{u_epoch}",
+        )
+        if st.button(
+            "↻ Reset whole session",
+            key=f"cv_reset_whole_session__{u_epoch}",
+            disabled=not confirm_reset,
+            use_container_width=True,
+        ):
+            _reset_whole_session_keep_login()
+            st.success("Session reset (login + policies kept).")
+            st.rerun()
+
+
+# ---------- AI fill button ----------
 fill_clicked = locked_action_button(
     "Fill the form from this CV (AI)",
-    key="btn_fill_from_cv",
+    key=f"btn_fill_from_cv__{u_epoch}",
     feature_label="CV upload & parsing",
     counter_key="upload_parses",
-    require_login=True,          # 🔒 blocks guests
+    require_login=True,
     default_tab="Sign in",
     cooldown_name="upload_parse",
     cooldown_seconds=5,
@@ -3800,10 +3661,10 @@ if uploaded_cv is not None and fill_clicked:
         _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
 
-    # ✅ Apply parsed data (your existing function)
+    # Apply parsed data (your existing function)
     _apply_parsed_cv_to_session(parsed)
 
-    # ✅ FORCE Personal details keys to match YOUR NEW cv_* widgets
+    # Force Personal details into YOUR canonical cv_* keys
     _safe_set("cv_full_name", parsed.get("full_name") or parsed.get("name"))
     _safe_set("cv_email", parsed.get("email"))
     _safe_set("cv_phone", parsed.get("phone"))
@@ -3811,13 +3672,13 @@ if uploaded_cv is not None and fill_clicked:
     _safe_set("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
     _safe_set("cv_summary", parsed.get("summary") or parsed.get("professional_summary"))
 
-    # ✅ Flags so restore/default logic can’t wipe after rerun
+    # Flags so restore/default logic can’t wipe after rerun
     st.session_state["_cv_parsed"] = parsed
     st.session_state["_cv_autofill_enabled"] = True
     st.session_state["_just_autofilled_from_cv"] = True
     st.session_state["_skip_restore_personal_once"] = True
 
-    # ✅ usage counting (only for logged-in users)
+    # usage counting
     email_for_usage = (st.session_state.get("user") or {}).get("email")
     if email_for_usage:
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
