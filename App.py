@@ -3518,137 +3518,141 @@ Please ensure your details are reviewed before downloading.
 
 
 
-# =========================
-# CV Upload + AI Autofill (ONE block only)  ✅ + Premium Reset Buttons
-# =========================
-st.subheader("Upload an existing CV (optional)")
-st.caption("Upload a PDF/DOCX/TXT, then let AI fill the form for you.")
-
+# ---------- Premium Reset Buttons (FIXED: clears Section 2 + 4) ----------
 import hashlib
-
-# ---------- Helpers ----------
-def _safe_set(key: str, value):
-    if isinstance(value, str):
-        value = value.strip()
-    if value is not None and (not isinstance(value, str) or value.strip()):
-        st.session_state[key] = value
 
 def _bump_epoch(key: str) -> int:
     st.session_state[key] = int(st.session_state.get(key, 0) or 0) + 1
     return int(st.session_state[key])
 
-def clear_cv_upload_only():
-    """
-    Clears ONLY upload/parse transient state + resets the uploader widget.
-    Does NOT touch CV form fields, auth, credits, subscriptions, policies, job search, cover letter, templates.
-    """
-    # wipe transient upload/parse artifacts
-    for k in (
-        "_cv_parsed",
-        "_cv_autofill_enabled",
-        "_just_autofilled_from_cv",
-        "_skip_restore_personal_once",
-        "_last_cv_fingerprint",
-        "cv_upload_bytes",
-        "cv_upload_name",
-        "skills_pending",
-        "cv_summary_pending",
-    ):
+def _pop_keys_exact(keys: list[str]) -> None:
+    for k in keys:
         st.session_state.pop(k, None)
 
-    # important: reset uploader widget by changing its key
-    _bump_epoch("cv_uploader_epoch")
-
-def clear_cv_form_state_only():
-    """
-    Clears ONLY CV form state (Sections 1–4).
-    Does NOT touch auth, credits/subscriptions, policies, template_label, job search, cover letter.
-    """
-    # ---- Section 1 canonical keys ----
-    for k in (
-        "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
-        "cv_summary_pending",
-    ):
-        st.session_state.pop(k, None)
-
-    # ---- Section 2 ----
-    for k in ("skills_text", "skills_pending"):
-        st.session_state.pop(k, None)
-
-    # ---- Section 3 (experience) ----
-    st.session_state.pop("num_experiences", None)
-    st.session_state.pop("parsed_num_experiences", None)
-    st.session_state.pop("ai_running_role", None)
-    st.session_state.pop("ai_run_now", None)
-    st.session_state.pop("_just_autofilled_from_cv", None)
-
-    # remove per-role widget keys (max 5 roles)
-    for i in range(5):
-        for k in (
-            f"job_title_{i}",
-            f"company_{i}",
-            f"exp_location_{i}",
-            f"start_date_{i}",
-            f"end_date_{i}",
-            f"description_{i}",
-            f"description_pending_{i}",
-        ):
+def _pop_keys_by_prefix(prefixes: tuple[str, ...]) -> None:
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith(prefixes):
             st.session_state.pop(k, None)
 
-    # ---- Education / references (match your canonical keys) ----
-    for k in ("education_items", "num_education", "references"):
-        st.session_state.pop(k, None)
+def _pop_keys_by_contains(chunks: tuple[str, ...]) -> None:
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and any(c in k for c in chunks):
+            st.session_state.pop(k, None)
 
-    # ---- Upload/parse flags (safe to clear here too) ----
-    for k in (
-        "_cv_parsed",
-        "_cv_autofill_enabled",
-        "_skip_restore_personal_once",
-        "_last_cv_fingerprint",
-        "cv_upload_bytes",
-        "cv_upload_name",
-    ):
-        st.session_state.pop(k, None)
+def reset_cv_sections_1_to_4():
+    """
+    Reset ONLY CV form Sections 1–4 + CV generation bytes.
+    Keeps auth, billing/subscriptions, policies, job-search, target job, cover letter.
+    """
 
-    # ---- Optional: clear generated CV download artifacts so buttons don't linger ----
-    for k in ("cv_pdf_bytes", "cv_docx_bytes", "cv_last_fingerprint", "cv_last_template"):
-        st.session_state.pop(k, None)
+    # --- Canonical section keys ---
+    _pop_keys_exact([
+        # Section 1 (canonical)
+        "cv_full_name", "cv_title", "cv_email", "cv_phone", "cv_location", "cv_summary",
+        "cv_summary_pending",
 
-    # IMPORTANT: bump form epoch so any epoch-bound widgets get fresh keys
-    _bump_epoch("form_epoch")
+        # Section 2 (canonical)
+        "skills_text", "skills_pending",
 
-    # Also reset uploader widget so the UI feels "clean"
+        # Section 3 (canonical)
+        "num_experiences", "parsed_num_experiences",
+        "ai_running_role", "ai_run_now",
+        "_just_autofilled_from_cv",
+
+        # Section 4 (canonical)
+        "education_items", "num_education",
+        "references",
+
+        # CV upload/parse flags (safe to reset with CV)
+        "_cv_parsed", "_cv_autofill_enabled", "_skip_restore_personal_once",
+        "_last_cv_fingerprint", "cv_upload_bytes", "cv_upload_name",
+
+        # Generated CV download artifacts/buttons
+        "cv_pdf_bytes", "cv_docx_bytes", "cv_last_fingerprint", "cv_last_template",
+    ])
+
+    # --- Wipe per-widget keys for Section 1 epoch keys (cv_*__{epoch}) ---
+    _pop_keys_by_contains(("cv_full_name__", "cv_title__", "cv_email__", "cv_phone__", "cv_location__", "cv_summary__"))
+
+    # --- Wipe per-role widget keys (Section 3) ---
+    # job_title_0, company_0, description_0, description_pending_0, etc.
+    _pop_keys_by_prefix((
+        "job_title_", "company_", "exp_location_", "start_date_", "end_date_",
+        "description_", "description_pending_", "btn_role_ai_",
+    ))
+
+    # --- Wipe common education widget patterns (Section 4) ---
+    # (covers most setups without knowing your exact widget keys)
+    _pop_keys_by_prefix((
+        "edu_", "education_", "degree_", "institution_", "school_", "uni_",
+        "qualification_", "course_", "edu_location_", "edu_start_", "edu_end_",
+    ))
+
+    # --- Wipe common reference widget patterns (if you have them) ---
+    _pop_keys_by_prefix(("ref_", "reference_", "references_"))
+
+    # Reset uploader widget (so file actually clears)
     _bump_epoch("cv_uploader_epoch")
 
+    # IMPORTANT: bump form_epoch so any epoch-bound widgets rebind cleanly
+    _bump_epoch("form_epoch")
 
-# ---------- Premium UI row ----------
+def reset_whole_session_keep_login():
+    """
+    Wipe ALL working state (CV + job search + target job + cover letter + downloads + snapshots/debug),
+    but keep login/session user + subscription/billing config.
+    """
+    PRESERVE = {
+        # auth / identity
+        "user",
+
+        # billing/subscriptions config + stripe objects/keys you may have
+        "PRICE_MONTHLY", "PRICE_PRO", "stripe",
+
+        # policy acceptance (optional: keep consent so you don't force re-accept)
+        "accepted_policies", "accepted_policies_at",
+        "accepted_policies_this_session", "chk_policy_agree",
+    }
+
+    for k in list(st.session_state.keys()):
+        if k in PRESERVE:
+            continue
+        st.session_state.pop(k, None)
+
+    # rebuild epochs so UI rebinds cleanly
+    st.session_state["form_epoch"] = 0
+    st.session_state["cover_epoch"] = 0
+    st.session_state["cv_uploader_epoch"] = 0
+
+
+# --- Uploader + reset row ---
 st.session_state.setdefault("cv_uploader_epoch", 0)
 u_epoch = int(st.session_state.get("cv_uploader_epoch", 0) or 0)
 
 with st.container(border=True):
-    c1, c2, c3 = st.columns([3.2, 1.3, 1.3])
+    c1, c2, c3 = st.columns([3.2, 1.3, 1.6])
 
     with c1:
         uploaded_cv = st.file_uploader(
             "Upload your current CV (PDF, DOCX or TXT)",
             type=["pdf", "docx", "txt"],
-            key=f"cv_uploader__{u_epoch}",  # ✅ epoch key so we can reset uploader cleanly
+            key=f"cv_uploader__{u_epoch}",
         )
 
     with c2:
         st.write("")
         st.write("")
-        if st.button("↻ Reset CV form", key="btn_reset_cv_form", use_container_width=True):
-            clear_cv_form_state_only()
-            st.success("CV form reset. Start fresh.")
+        if st.button("↻ Reset CV", key="btn_reset_cv", use_container_width=True):
+            reset_cv_sections_1_to_4()
+            st.success("CV reset: Sections 1–4 cleared.")
             st.rerun()
 
     with c3:
         st.write("")
         st.write("")
-        if st.button("↻ Clear upload", key="btn_clear_cv_upload", use_container_width=True):
-            clear_cv_upload_only()
-            st.success("Upload cleared.")
+        if st.button("↻ Reset whole session", key="btn_reset_whole_session", use_container_width=True):
+            reset_whole_session_keep_login()
+            st.success("Session reset. You’re still signed in.")
             st.rerun()
 
 
