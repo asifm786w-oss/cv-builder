@@ -3725,7 +3725,7 @@ def _reset_whole_session_soft():
     Soft reset: clears most app form data (CV + job + cover letter),
     but keeps auth/user + subscription keys safe.
     """
-    preserve_prefixes = ("stripe_",)  # keep if you store stripe stuff in session
+    preserve_prefixes = ("stripe_",)
     preserve_keys = {
         "user", "auth_token", "subscription", "plan", "is_premium",
         "accepted_policies", "accepted_policies_at", "accepted_policies_this_session",
@@ -3734,20 +3734,34 @@ def _reset_whole_session_soft():
     for k in list(st.session_state.keys()):
         if k in preserve_keys:
             continue
-        if any(isinstance(k, str) and k.startswith(p) for p in preserve_prefixes):
+        if isinstance(k, str) and k.startswith(preserve_prefixes):
             continue
         st.session_state.pop(k, None)
 
-# UI row for reset buttons (place near uploader)
+
+# --------------------------------------------------
+# UI row for reset buttons (CV Upload area)
+# --------------------------------------------------
+RESET_NS = "cv_upload"  # namespace to avoid collisions
+
 r1, r2 = st.columns([1, 1])
+
 with r1:
-    if st.button("↻ Reset CV", key="btn_reset_cv", use_container_width=True):
+    if st.button(
+        "↻ Reset CV",
+        key=f"{RESET_NS}_reset_cv_btn",
+        use_container_width=True,
+    ):
         _reset_cv_only()
         st.success("CV form reset. You can upload a new CV or type manually.")
         st.rerun()
 
 with r2:
-    if st.button("↻ Reset whole session", key="btn_reset_whole_session", use_container_width=True):
+    if st.button(
+        "↻ Reset whole session",
+        key=f"{RESET_NS}_reset_session_btn",
+        use_container_width=True,
+    ):
         _reset_whole_session_soft()
         st.success("Session reset (kept login & policies).")
         st.rerun()
