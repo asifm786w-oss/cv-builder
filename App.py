@@ -388,9 +388,7 @@ def mark_policies_accepted(email: str) -> None:
     )
 
 
-
-
-def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str) -> str:
+def create_subscription_checkout_session(price_id: str, pack: str, customer_email: str, user_id: int) -> str:
     app_url = (os.getenv("APP_URL") or "http://localhost:8501").rstrip("/")
     success_url = os.getenv("SUCCESS_URL") or f"{app_url}/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url  = os.getenv("CANCEL_URL")  or f"{app_url}/pricing"
@@ -402,7 +400,14 @@ def create_subscription_checkout_session(price_id: str, pack: str, customer_emai
         allow_promotion_codes=True,
         success_url=success_url,
         cancel_url=cancel_url,
-        metadata={"pack": pack, "app_user_email": customer_email},
+
+        # ✅ deterministic mapping back to DB user
+        client_reference_id=str(user_id),
+        metadata={
+            "user_id": str(user_id),
+            "pack": pack,
+            "app_user_email": customer_email,  # optional debug only
+        },
     )
     return session.url
 
@@ -4960,8 +4965,11 @@ st.header("Pricing")
 
 col_free, col_monthly, col_pro = st.columns(3)
 
-email_for_checkout = (st.session_state.get("user") or {}).get("email")
+user = st.session_state.get("user") or {}
+email_for_checkout = user.get("email")
+user_id_for_checkout = user.get("id")  # 🔑 REQUIRED
 
+# ---------- FREE ----------
 with col_free:
     st.subheader("Free")
     st.markdown(
@@ -4972,6 +4980,7 @@ with col_free:
         "- Upgrade anytime\n"
     )
 
+# ---------- MONTHLY ----------
 with col_monthly:
     st.subheader("Monthly")
     st.markdown(
@@ -4980,30 +4989,33 @@ with col_monthly:
         "- PDF + Word downloads\n"
         "- Email support\n"
         "- Cancel anytime\n"
-        "\n"       
     )
 
     if st.button("Start Monthly Subscription", key="start_monthly_sub"):
-        if not email_for_checkout:
+        if not email_for_checkout or not user_id_for_checkout:
             st.warning("Please sign in first.")
             st.stop()
+
         if not PRICE_MONTHLY:
             st.error("Missing STRIPE_PRICE_MONTHLY in Railway Variables.")
             st.stop()
+
         if not stripe.api_key:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
             st.stop()
 
         try:
             url = create_subscription_checkout_session(
-                PRICE_MONTHLY,
+                price_id=PRICE_MONTHLY,
                 pack="monthly",
                 customer_email=email_for_checkout,
+                user_id=int(user_id_for_checkout),  # 🔑 PASS INTERNAL USER ID
             )
             st.link_button("Continue to secure checkout", url)
         except Exception as e:
             st.error(f"Stripe error: {e}")
 
+# ---------- PRO ----------
 with col_pro:
     st.subheader("Pro")
     st.markdown(
@@ -5012,30 +5024,33 @@ with col_pro:
         "- PDF + Word downloads\n"
         "- Priority support\n"
         "- Cancel anytime\n"
-        "\n"        
     )
 
     if st.button("Start Pro Subscription", key="start_pro_sub"):
-        if not email_for_checkout:
+        if not email_for_checkout or not user_id_for_checkout:
             st.warning("Please sign in first.")
             st.stop()
+
         if not PRICE_PRO:
             st.error("Missing STRIPE_PRICE_PRO in Railway Variables.")
             st.stop()
+
         if not stripe.api_key:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
             st.stop()
 
         try:
             url = create_subscription_checkout_session(
-                PRICE_PRO,
+                price_id=PRICE_PRO,
                 pack="pro",
                 customer_email=email_for_checkout,
+                user_id=int(user_id_for_checkout),  # 🔑 PASS INTERNAL USER ID
             )
             st.link_button("Continue to secure checkout", url)
         except Exception as e:
             st.error(f"Stripe error: {e}")
 
+# ---------- ENTERPRISE ----------
 st.markdown("---")
 st.subheader("Enterprise (organisations & programmes)")
 st.markdown(
@@ -5043,21 +5058,20 @@ st.markdown(
     "- Provide access for participants without individual charges\n"
     "- Suitable for charities, training providers, community organisations and public-sector programmes\n"
     "- Option to pilot locally in Walsall, then scale regionally/nationally\n"
-    "- Includes onboarding and support\n"
-    "\n"
-    "**Enquire:** support@affiliateworldcommissions.com\n"
+    "- Includes onboarding and support\n\n"
+    "**Enquire:** support@affiliateworldcommissions.com"
 )
 
 st.caption(
     "Subscriptions fund the platform and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
-
 def open_policy(scope: str, slug: str) -> None:
     snapshot_form_state()
     st.session_state["_just_returned_from_policy"] = True
 
     # ... your existing modal-open state set logic ...
+
 # ==============================================
 # FOOTER POLICY BUTTONS (snapshot before navigate)
 # ============================================================
