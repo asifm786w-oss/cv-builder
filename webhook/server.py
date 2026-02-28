@@ -299,50 +299,50 @@ def stripe_webhook():
     return jsonify({"status": "ignored"}), 200
 
 
-# ------------------------------------------------------------
-# C) SUBSCRIPTION STATE CHANGES (NO CREDITS)
-# ------------------------------------------------------------
-if typ in ("customer.subscription.updated", "customer.subscription.deleted"):
-    sub = obj
+    # ------------------------------------------------------------
+    # C) SUBSCRIPTION STATE CHANGES (NO CREDITS)
+    # ------------------------------------------------------------
+    if typ in ("customer.subscription.updated", "customer.subscription.deleted"):
+        sub = obj
 
-    subscription_id = (sub.get("id") or "").strip()
-    customer_id = (sub.get("customer") or "").strip() or None
-    status = (sub.get("status") or "unknown")
-    period_end = sub.get("current_period_end")
-    cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
+        subscription_id = (sub.get("id") or "").strip()
+        customer_id = (sub.get("customer") or "").strip() or None
+        status = (sub.get("status") or "unknown")
+        period_end = sub.get("current_period_end")
+        cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
 
-    plan = None
-    for it in ((sub.get("items") or {}).get("data") or []):
-        pid = ((it.get("price") or {}).get("id") or "").strip()
-        plan = plan_from_price(pid)
-        if plan:
-            break
+        plan = None
+        for it in ((sub.get("items") or {}).get("data") or []):
+            pid = ((it.get("price") or {}).get("id") or "").strip()
+            plan = plan_from_price(pid)
+            if plan:
+                break
 
-    email = None
-    if customer_id:
-        cust = stripe.Customer.retrieve(customer_id)
-        email = (cust.get("email") or "").strip().lower()
+        email = None
+        if customer_id:
+            cust = stripe.Customer.retrieve(customer_id)
+            email = (cust.get("email") or "").strip().lower()
 
-    if not email:
-        return jsonify({"status": "ignored", "reason": "missing_email"}), 200
+        if not email:
+            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
-    user_id = find_user_id_by_email(email)
-    if not user_id:
-        return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
+        user_id = find_user_id_by_email(email)
+        if not user_id:
+            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
 
-    upsert_subscription(
-        user_id=user_id,
-        customer_id=customer_id,
-        subscription_id=subscription_id,
-        plan=plan or "free",
-        status=status,
-        period_end_unix=period_end,
-        cancel_at_period_end=cancel_at_period_end,
-    )
+        upsert_subscription(
+            user_id=user_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            plan=plan or "free",
+            status=status,
+            period_end_unix=period_end,
+            cancel_at_period_end=cancel_at_period_end,
+        )
 
-    if status in ("active", "trialing") and plan:
-        set_user_plan(user_id, plan)
-    else:
-        set_user_plan(user_id, "free")
+        if status in ("active", "trialing") and plan:
+            set_user_plan(user_id, plan)
+        else:
+            set_user_plan(user_id, "free")
 
-    return jsonify({"status": "ok"}), 200
+        return jsonify({"status": "ok"}), 200
