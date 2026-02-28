@@ -192,7 +192,7 @@ def extract_price_id_from_invoice(invoice: dict) -> str:
     return ""
 
 
-@app.post("/stripe/webhook")
+@app.route("/stripe/webhook", methods=["POST"])
 def stripe_webhook():
     payload = request.get_data(as_text=False)
     sig_header = request.headers.get("Stripe-Signature", "")
@@ -211,135 +211,92 @@ def stripe_webhook():
     except Exception as e:
         return jsonify({"error": str(e)}), 400
 
-    event_id = event.get("id", "")
-    if event_id and not mark_event_processed(event_id):
-        return jsonify({"status": "duplicate_ignored"}), 200
-
     typ = event.get("type")
     obj = (event.get("data") or {}).get("object") or {}
 
-# ------------------------------------------------------------
-# A) CHECKOUT COMPLETE (NO CREDITS HERE — SYNC ONLY)
-# ------------------------------------------------------------
-if typ == "checkout.session.completed":
-    session = obj
-    metadata = session.get("metadata") or {}
-    pack = (metadata.get("pack") or "").strip().lower()
+    # ------------------------------------------------------------
+    # A) FIRST PAYMENT (checkout.session.completed)
+    # ------------------------------------------------------------
+    if typ == "checkout.session.completed":
+        session = obj
+        metadata = session.get("metadata") or {}
+        pack = (metadata.get("pack") or "").strip().lower()
 
-    if pack not in ALLOWED_PLANS:
-        return jsonify({"status": "ignored", "reason": "invalid_pack"}), 200
+        if pack not in ALLOWED_PLANS:
+            return jsonify({"status": "ignored", "reason": "invalid_pack"}), 200
 
-    email = (
-        (metadata.get("app_user_email") or "").strip().lower()
-        or ((session.get("customer_details") or {}).get("email") or "").strip().lower()
-        or (session.get("customer_email") or "").strip().lower()
-    )
-
-    customer_id = (session.get("customer") or "").strip() or None
-    subscription_id = (session.get("subscription") or "").strip() or None
-
-    if not email:
-        return jsonify({"status": "ignored", "reason": "missing_email"}), 200
-
-    user_id = find_user_id_by_email(email)
-    if not user_id:
-        return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
-
-    if subscription_id:
-        sub = stripe.Subscription.retrieve(subscription_id)
-        upsert_subscription(
-            user_id=user_id,
-            customer_id=customer_id,
-            subscription_id=subscription_id,
-            plan=pack,
-            status=sub.get("status"),
-            period_end_unix=sub.get("current_period_end"),
-            cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
+        email = (
+            (metadata.get("app_user_email") or "").strip().lower()
+            or ((session.get("customer_details") or {}).get("email") or "").strip().lower()
+            or (session.get("customer_email") or "").strip().lower()
         )
 
-        if sub.get("status") in ("active", "trialing"):
-            set_user_plan(user_id, pack)
+        if not email:
+            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
-    # 🚫 NO CREDIT GRANT HERE
-    return jsonify({"status": "ok", "credits": "not_granted_here"}), 200
+        user_id = find_user_id_by_email(email)
+        if not user_id:
+            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
 
+        # IMPORTANT: do NOT grant credits here
+        # checkout.session.completed fires BEFORE invoice is paid
+        return jsonify({"status": "ok", "note": "checkout_recorded"}), 200
 
-# ------------------------------------------------------------
-# B) PAYMENTS / RENEWALS (ONLY PLACE CREDITS ARE GRANTED)
-# ------------------------------------------------------------
-if typ == "invoice.payment_succeeded":
-    invoice = obj
+    # ------------------------------------------------------------
+    # B) CREDIT GRANT — ONLY HERE (invoice.payment_succeeded)
+    # ------------------------------------------------------------
+    if typ in ("invoice.paid", "invoice.payment_succeeded"):
+        invoice = obj
+        invoice_id = invoice.get("id")
+        customer_id = invoice.get("customer")
+        subscription_id = invoice.get("subscription")
 
-    billing_reason = (invoice.get("billing_reason") or "").strip()
-    if billing_reason not in ("subscription_create", "subscription_cycle"):
-        return jsonify({
-            "status": "ignored",
-            "reason": "not_subscription_charge",
-            "billing_reason": billing_reason
-        }), 200
+        price_id = extract_price_id_from_invoice(invoice)
+        plan = plan_from_price(price_id)
 
-    invoice_id = (invoice.get("id") or "").strip()
-    customer_id = (invoice.get("customer") or "").strip() or None
-    subscription_id = (invoice.get("subscription") or "").strip() or None
+        if plan not in ALLOWED_PLANS:
+            return jsonify({"status": "ignored", "reason": "unknown_price"}), 200
 
-    price_id = extract_price_id_from_invoice(invoice)
-    plan = plan_from_price(price_id)
+        email = (invoice.get("customer_email") or "").strip().lower()
+        if not email and customer_id:
+            cust = stripe.Customer.retrieve(customer_id)
+            email = (cust.get("email") or "").strip().lower()
 
-    if plan not in ALLOWED_PLANS:
-        return jsonify({"status": "ignored", "reason": "unknown_price"}), 200
+        if not email:
+            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
-    email = (invoice.get("customer_email") or "").strip().lower()
-    if not email and customer_id:
-        cust = stripe.Customer.retrieve(customer_id)
-        email = (cust.get("email") or "").strip().lower()
+        user_id = find_user_id_by_email(email)
+        if not user_id:
+            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
 
-    if not email:
-        return jsonify({"status": "ignored", "reason": "missing_email"}), 200
-
-    user_id = find_user_id_by_email(email)
-    if not user_id:
-        return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
-
-    status = "unknown"
-    period_end = None
-    cancel_at_period_end = False
-
-    if subscription_id:
         sub = stripe.Subscription.retrieve(subscription_id)
-        status = sub.get("status")
         period_end = sub.get("current_period_end")
-        cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
 
         upsert_subscription(
             user_id=user_id,
             customer_id=customer_id,
             subscription_id=subscription_id,
             plan=plan,
-            status=status,
+            status=sub.get("status"),
             period_end_unix=period_end,
-            cancel_at_period_end=cancel_at_period_end,
+            cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
         )
 
-    if status in ("active", "trialing"):
         set_user_plan(user_id, plan)
 
-    cv_amt, ai_amt = credits_for_plan(plan)
-    expires_at = None if CREDIT_STACKING else period_end
+        cv_amt, ai_amt = credits_for_plan(plan)
 
-    inserted = insert_credit_grant(
-        user_id=user_id,
-        source=f"stripe_invoice:{invoice_id}",
-        cv_amount=cv_amt,
-        ai_amount=ai_amt,
-        expires_at_unix=expires_at,
-        stripe_invoice_id=invoice_id,  # 🔒 prevents duplicates forever
-    )
+        insert_credit_grant(
+            user_id=user_id,
+            source=f"stripe_invoice:{invoice_id}",
+            cv_amount=cv_amt,
+            ai_amount=ai_amt,
+            expires_at_unix=period_end,
+        )
 
-    return jsonify({
-        "status": "ok",
-        "granted": inserted,
-        "invoice": invoice_id
-    }), 200
+        return jsonify({"status": "ok", "credits_granted": True}), 200
+
+    return jsonify({"status": "ignored"}), 200
 
 
 # ------------------------------------------------------------
