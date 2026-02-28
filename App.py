@@ -4600,8 +4600,9 @@ if ai_cover_letter_clicked:
             st.session_state["cover_letter"] = final_letter
 
             # Seed the epoch editor key so it renders immediately
-            cl_box_key = f"cover_letter_box__{epoch}"
-            st.session_state[cl_box_key] = final_letter
+            st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
+            new_ce = st.session_state["cover_epoch"]
+            st.session_state[f"cover_letter_box__{new_ce}"] = final_letter
 
             st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
             if email_for_usage:
