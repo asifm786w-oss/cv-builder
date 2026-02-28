@@ -218,194 +218,174 @@ def stripe_webhook():
     typ = event.get("type")
     obj = (event.get("data") or {}).get("object") or {}
 
-    # ------------------------------------------------------------
-    # A) FIRST PAYMENT: checkout.session.completed (metadata.pack)
-    # ------------------------------------------------------------
-    if typ == "checkout.session.completed":
-        session = obj
-        metadata = session.get("metadata") or {}
-        pack = (metadata.get("pack") or "").strip().lower()
+# ------------------------------------------------------------
+# A) CHECKOUT COMPLETE (NO CREDITS HERE — SYNC ONLY)
+# ------------------------------------------------------------
+if typ == "checkout.session.completed":
+    session = obj
+    metadata = session.get("metadata") or {}
+    pack = (metadata.get("pack") or "").strip().lower()
 
-        # validate pack
-        if pack not in ALLOWED_PLANS:
-            return jsonify({"status": "ignored", "reason": "invalid_pack", "pack": pack}), 200
+    if pack not in ALLOWED_PLANS:
+        return jsonify({"status": "ignored", "reason": "invalid_pack"}), 200
 
-        email = (
-            (metadata.get("app_user_email") or "").strip().lower()
-            or ((session.get("customer_details") or {}).get("email") or "").strip().lower()
-            or (session.get("customer_email") or "").strip().lower()
-        )
+    email = (
+        (metadata.get("app_user_email") or "").strip().lower()
+        or ((session.get("customer_details") or {}).get("email") or "").strip().lower()
+        or (session.get("customer_email") or "").strip().lower()
+    )
 
-        customer_id = (session.get("customer") or "").strip() or None
-        subscription_id = (session.get("subscription") or "").strip() or None
+    customer_id = (session.get("customer") or "").strip() or None
+    subscription_id = (session.get("subscription") or "").strip() or None
 
-        if not email:
-            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
+    if not email:
+        return jsonify({"status": "ignored", "reason": "missing_email"}), 200
 
-        user_id = find_user_id_by_email(email)
-        if not user_id:
-            # don't auto-create because users.password_hash is NOT NULL in your schema
-            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
+    user_id = find_user_id_by_email(email)
+    if not user_id:
+        return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
 
-        # Fetch subscription status/period_end (important for expiry + plan safety)
-        status = "unknown"
-        period_end = None
-        cancel_at_period_end = False
-
-        if subscription_id:
-            sub = stripe.Subscription.retrieve(subscription_id)
-            status = (sub.get("status") or "unknown")
-            period_end = sub.get("current_period_end")
-            cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
-
-            upsert_subscription(
-                user_id=user_id,
-                customer_id=customer_id,
-                subscription_id=subscription_id,
-                plan=pack,
-                status=status,
-                period_end_unix=period_end,
-                cancel_at_period_end=cancel_at_period_end,
-            )
-
-        # ✅ plan sync (treat trialing as premium too)
-        if status in ("active", "trialing") or not subscription_id:
-            set_user_plan(user_id, pack)
-
-        cv_amt, ai_amt = credits_for_plan(pack)
-        expires_at = None if CREDIT_STACKING else period_end
-
-        inserted = insert_credit_grant(
-            user_id=user_id,
-            source=f"stripe_checkout:{session.get('id')}",
-            cv_amount=cv_amt,
-            ai_amount=ai_amt,
-            expires_at_unix=expires_at,
-        )
-
-        return jsonify({"status": "ok", "granted": True, "inserted": inserted}), 200
-
-    # ------------------------------------------------------------
-    # B) RENEWALS: invoice.paid / invoice.payment_succeeded
-    # ------------------------------------------------------------
-    if typ in ("invoice.paid", "invoice.payment_succeeded"):
-        invoice = obj
-        invoice_id = (invoice.get("id") or "").strip()
-        customer_id = (invoice.get("customer") or "").strip() or None
-        subscription_id = (invoice.get("subscription") or "").strip() or None
-
-        price_id = extract_price_id_from_invoice(invoice)
-        plan = plan_from_price(price_id)
-
-        if plan not in ALLOWED_PLANS:
-            return jsonify({"status": "ignored", "reason": "unknown_price", "price_id": price_id}), 200
-
-        email = (invoice.get("customer_email") or "").strip().lower()
-        if not email and customer_id:
-            cust = stripe.Customer.retrieve(customer_id)
-            email = (cust.get("email") or "").strip().lower()
-
-        if not email:
-            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
-
-        user_id = find_user_id_by_email(email)
-        if not user_id:
-            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
-
-        status = "unknown"
-        period_end = None
-        cancel_at_period_end = False
-
-        if subscription_id:
-            sub = stripe.Subscription.retrieve(subscription_id)
-            status = (sub.get("status") or "unknown")
-            period_end = sub.get("current_period_end")
-            cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
-
-            upsert_subscription(
-                user_id=user_id,
-                customer_id=customer_id,
-                subscription_id=subscription_id,
-                plan=plan,
-                status=status,
-                period_end_unix=period_end,
-                cancel_at_period_end=cancel_at_period_end,
-            )
-
-        # ✅ keep plan synced on renewals
-        if status in ("active", "trialing") or not subscription_id:
-            set_user_plan(user_id, plan)
-
-        cv_amt, ai_amt = credits_for_plan(plan)
-        expires_at = None if CREDIT_STACKING else period_end
-
-        inserted = insert_credit_grant(
-            user_id=user_id,
-            source=f"stripe_invoice:{invoice_id}",
-            cv_amount=cv_amt,
-            ai_amount=ai_amt,
-            expires_at_unix=expires_at,
-        )
-
-        return jsonify({"status": "ok", "granted": True, "inserted": inserted}), 200
-
-    # ------------------------------------------------------------
-    # C) SUBSCRIPTION STATE CHANGES: customer.subscription.updated/deleted
-    #    This is what prevents "stuck on Pro forever" when canceled.
-    # ------------------------------------------------------------
-    if typ in ("customer.subscription.updated", "customer.subscription.deleted"):
-        sub = obj
-        subscription_id = (sub.get("id") or "").strip()
-        customer_id = (sub.get("customer") or "").strip() or None
-        status = (sub.get("status") or "unknown")
-        period_end = sub.get("current_period_end")
-        cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
-
-        # Determine plan from subscription items -> price id
-        plan = None
-        items = (((sub.get("items") or {}).get("data")) or [])
-        for it in items:
-            price = (it.get("price") or {})
-            pid = (price.get("id") or "").strip()
-            plan = plan_from_price(pid)
-            if plan:
-                break
-
-        # Need an email -> map customer -> email -> user
-        email = None
-        if customer_id:
-            cust = stripe.Customer.retrieve(customer_id)
-            email = (cust.get("email") or "").strip().lower()
-
-        if not email:
-            return jsonify({"status": "ignored", "reason": "missing_email"}), 200
-
-        user_id = find_user_id_by_email(email)
-        if not user_id:
-            return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
-
-        # Update subscriptions table (even if plan unknown, still store status)
+    if subscription_id:
+        sub = stripe.Subscription.retrieve(subscription_id)
         upsert_subscription(
             user_id=user_id,
             customer_id=customer_id,
             subscription_id=subscription_id,
-            plan=plan or "free",
+            plan=pack,
+            status=sub.get("status"),
+            period_end_unix=sub.get("current_period_end"),
+            cancel_at_period_end=bool(sub.get("cancel_at_period_end")),
+        )
+
+        if sub.get("status") in ("active", "trialing"):
+            set_user_plan(user_id, pack)
+
+    # 🚫 NO CREDIT GRANT HERE
+    return jsonify({"status": "ok", "credits": "not_granted_here"}), 200
+
+
+# ------------------------------------------------------------
+# B) PAYMENTS / RENEWALS (ONLY PLACE CREDITS ARE GRANTED)
+# ------------------------------------------------------------
+if typ == "invoice.payment_succeeded":
+    invoice = obj
+
+    billing_reason = (invoice.get("billing_reason") or "").strip()
+    if billing_reason not in ("subscription_create", "subscription_cycle"):
+        return jsonify({
+            "status": "ignored",
+            "reason": "not_subscription_charge",
+            "billing_reason": billing_reason
+        }), 200
+
+    invoice_id = (invoice.get("id") or "").strip()
+    customer_id = (invoice.get("customer") or "").strip() or None
+    subscription_id = (invoice.get("subscription") or "").strip() or None
+
+    price_id = extract_price_id_from_invoice(invoice)
+    plan = plan_from_price(price_id)
+
+    if plan not in ALLOWED_PLANS:
+        return jsonify({"status": "ignored", "reason": "unknown_price"}), 200
+
+    email = (invoice.get("customer_email") or "").strip().lower()
+    if not email and customer_id:
+        cust = stripe.Customer.retrieve(customer_id)
+        email = (cust.get("email") or "").strip().lower()
+
+    if not email:
+        return jsonify({"status": "ignored", "reason": "missing_email"}), 200
+
+    user_id = find_user_id_by_email(email)
+    if not user_id:
+        return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
+
+    status = "unknown"
+    period_end = None
+    cancel_at_period_end = False
+
+    if subscription_id:
+        sub = stripe.Subscription.retrieve(subscription_id)
+        status = sub.get("status")
+        period_end = sub.get("current_period_end")
+        cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
+
+        upsert_subscription(
+            user_id=user_id,
+            customer_id=customer_id,
+            subscription_id=subscription_id,
+            plan=plan,
             status=status,
             period_end_unix=period_end,
             cancel_at_period_end=cancel_at_period_end,
         )
 
-        # Sync users.plan
-        if status in ("active", "trialing") and plan in ALLOWED_PLANS:
-            set_user_plan(user_id, plan)
-        else:
-            set_user_plan(user_id, "free")
+    if status in ("active", "trialing"):
+        set_user_plan(user_id, plan)
 
-        return jsonify({"status": "ok"}), 200
+    cv_amt, ai_amt = credits_for_plan(plan)
+    expires_at = None if CREDIT_STACKING else period_end
+
+    inserted = insert_credit_grant(
+        user_id=user_id,
+        source=f"stripe_invoice:{invoice_id}",
+        cv_amount=cv_amt,
+        ai_amount=ai_amt,
+        expires_at_unix=expires_at,
+        stripe_invoice_id=invoice_id,  # 🔒 prevents duplicates forever
+    )
+
+    return jsonify({
+        "status": "ok",
+        "granted": inserted,
+        "invoice": invoice_id
+    }), 200
+
+
+# ------------------------------------------------------------
+# C) SUBSCRIPTION STATE CHANGES (NO CREDITS)
+# ------------------------------------------------------------
+if typ in ("customer.subscription.updated", "customer.subscription.deleted"):
+    sub = obj
+
+    subscription_id = (sub.get("id") or "").strip()
+    customer_id = (sub.get("customer") or "").strip() or None
+    status = (sub.get("status") or "unknown")
+    period_end = sub.get("current_period_end")
+    cancel_at_period_end = bool(sub.get("cancel_at_period_end"))
+
+    plan = None
+    for it in ((sub.get("items") or {}).get("data") or []):
+        pid = ((it.get("price") or {}).get("id") or "").strip()
+        plan = plan_from_price(pid)
+        if plan:
+            break
+
+    email = None
+    if customer_id:
+        cust = stripe.Customer.retrieve(customer_id)
+        email = (cust.get("email") or "").strip().lower()
+
+    if not email:
+        return jsonify({"status": "ignored", "reason": "missing_email"}), 200
+
+    user_id = find_user_id_by_email(email)
+    if not user_id:
+        return jsonify({"status": "ignored", "reason": "no_matching_user"}), 200
+
+    upsert_subscription(
+        user_id=user_id,
+        customer_id=customer_id,
+        subscription_id=subscription_id,
+        plan=plan or "free",
+        status=status,
+        period_end_unix=period_end,
+        cancel_at_period_end=cancel_at_period_end,
+    )
+
+    if status in ("active", "trialing") and plan:
+        set_user_plan(user_id, plan)
+    else:
+        set_user_plan(user_id, "free")
 
     return jsonify({"status": "ok"}), 200
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8080"))
-    app.run(host="0.0.0.0", port=port)
