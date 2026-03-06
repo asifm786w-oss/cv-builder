@@ -4721,27 +4721,36 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
     cl_box_key = f"cover_letter_box__{cover_epoch}"
 
+    # ✅ FIX: sync helper ensures canonical updates on change
+    def _sync_cover_letter_from_editor(editor_key: str) -> None:
+        st.session_state["cover_letter"] = (st.session_state.get(editor_key) or "")
+
     edited = st.text_area(
         "You can edit this before using it:",
         key=cl_box_key,
         height=260,
+        on_change=_sync_cover_letter_from_editor,  # ✅ FIX
+        args=(cl_box_key,),                        # ✅ FIX
     )
 
-    # Sync editor -> canonical
-    st.session_state["cover_letter"] = edited
+    # ✅ FIX: Sync editor -> canonical (always prefer session_state key)
+    st.session_state["cover_letter"] = (st.session_state.get(cl_box_key) or edited or "")
 
     # Downloads (NO AI spend)
     try:
+        # ✅ FIX: always build files from the editor key (prevents 1st-download stale text)
+        letter_body = (st.session_state.get(cl_box_key) or "").strip() or (st.session_state.get("cover_letter") or "")
+
         letter_pdf = render_cover_letter_pdf_bytes(
             full_name=full_name_ss or "Candidate",
-            letter_body=st.session_state["cover_letter"],
+            letter_body=letter_body,
             location=location_ss,
             email=email_ss,
             phone=phone_ss,
         )
         letter_docx = render_cover_letter_docx_bytes(
             full_name=full_name_ss or "Candidate",
-            letter_body=st.session_state["cover_letter"],
+            letter_body=letter_body,
             location=location_ss,
             email=email_ss,
             phone=phone_ss,
