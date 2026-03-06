@@ -4598,8 +4598,6 @@ if ai_cover_letter_clicked:
             final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
             st.session_state["cover_letter"] = final_letter
-            st.session_state["cover_letter_committed"] = final_letter
-            st.session_state["cover_letter_dirty"] = False
 
             # Seed the epoch editor key so it renders immediately
             st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
@@ -4617,21 +4615,15 @@ if ai_cover_letter_clicked:
             st.error(f"AI error (cover letter): {e}")
 
 # -------------------------
-# Cover letter editor + downloads + Tone upgrade (AI spend) + DIRTY STATE
+# Cover letter editor + downloads + Tone upgrade (AI spend)  ✅ no duplicate keys
 # -------------------------
 
 # Dedicated epoch for cover letter editor keys (keeps it isolated)
 st.session_state.setdefault("cover_epoch", 0)
-st.session_state.setdefault("cover_letter_dirty", False)
-
 cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
 cl_box_key = f"cover_letter_box__{cover_epoch}"
 
 cover_text = (st.session_state.get("cover_letter") or "").strip()
-
-# Seed committed copy if missing
-if cover_text and "cover_letter_committed" not in st.session_state:
-    st.session_state["cover_letter_committed"] = cover_text
 
 # Seed editor key BEFORE widget renders (only if missing)
 if cover_text and cl_box_key not in st.session_state:
@@ -4706,10 +4698,8 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 cleaned = clean_cover_letter_body(rewritten)
                 final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-                # Canonical + committed update
+                # Canonical update
                 st.session_state["cover_letter"] = final_letter
-                st.session_state["cover_letter_committed"] = final_letter
-                st.session_state["cover_letter_dirty"] = False
 
                 # ✅ bump cover_epoch so the next editor key is guaranteed unique
                 st.session_state["cover_epoch"] = cover_epoch + 1
@@ -4737,54 +4727,21 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         height=260,
     )
 
-    committed_letter = (st.session_state.get("cover_letter_committed") or "").strip()
-    edited_letter = (st.session_state.get(cl_box_key) or edited or "").strip()
-
-    # ✅ DIRTY STATE: detect edits as soon as field changes
-    has_unapplied_cover_changes = edited_letter != committed_letter
-    st.session_state["cover_letter_dirty"] = has_unapplied_cover_changes
-
-    # Premium-looking explicit update button
-    u1, u2 = st.columns([1.15, 2.85])
-    with u1:
-        update_cover_downloads_clicked = st.button(
-            "✨ Update downloads",
-            key=f"btn_update_cover_downloads__{cover_epoch}",
-            use_container_width=True,
-            type="primary",
-        )
-    with u2:
-        if has_unapplied_cover_changes:
-            st.caption("You’ve made edits. Click **Update downloads** to refresh your files before downloading.")
-        else:
-            st.caption("Downloads are up to date and ready.")
-
-    # Optional stronger notice as soon as user edits
-    if has_unapplied_cover_changes:
-        st.warning("Your latest edits are not yet in the download files.")
-
-    if update_cover_downloads_clicked:
-        st.session_state["cover_letter"] = edited_letter
-        st.session_state["cover_letter_committed"] = edited_letter
-        st.session_state["cover_letter_dirty"] = False
-        st.success("Downloads updated with your latest cover letter changes.")
-        st.rerun()
+    # Sync editor -> canonical
+    st.session_state["cover_letter"] = edited
 
     # Downloads (NO AI spend)
     try:
-        # ✅ Always build files from committed copy
-        letter_body = (st.session_state.get("cover_letter_committed") or "").strip() or (st.session_state.get("cover_letter") or "")
-
         letter_pdf = render_cover_letter_pdf_bytes(
             full_name=full_name_ss or "Candidate",
-            letter_body=letter_body,
+            letter_body=st.session_state["cover_letter"],
             location=location_ss,
             email=email_ss,
             phone=phone_ss,
         )
         letter_docx = render_cover_letter_docx_bytes(
             full_name=full_name_ss or "Candidate",
-            letter_body=letter_body,
+            letter_body=st.session_state["cover_letter"],
             location=location_ss,
             email=email_ss,
             phone=phone_ss,
@@ -4798,7 +4755,6 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 file_name="cover_letter.pdf",
                 mime="application/pdf",
                 key=f"dl_cover_pdf__{cover_epoch}",
-                disabled=st.session_state.get("cover_letter_dirty", False),
             )
         with col_d12:
             st.download_button(
@@ -4807,7 +4763,6 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 file_name="cover_letter.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 key=f"dl_cover_docx__{cover_epoch}",
-                disabled=st.session_state.get("cover_letter_dirty", False),
             )
 
     except Exception as e:
@@ -5003,6 +4958,7 @@ if pdf_bytes and docx_bytes:
 elif st.session_state.get("cv_downloaded"):
     st.caption("Downloaded. If you need it again, click “Generate CV (PDF + Word)” above.")
 
+
 # -------------------------
 # Pricing (SUBSCRIPTIONS)
 # -------------------------
@@ -5095,6 +5051,7 @@ with col_pro:
         except Exception as e:
             st.error(f"Stripe error: {e}")
 
+
 # ---------- ENTERPRISE ----------
 st.markdown("---")
 st.subheader("Enterprise (organisations & programmes)")
@@ -5116,6 +5073,7 @@ def open_policy(scope: str, slug: str) -> None:
     st.session_state["_just_returned_from_policy"] = True
 
     # ... your existing modal-open state set logic ...
+
 
 # ==============================================
 # FOOTER POLICY BUTTONS (snapshot before navigate)
