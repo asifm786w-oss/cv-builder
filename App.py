@@ -4599,6 +4599,7 @@ if ai_cover_letter_clicked:
 
             st.session_state["cover_letter"] = final_letter
             st.session_state["cover_letter_committed"] = final_letter
+            st.session_state["cover_letter_dirty"] = False
 
             # Seed the epoch editor key so it renders immediately
             st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
@@ -4616,11 +4617,13 @@ if ai_cover_letter_clicked:
             st.error(f"AI error (cover letter): {e}")
 
 # -------------------------
-# Cover letter editor + downloads + Tone upgrade (AI spend)  ✅ no duplicate keys
+# Cover letter editor + downloads + Tone upgrade (AI spend) + DIRTY STATE
 # -------------------------
 
 # Dedicated epoch for cover letter editor keys (keeps it isolated)
 st.session_state.setdefault("cover_epoch", 0)
+st.session_state.setdefault("cover_letter_dirty", False)
+
 cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
 cl_box_key = f"cover_letter_box__{cover_epoch}"
 
@@ -4706,6 +4709,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 # Canonical + committed update
                 st.session_state["cover_letter"] = final_letter
                 st.session_state["cover_letter_committed"] = final_letter
+                st.session_state["cover_letter_dirty"] = False
 
                 # ✅ bump cover_epoch so the next editor key is guaranteed unique
                 st.session_state["cover_epoch"] = cover_epoch + 1
@@ -4735,7 +4739,10 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
     committed_letter = (st.session_state.get("cover_letter_committed") or "").strip()
     edited_letter = (st.session_state.get(cl_box_key) or edited or "").strip()
+
+    # ✅ DIRTY STATE: detect edits as soon as field changes
     has_unapplied_cover_changes = edited_letter != committed_letter
+    st.session_state["cover_letter_dirty"] = has_unapplied_cover_changes
 
     # Premium-looking explicit update button
     u1, u2 = st.columns([1.15, 2.85])
@@ -4748,19 +4755,20 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         )
     with u2:
         if has_unapplied_cover_changes:
-            st.caption("Changes detected. Click **Update downloads** to refresh your PDF and Word files.")
+            st.caption("You’ve made edits. Click **Update downloads** to refresh your files before downloading.")
         else:
-            st.caption("Files are ready to download. Update downloads if you make edits.")
+            st.caption("Downloads are up to date and ready.")
+
+    # Optional stronger notice as soon as user edits
+    if has_unapplied_cover_changes:
+        st.warning("Your latest edits are not yet in the download files.")
 
     if update_cover_downloads_clicked:
-        if has_unapplied_cover_changes:
-            st.session_state["cover_letter"] = edited_letter
-            st.session_state["cover_letter_committed"] = edited_letter
-            st.success("Downloads updated with your latest cover letter changes.")
-            st.rerun()
-        else:
-            # ✅ dirty trick: keep the premium button active, but do nothing destructive
-            st.success("Your download files are already up to date.")
+        st.session_state["cover_letter"] = edited_letter
+        st.session_state["cover_letter_committed"] = edited_letter
+        st.session_state["cover_letter_dirty"] = False
+        st.success("Downloads updated with your latest cover letter changes.")
+        st.rerun()
 
     # Downloads (NO AI spend)
     try:
@@ -4783,7 +4791,6 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         )
 
         col_d11, col_d12 = st.columns(2)
-
         with col_d11:
             st.download_button(
                 label="📄 Download cover letter as PDF",
@@ -4791,10 +4798,8 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 file_name="cover_letter.pdf",
                 mime="application/pdf",
                 key=f"dl_cover_pdf__{cover_epoch}",
-                disabled=has_unapplied_cover_changes,
-                help="Click 'Update downloads' first to unlock downloads." if has_unapplied_cover_changes else None,
+                disabled=st.session_state.get("cover_letter_dirty", False),
             )
-
         with col_d12:
             st.download_button(
                 label="📝 Download cover letter as Word (.docx)",
@@ -4802,8 +4807,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 file_name="cover_letter.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 key=f"dl_cover_docx__{cover_epoch}",
-                disabled=has_unapplied_cover_changes,
-                help="Click 'Update downloads' first to unlock downloads." if has_unapplied_cover_changes else None,
+                disabled=st.session_state.get("cover_letter_dirty", False),
             )
 
     except Exception as e:
