@@ -4598,6 +4598,7 @@ if ai_cover_letter_clicked:
             final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
             st.session_state["cover_letter"] = final_letter
+            st.session_state["cover_letter_committed"] = final_letter
 
             # Seed the epoch editor key so it renders immediately
             st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
@@ -4624,6 +4625,10 @@ cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
 cl_box_key = f"cover_letter_box__{cover_epoch}"
 
 cover_text = (st.session_state.get("cover_letter") or "").strip()
+
+# Seed committed copy if missing
+if cover_text and "cover_letter_committed" not in st.session_state:
+    st.session_state["cover_letter_committed"] = cover_text
 
 # Seed editor key BEFORE widget renders (only if missing)
 if cover_text and cl_box_key not in st.session_state:
@@ -4698,8 +4703,9 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 cleaned = clean_cover_letter_body(rewritten)
                 final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-                # Canonical update
+                # Canonical + committed update
                 st.session_state["cover_letter"] = final_letter
+                st.session_state["cover_letter_committed"] = final_letter
 
                 # ✅ bump cover_epoch so the next editor key is guaranteed unique
                 st.session_state["cover_epoch"] = cover_epoch + 1
@@ -4721,25 +4727,41 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
     cl_box_key = f"cover_letter_box__{cover_epoch}"
 
-    # ✅ FIX: sync helper ensures canonical updates on change
-    def _sync_cover_letter_from_editor(editor_key: str) -> None:
-        st.session_state["cover_letter"] = (st.session_state.get(editor_key) or "")
-
     edited = st.text_area(
         "You can edit this before using it:",
         key=cl_box_key,
         height=260,
-        on_change=_sync_cover_letter_from_editor,  # ✅ FIX
-        args=(cl_box_key,),                        # ✅ FIX
     )
 
-    # ✅ FIX: Sync editor -> canonical (always prefer session_state key)
-    st.session_state["cover_letter"] = (st.session_state.get(cl_box_key) or edited or "")
+    committed_letter = (st.session_state.get("cover_letter_committed") or "").strip()
+    edited_letter = (st.session_state.get(cl_box_key) or edited or "").strip()
+    has_unapplied_cover_changes = edited_letter != committed_letter
+
+    # Premium-looking explicit update button
+    u1, u2 = st.columns([1.15, 2.85])
+    with u1:
+        update_cover_downloads_clicked = st.button(
+            "✨ Update downloads",
+            key=f"btn_update_cover_downloads__{cover_epoch}",
+            use_container_width=True,
+            type="primary",
+        )
+    with u2:
+        if has_unapplied_cover_changes:
+            st.caption("You’ve made edits. Click **Update downloads** before downloading to include your latest changes.")
+        else:
+            st.caption("Downloads are up to date and ready.")
+
+    if update_cover_downloads_clicked:
+        st.session_state["cover_letter"] = edited_letter
+        st.session_state["cover_letter_committed"] = edited_letter
+        st.success("Downloads updated with your latest cover letter changes.")
+        st.rerun()
 
     # Downloads (NO AI spend)
     try:
-        # ✅ FIX: always build files from the editor key (prevents 1st-download stale text)
-        letter_body = (st.session_state.get(cl_box_key) or "").strip() or (st.session_state.get("cover_letter") or "")
+        # ✅ Always build files from committed copy
+        letter_body = (st.session_state.get("cover_letter_committed") or "").strip() or (st.session_state.get("cover_letter") or "")
 
         letter_pdf = render_cover_letter_pdf_bytes(
             full_name=full_name_ss or "Candidate",
