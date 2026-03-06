@@ -4966,29 +4966,27 @@ docx_bytes = st.session_state.get("cv_docx_bytes")
 if pdf_bytes and docx_bytes:
     st.session_state["cv_downloaded"] = False  # reset if new bytes exist
 
-    col_cv1, col_cv2 = st.columns(2)
-
-    with col_cv1:
-        st.download_button(
-            "📄 Download CV as PDF",
-            data=pdf_bytes,
-            file_name="cv.pdf",
-            mime="application/pdf",
-            key="dl_cv_pdf",
-            on_click=_clear_cv_download_artifacts,
-            use_container_width=True,
-        )
-
-    with col_cv2:
-        st.download_button(
-            "📝 Download CV as Word (.docx)",
-            data=docx_bytes,
-            file_name="cv.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key="dl_cv_docx",
-            on_click=_clear_cv_download_artifacts,
-            use_container_width=True,
-        )
+            col_d11, col_d12 = st.columns(2)
+        with col_d11:
+            st.download_button(
+                label="📄 Download cover letter as PDF",
+                data=letter_pdf,
+                file_name="cover_letter.pdf",
+                mime="application/pdf",
+                key=f"dl_cover_pdf__{cover_epoch}",
+                disabled=has_unapplied_cover_changes,
+                help="Click 'Update downloads' first if you have edited the cover letter." if has_unapplied_cover_changes else None,
+            )
+        with col_d12:
+            st.download_button(
+                label="📝 Download cover letter as Word (.docx)",
+                data=letter_docx,
+                file_name="cover_letter.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key=f"dl_cover_docx__{cover_epoch}",
+                disabled=has_unapplied_cover_changes,
+                help="Click 'Update downloads' first if you have edited the cover letter." if has_unapplied_cover_changes else None,
+            )
 
 elif st.session_state.get("cv_downloaded"):
     st.caption("Downloaded. If you need it again, click “Generate CV (PDF + Word)” above.")
