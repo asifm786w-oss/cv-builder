@@ -3755,64 +3755,70 @@ st.caption(f"Tip: keep this under {MAX_PANEL_WORDS} words – extra text will be
 btn_summary = st.button("Improve professional summary (AI)", key="btn_improve_summary")
 
 if btn_summary:
+    can_run_summary_ai = True
+
     if not gate_premium("improve your professional summary"):
-        st.stop()
+        can_run_summary_ai = False
 
-    ok, left = cooldown_ok("improve_summary", 5)
-    if not ok:
-        st.warning(f"⏳ Please wait {left}s before trying again.")
-        st.stop()
+    if can_run_summary_ai:
+        ok, left = cooldown_ok("improve_summary", 5)
+        if not ok:
+            st.warning(f"⏳ Please wait {left}s before trying again.")
+            can_run_summary_ai = False
 
-    if not cv_summary_text.strip():
+    if can_run_summary_ai and not cv_summary_text.strip():
         st.error("Please write a professional summary first.")
-        st.stop()
+        can_run_summary_ai = False
 
-    if not has_free_quota("summary_uses", 1, "AI professional summary"):
-        st.stop()
+    if can_run_summary_ai and not has_free_quota("summary_uses", 1, "AI professional summary"):
+        can_run_summary_ai = False
 
     # ✅ LEDGER SPEND (1 AI credit) — place this BEFORE calling OpenAI
     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
-    if not uid:
+
+    if can_run_summary_ai and not uid:
         st.error("Please sign in again.")
-        st.stop()
+        can_run_summary_ai = False
 
-    spent = try_spend(uid, source="summary_improve", ai=1)
-    if not spent:
-        st.warning("You don’t have enough AI credits to improve your summary.")
-        st.stop()
+    if can_run_summary_ai:
+        spent = try_spend(uid, source="summary_improve", ai=1)
+        if not spent:
+            st.warning("You don’t have enough AI credits to improve your summary.")
+            can_run_summary_ai = False
 
-    with st.spinner("Improving your professional summary..."):
-        try:
-            cv_like = {
-                "full_name": cv_full_name,
-                "current_title": cv_title,
-                "location": cv_location,
-                "existing_summary": cv_summary_text,
-            }
+    if can_run_summary_ai:
+        with st.spinner("Improving your professional summary..."):
+            try:
+                cv_like = {
+                    "full_name": cv_full_name,
+                    "current_title": cv_title,
+                    "location": cv_location,
+                    "existing_summary": cv_summary_text,
+                }
 
-            instructions = (
-                "Improve this existing professional summary so it is clearer, "
-                "more impactful and suitable for a modern UK CV. Do not invent "
-                "new experience, just polish what is already there."
-            )
+                instructions = (
+                    "Improve this existing professional summary so it is clearer, "
+                    "more impactful and suitable for a modern UK CV. Do not invent "
+                    "new experience, just polish what is already there."
+                )
 
-            improved = generate_tailored_summary(cv_like, instructions)
-            improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label="Professional summary (AI)")
+                improved = generate_tailored_summary(cv_like, instructions)
+                improved_limited = enforce_word_limit(improved, MAX_DOC_WORDS, label="Professional summary (AI)")
 
-            # Stage for next rerun
-            st.session_state["cv_summary_pending"] = improved_limited
+                # Stage for next rerun
+                st.session_state["cv_summary_pending"] = improved_limited
 
-            # Session counters / analytics (optional — not the real billing)
-            st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
-            if email_for_usage:
-                increment_usage(email_for_usage, "summary_uses")
+                # Session counters / analytics (optional — not the real billing)
+                st.session_state["summary_uses"] = st.session_state.get("summary_uses", 0) + 1
+                if email_for_usage:
+                    increment_usage(email_for_usage, "summary_uses")
 
-            st.success("AI summary applied into your main box.")
-            st.rerun()
+                st.success("AI summary applied into your main box.")
+                st.rerun()
 
-        except Exception as e:
-            st.error(f"AI error (summary improvement): {e}")
+            except Exception as e:
+                st.error(f"AI error (summary improvement): {e}")
 
 
 
@@ -3898,54 +3904,60 @@ skills_text = st.text_area(
 btn_skills = st.button("Improve skills (AI)", key="btn_improve_skills")
 
 if btn_skills:
+    can_run_skills_ai = True
+
     if not gate_premium("improve your skills"):
-        st.stop()
+        can_run_skills_ai = False
 
-    ok, left = cooldown_ok("improve_skills", 5)
-    if not ok:
-        st.warning(f"⏳ Please wait {left}s before trying again.")
-        st.stop()
+    if can_run_skills_ai:
+        ok, left = cooldown_ok("improve_skills", 5)
+        if not ok:
+            st.warning(f"⏳ Please wait {left}s before trying again.")
+            can_run_skills_ai = False
 
-    if not skills_text.strip():
+    if can_run_skills_ai and not skills_text.strip():
         st.warning("Please add some skills first.")
-        st.stop()
+        can_run_skills_ai = False
 
-    # ✅ Spend 1 AI credit (ledger)  <-- NEW FLOW (replaces has_free_quota)
+    # ✅ Spend 1 AI credit (ledger)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if not email_for_usage:
+
+    if can_run_skills_ai and not email_for_usage:
         st.warning("Please sign in to use AI features.")
-        st.stop()
+        can_run_skills_ai = False
 
-    ok_spend = spend_ai_credit(email_for_usage, source="ai_skills_improve", amount=1)
-    if not ok_spend:
-        st.warning("You don’t have enough AI credits for this action.")
-        st.stop()
+    if can_run_skills_ai:
+        ok_spend = spend_ai_credit(email_for_usage, source="ai_skills_improve", amount=1)
+        if not ok_spend:
+            st.warning("You don’t have enough AI credits for this action.")
+            can_run_skills_ai = False
 
-    with st.spinner("Improving your skills..."):
-        try:
-            # 🔥 IMPORTANT: this MUST be skills-specific
-            improved = improve_skills(skills_text)
+    if can_run_skills_ai:
+        with st.spinner("Improving your skills..."):
+            try:
+                # 🔥 IMPORTANT: this MUST be skills-specific
+                improved = improve_skills(skills_text)
 
-            improved_bullets = normalize_skills_to_bullets(improved)
+                improved_bullets = normalize_skills_to_bullets(improved)
 
-            improved_limited = enforce_word_limit(
-                improved_bullets,
-                MAX_DOC_WORDS,
-                label="Skills (AI)",
-            )
+                improved_limited = enforce_word_limit(
+                    improved_bullets,
+                    MAX_DOC_WORDS,
+                    label="Skills (AI)",
+                )
 
-            # ✅ Stage for NEXT run
-            st.session_state["skills_pending"] = improved_limited
+                # ✅ Stage for NEXT run
+                st.session_state["skills_pending"] = improved_limited
 
-            # ✅ Analytics (keep this, not credits)
-            st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
-            increment_usage(email_for_usage, "bullets_uses")
+                # ✅ Analytics (keep this, not credits)
+                st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
+                increment_usage(email_for_usage, "bullets_uses")
 
-            st.success("AI skills applied.")
-            st.rerun()
+                st.success("AI skills applied.")
+                st.rerun()
 
-        except Exception as e:
-            st.error(f"AI error (skills improvement): {e}")
+            except Exception as e:
+                st.error(f"AI error (skills improvement): {e}")
 
 
 
@@ -4018,12 +4030,18 @@ for i in range(int(num_experiences)):
         st.session_state[desc_key] = st.session_state.pop(pending_key)
 
     # ✅ Ensure keys exist (never None)
-    if st.session_state.get(job_title_key) is None: st.session_state[job_title_key] = ""
-    if st.session_state.get(company_key)   is None: st.session_state[company_key]   = ""
-    if st.session_state.get(loc_key)       is None: st.session_state[loc_key]       = ""
-    if st.session_state.get(start_key)     is None: st.session_state[start_key]     = ""
-    if st.session_state.get(end_key)       is None: st.session_state[end_key]       = ""
-    if st.session_state.get(desc_key)      is None: st.session_state[desc_key]      = ""
+    if st.session_state.get(job_title_key) is None:
+        st.session_state[job_title_key] = ""
+    if st.session_state.get(company_key) is None:
+        st.session_state[company_key] = ""
+    if st.session_state.get(loc_key) is None:
+        st.session_state[loc_key] = ""
+    if st.session_state.get(start_key) is None:
+        st.session_state[start_key] = ""
+    if st.session_state.get(end_key) is None:
+        st.session_state[end_key] = ""
+    if st.session_state.get(desc_key) is None:
+        st.session_state[desc_key] = ""
 
     # widgets
     job_title = st.text_input("Job title", key=job_title_key)
@@ -4041,16 +4059,21 @@ for i in range(int(num_experiences)):
     # ✅ Button only schedules AI (no AI work inside loop)
     btn_role = st.button("Improve this role (AI)", key=f"btn_role_ai_{i}")
     if btn_role:
-        if not gate_premium(f"improve Role {i+1} with AI"):
-            st.stop()
-        ok, left = cooldown_ok(f"improve_role_{i}", 5)
-        if not ok:
-            st.warning(f"⏳ Please wait {left}s before trying again.")
-            st.stop()
+        can_schedule_role_ai = True
 
-        st.session_state["ai_running_role"] = i
-        st.session_state["ai_run_now"] = True
-        st.rerun()
+        if not gate_premium(f"improve Role {i+1} with AI"):
+            can_schedule_role_ai = False
+
+        if can_schedule_role_ai:
+            ok, left = cooldown_ok(f"improve_role_{i}", 5)
+            if not ok:
+                st.warning(f"⏳ Please wait {left}s before trying again.")
+                can_schedule_role_ai = False
+
+        if can_schedule_role_ai:
+            st.session_state["ai_running_role"] = i
+            st.session_state["ai_run_now"] = True
+            st.rerun()
 
     # Build Experience objects
     if job_title and company:
@@ -4072,53 +4095,57 @@ run_now = st.session_state.pop("ai_run_now", False)  # pop so it runs once
 
 if run_now and role_to_improve is not None:
     i = int(role_to_improve)
+    can_run_role_ai = True
 
     # IMPORTANT: clear role flag early so reruns don't re-trigger
     st.session_state["ai_running_role"] = None
 
     if not gate_premium("use AI role improvements"):
-        st.stop()
+        can_run_role_ai = False
 
     desc_key     = f"description_{i}"
     pending_key  = f"description_pending_{i}"
     current_text = (st.session_state.get(desc_key) or "").strip()
 
-    if not current_text:
+    if can_run_role_ai and not current_text:
         st.warning("Please add text for this role first.")
-        st.stop()
+        can_run_role_ai = False
 
     # ✅ Replace free-quota check with AI credit spend (ledger)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
-    if not email_for_usage:
+
+    if can_run_role_ai and not email_for_usage:
         st.warning("Please sign in to use AI features.")
-        st.stop()
+        can_run_role_ai = False
 
-    ok_spend = spend_ai_credit(email_for_usage, source=f"ai_role_improve_{i+1}", amount=1)
-    if not ok_spend:
-        st.warning("You don’t have enough AI credits for this action.")
-        st.stop()
+    if can_run_role_ai:
+        ok_spend = spend_ai_credit(email_for_usage, source=f"ai_role_improve_{i+1}", amount=1)
+        if not ok_spend:
+            st.warning("You don’t have enough AI credits for this action.")
+            can_run_role_ai = False
 
-    with st.spinner(f"Improving Role {i+1} description..."):
-        try:
-            improved = improve_bullets(current_text)
-            improved_limited = enforce_word_limit(
-                improved,
-                MAX_DOC_WORDS,
-                label=f"Role {i+1} description",
-            )
+    if can_run_role_ai:
+        with st.spinner(f"Improving Role {i+1} description..."):
+            try:
+                improved = improve_bullets(current_text)
+                improved_limited = enforce_word_limit(
+                    improved,
+                    MAX_DOC_WORDS,
+                    label=f"Role {i+1} description",
+                )
 
-            # Stage update for next render
-            st.session_state[pending_key] = improved_limited
+                # Stage update for next render
+                st.session_state[pending_key] = improved_limited
 
-            # ✅ Keep existing analytics increment right after success
-            st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
-            increment_usage(email_for_usage, "bullets_uses")
+                # ✅ Keep existing analytics increment right after success
+                st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
+                increment_usage(email_for_usage, "bullets_uses")
 
-            st.success(f"Role {i+1} updated.")
-            st.rerun()
+                st.success(f"Role {i+1} updated.")
+                st.rerun()
 
-        except Exception as e:
-            st.error(f"AI error: {e}")
+            except Exception as e:
+                st.error(f"AI error: {e}")
 
 
 # ✅ Keep your existing pop (ensures sync only happens once after autofill)
@@ -4211,6 +4238,7 @@ references = st.text_area(
         "Line breaks will be preserved in the PDF."
     ),
 )
+
 # =========================
 # Job Search (Adzuna) — Expander (FREE search)  ✅ PREMIUM UI
 # ✅ No AI credit spend for searching
@@ -4510,42 +4538,47 @@ with col_jd2:
 # AI job-description summary
 # -------------------------
 if job_summary_clicked:
+    can_run_job_summary_ai = True
+
     if not gate_premium("generate a job summary"):
-        st.stop()
+        can_run_job_summary_ai = False
 
-    if not (_norm(full_name_ss) and _norm(email_ss)):
+    if can_run_job_summary_ai and not (_norm(full_name_ss) and _norm(email_ss)):
         st.warning("Complete Section 1 (Full name + Email) first — these are used in outputs.")
-        st.stop()
+        can_run_job_summary_ai = False
 
-    if not _norm(job_description):
+    if can_run_job_summary_ai and not _norm(job_description):
         st.error("Please paste a job description first.")
-        st.stop()
+        can_run_job_summary_ai = False
 
     # ✅ LEDGER SPEND (1 AI credit)
     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
-    if not uid:
+
+    if can_run_job_summary_ai and not uid:
         st.error("Please sign in again.")
-        st.stop()
+        can_run_job_summary_ai = False
 
-    spent = try_spend(uid, source="job_summary", ai=1)
-    if not spent:
-        st.warning("You don’t have enough AI credits to generate a job summary.")
-        st.stop()
+    if can_run_job_summary_ai:
+        spent = try_spend(uid, source="job_summary", ai=1)
+        if not spent:
+            st.warning("You don’t have enough AI credits to generate a job summary.")
+            can_run_job_summary_ai = False
 
-    with st.spinner("Generating AI job summary..."):
-        try:
-            jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description")
-            job_summary_text = generate_job_summary(jd_limited)
+    if can_run_job_summary_ai:
+        with st.spinner("Generating AI job summary..."):
+            try:
+                jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description")
+                job_summary_text = generate_job_summary(jd_limited)
 
-            st.session_state["job_summary_ai"] = job_summary_text
-            st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
-            if email_for_usage:
-                increment_usage(email_for_usage, "job_summary_uses")
+                st.session_state["job_summary_ai"] = job_summary_text
+                st.session_state["job_summary_uses"] = st.session_state.get("job_summary_uses", 0) + 1
+                if email_for_usage:
+                    increment_usage(email_for_usage, "job_summary_uses")
 
-            st.success("AI job summary generated below.")
-        except Exception as e:
-            st.error(f"AI error (job summary): {e}")
+                st.success("AI job summary generated below.")
+            except Exception as e:
+                st.error(f"AI error (job summary): {e}")
 
 job_summary_text = st.session_state.get("job_summary_ai", "")
 if job_summary_text:
@@ -4556,63 +4589,68 @@ if job_summary_text:
 # AI cover letter generation
 # -------------------------
 if ai_cover_letter_clicked:
+    can_run_cover_letter_ai = True
+
     if not gate_premium("generate a cover letter"):
-        st.stop()
+        can_run_cover_letter_ai = False
 
-    if not (_norm(full_name_ss) and _norm(email_ss)):
+    if can_run_cover_letter_ai and not (_norm(full_name_ss) and _norm(email_ss)):
         st.warning("Complete Section 1 (Full name + Email) first — added to cover letter.")
-        st.stop()
+        can_run_cover_letter_ai = False
 
-    if not _norm(job_description):
+    if can_run_cover_letter_ai and not _norm(job_description):
         st.error("Please paste a job description first.")
-        st.stop()
+        can_run_cover_letter_ai = False
 
     # ✅ LEDGER SPEND (1 AI credit)
     email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
     uid = get_user_id(email_for_usage) if email_for_usage else None
-    if not uid:
+
+    if can_run_cover_letter_ai and not uid:
         st.error("Please sign in again.")
-        st.stop()
+        can_run_cover_letter_ai = False
 
-    spent = try_spend(uid, source="cover_letter", ai=1)
-    if not spent:
-        st.warning("You don’t have enough AI credits to generate a cover letter.")
-        st.stop()
+    if can_run_cover_letter_ai:
+        spent = try_spend(uid, source="cover_letter", ai=1)
+        if not spent:
+            st.warning("You don’t have enough AI credits to generate a cover letter.")
+            can_run_cover_letter_ai = False
 
-    with st.spinner("Generating cover letter..."):
-        try:
-            cover_input = build_cover_input_from_cv_or_form(
-                full_name_ss=full_name_ss,
-                title_ss=title_ss,
-                location_ss=location_ss,
-                skills_from_form=skills,
-                experiences_from_form=experiences,
-                education_from_form=st.session_state.get("education_items", []),
-            )
+    if can_run_cover_letter_ai:
+        with st.spinner("Generating cover letter..."):
+            try:
+                cover_input = build_cover_input_from_cv_or_form(
+                    full_name_ss=full_name_ss,
+                    title_ss=title_ss,
+                    location_ss=location_ss,
+                    skills_from_form=skills,
+                    experiences_from_form=experiences,
+                    education_from_form=st.session_state.get("education_items", []),
+                )
 
-            jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description (AI input)")
-            job_summary = st.session_state.get("job_summary_ai", "") or ""
+                jd_limited = enforce_word_limit(job_description, MAX_DOC_WORDS, label="Job description (AI input)")
+                job_summary = st.session_state.get("job_summary_ai", "") or ""
 
-            cover_text = generate_cover_letter_ai(cover_input, jd_limited, job_summary)
-            cleaned = clean_cover_letter_body(cover_text)
-            final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
+                cover_text = generate_cover_letter_ai(cover_input, jd_limited, job_summary)
+                cleaned = clean_cover_letter_body(cover_text)
+                final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-            st.session_state["cover_letter"] = final_letter
+                st.session_state["cover_letter"] = final_letter
 
-            # Seed the epoch editor key so it renders immediately
-            st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
-            new_ce = st.session_state["cover_epoch"]
-            st.session_state[f"cover_letter_box__{new_ce}"] = final_letter
+                # Seed the epoch editor key so it renders immediately
+                st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
+                new_ce = st.session_state["cover_epoch"]
+                st.session_state[f"cover_letter_box__{new_ce}"] = final_letter
 
-            st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
-            if email_for_usage:
-                increment_usage(email_for_usage, "cover_uses")
+                st.session_state["cover_uses"] = st.session_state.get("cover_uses", 0) + 1
+                if email_for_usage:
+                    increment_usage(email_for_usage, "cover_uses")
 
-            st.success("Cover letter generated below. You can edit it before downloading.")
-            st.rerun()
+                st.success("Cover letter generated below. You can edit it before downloading.")
+                st.rerun()
 
-        except Exception as e:
-            st.error(f"AI error (cover letter): {e}")
+            except Exception as e:
+                st.error(f"AI error (cover letter): {e}")
 
 # -------------------------
 # Cover letter editor + downloads + Tone upgrade (AI spend)  ✅ no duplicate keys
@@ -4665,57 +4703,62 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
 
     # ✅ Handle rewrite BEFORE the text_area renders
     if rewrite_clicked:
+        can_run_cover_rewrite_ai = True
+
         if not gate_premium("rewrite a cover letter"):
-            st.stop()
+            can_run_cover_rewrite_ai = False
 
         current_letter = (
             (st.session_state.get(cl_box_key) or "").strip()
             or (st.session_state.get("cover_letter") or "").strip()
         )
-        if not current_letter:
+
+        if can_run_cover_rewrite_ai and not current_letter:
             st.warning("Nothing to rewrite yet.")
-            st.stop()
+            can_run_cover_rewrite_ai = False
 
         tone = TONE_OPTIONS.get(tone_label, "professional")
-        if not _is_valid_tone(tone):
+        if can_run_cover_rewrite_ai and not _is_valid_tone(tone):
             st.error("Invalid tone.")
-            st.stop()
+            can_run_cover_rewrite_ai = False
 
         email_for_usage = (st.session_state.get("user") or {}).get("email") or ""
         uid = get_user_id(email_for_usage) if email_for_usage else None
-        if not uid:
+
+        if can_run_cover_rewrite_ai and not uid:
             st.error("Please sign in again.")
-            st.stop()
+            can_run_cover_rewrite_ai = False
 
-        spent = try_spend(uid, source="cover_letter_rewrite", ai=1)
-        if not spent:
-            st.warning("You don’t have enough AI credits to rewrite the cover letter.")
-            st.stop()
+        if can_run_cover_rewrite_ai:
+            spent = try_spend(uid, source="cover_letter_rewrite", ai=1)
+            if not spent:
+                st.warning("You don’t have enough AI credits to rewrite the cover letter.")
+                can_run_cover_rewrite_ai = False
 
-        with st.spinner(f"Rewriting in {tone_label.lower()} style..."):
-            try:
-                rewritten = rewrite_cover_letter_tone_ai(letter_text=current_letter, tone=tone)
-                cleaned = clean_cover_letter_body(rewritten)
-                final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
+        if can_run_cover_rewrite_ai:
+            with st.spinner(f"Rewriting in {tone_label.lower()} style..."):
+                try:
+                    rewritten = rewrite_cover_letter_tone_ai(letter_text=current_letter, tone=tone)
+                    cleaned = clean_cover_letter_body(rewritten)
+                    final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-                # Canonical update
-                st.session_state["cover_letter"] = final_letter
+                    # Canonical update
+                    st.session_state["cover_letter"] = final_letter
 
-                # ✅ bump cover_epoch so the next editor key is guaranteed unique
-                st.session_state["cover_epoch"] = cover_epoch + 1
-                new_epoch = cover_epoch + 1
-                st.session_state[f"cover_letter_box__{new_epoch}"] = final_letter
+                    # ✅ bump cover_epoch so the next editor key is guaranteed unique
+                    st.session_state["cover_epoch"] = cover_epoch + 1
+                    new_epoch = cover_epoch + 1
+                    st.session_state[f"cover_letter_box__{new_epoch}"] = final_letter
 
-                st.session_state["cover_rewrite_uses"] = st.session_state.get("cover_rewrite_uses", 0) + 1
-                if email_for_usage:
-                    increment_usage(email_for_usage, "cover_rewrite_uses")
+                    st.session_state["cover_rewrite_uses"] = st.session_state.get("cover_rewrite_uses", 0) + 1
+                    if email_for_usage:
+                        increment_usage(email_for_usage, "cover_rewrite_uses")
 
-                st.success(f"Cover letter rewritten ({tone_label}).")
-                st.rerun()
+                    st.success(f"Cover letter rewritten ({tone_label}).")
+                    st.rerun()
 
-            except Exception as e:
-                st.error(f"AI error (cover rewrite): {e}")
-                st.stop()
+                except Exception as e:
+                    st.error(f"AI error (cover rewrite): {e}")
 
     # Refresh after possible rewrite bump
     cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
@@ -4792,15 +4835,13 @@ template_label = st.selectbox(
     key="template_label",
 )
 
-
-
 # -------------------------
 # Generate CV (spend 1 credit)
 # -------------------------
 st.session_state.setdefault("cv_pdf_bytes", None)
 st.session_state.setdefault("cv_docx_bytes", None)
-st.session_state.setdefault("cv_last_template", None)  # optional
-st.session_state.setdefault("cv_last_fingerprint", None)  # optional
+st.session_state.setdefault("cv_last_template", None)
+st.session_state.setdefault("cv_last_fingerprint", None)
 
 generate_clicked = locked_action_button(
     "Generate CV (PDF + Word)",
@@ -4813,7 +4854,9 @@ def _cv_fingerprint() -> str:
     Optional: helps you decide whether to regenerate.
     Keep it simple and only use canonical keys (cv_* + main lists).
     """
-    import json, hashlib
+    import json
+    import hashlib
+
     payload = {
         "cv_full_name": get_cv_field("cv_full_name"),
         "cv_title": get_cv_field("cv_title"),
@@ -4831,6 +4874,8 @@ def _cv_fingerprint() -> str:
     return hashlib.sha256(dumped.encode("utf-8", errors="ignore")).hexdigest()
 
 if generate_clicked:
+    can_generate_cv = True
+
     # If this clears anything CV-related, it must be fixed/removed.
     # But leave it for now since you said system works.
     clear_ai_upload_state_only()
@@ -4848,73 +4893,74 @@ if generate_clicked:
     # Validate CV fields (NOT auth email)
     if not cv_full_name or not cv_email:
         st.error("Please fill in at least your full name and email.")
-        st.stop()
+        can_generate_cv = False
 
     # Validate login
-    if not email_for_usage:
+    if can_generate_cv and not email_for_usage:
         st.error("Please sign in again.")
         open_auth_modal("Sign in")
-        st.stop()
+        can_generate_cv = False
 
-    uid = get_user_id(email_for_usage)
-    if not uid:
+    uid = get_user_id(email_for_usage) if email_for_usage else None
+    if can_generate_cv and not uid:
         st.error("Please sign in again.")
-        st.stop()
+        can_generate_cv = False
 
     # Spend ledger credit (1 CV)
-    spent = try_spend(uid, source="cv_generate", cv=1)
-    if not spent:
-        st.warning("You don’t have enough CV credits to generate a CV.")
-        st.stop()
+    if can_generate_cv:
+        spent = try_spend(uid, source="cv_generate", cv=1)
+        if not spent:
+            st.warning("You don’t have enough CV credits to generate a CV.")
+            can_generate_cv = False
 
-    try:
-        cv_summary = enforce_word_limit(
-            raw_summary or "",
-            MAX_DOC_WORDS,
-            "Professional summary",
-        )
+    if can_generate_cv:
+        try:
+            cv_summary = enforce_word_limit(
+                raw_summary or "",
+                MAX_DOC_WORDS,
+                "Professional summary",
+            )
 
-        cv = CV(
-            full_name=cv_full_name,
-            title=cv_title or None,
-            email=cv_email,
-            phone=cv_phone or None,
-            full_address=None,
-            location=cv_location or None,
-            summary=cv_summary or None,
-            skills=skills,
-            experiences=experiences,
-            education=education_items,
-            references=references or None,
-        )
+            cv = CV(
+                full_name=cv_full_name,
+                title=cv_title or None,
+                email=cv_email,
+                phone=cv_phone or None,
+                full_address=None,
+                location=cv_location or None,
+                summary=cv_summary or None,
+                skills=skills,
+                experiences=experiences,
+                education=education_items,
+                references=references or None,
+            )
 
-        template_name = TEMPLATE_MAP.get(
-            st.session_state.get("template_label"),
-            "Blue Theme.html",
-        )
+            template_name = TEMPLATE_MAP.get(
+                st.session_state.get("template_label"),
+                "Blue Theme.html",
+            )
 
-        pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
-        docx_bytes = render_cv_docx_bytes(cv)
+            pdf_bytes = render_cv_pdf_bytes(cv, template_name=template_name)
+            docx_bytes = render_cv_docx_bytes(cv)
 
-        # ✅ STORE BYTES IN SESSION (THIS IS THE KEY FIX)
-        st.session_state["cv_pdf_bytes"] = pdf_bytes
-        st.session_state["cv_docx_bytes"] = docx_bytes
+            # ✅ STORE BYTES IN SESSION
+            st.session_state["cv_pdf_bytes"] = pdf_bytes
+            st.session_state["cv_docx_bytes"] = docx_bytes
 
-        # optional: store “what this CV represents”
-        st.session_state["cv_last_template"] = st.session_state.get("template_label")
-        st.session_state["cv_last_fingerprint"] = _cv_fingerprint()
+            # optional: store “what this CV represents”
+            st.session_state["cv_last_template"] = st.session_state.get("template_label")
+            st.session_state["cv_last_fingerprint"] = _cv_fingerprint()
 
-        st.success("CV generated successfully! 🎉")
+            st.success("CV generated successfully! 🎉")
 
-        # ✅ analytics only once (right after generating)
-        st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
-        increment_usage(email_for_usage, "cv_generations")
+            # ✅ analytics only once (right after generating)
+            st.session_state["cv_generations"] = st.session_state.get("cv_generations", 0) + 1
+            increment_usage(email_for_usage, "cv_generations")
 
-        st.rerun()
+            st.rerun()
 
-    except Exception as e:
-        st.error(f"CV generation failed: {e}")
-        st.stop()
+        except Exception as e:
+            st.error(f"CV generation failed: {e}")
 
 # -------------------------
 # Downloads (hide after download)
@@ -4958,7 +5004,6 @@ if pdf_bytes and docx_bytes:
 elif st.session_state.get("cv_downloaded"):
     st.caption("Downloaded. If you need it again, click “Generate CV (PDF + Word)” above.")
 
-
 # -------------------------
 # Pricing (SUBSCRIPTIONS)
 # -------------------------
@@ -4968,7 +5013,7 @@ col_free, col_monthly, col_pro = st.columns(3)
 
 user = st.session_state.get("user") or {}
 email_for_checkout = user.get("email")
-user_id_for_checkout = user.get("id")  # 🔑 REQUIRED
+user_id_for_checkout = user.get("id")
 
 # ---------- FREE ----------
 with col_free:
@@ -4993,28 +5038,31 @@ with col_monthly:
     )
 
     if st.button("Start Monthly Subscription", key="start_monthly_sub"):
+        can_start_monthly = True
+
         if not email_for_checkout or not user_id_for_checkout:
             st.warning("Please sign in first.")
-            st.stop()
+            can_start_monthly = False
 
-        if not PRICE_MONTHLY:
+        if can_start_monthly and not PRICE_MONTHLY:
             st.error("Missing STRIPE_PRICE_MONTHLY in Railway Variables.")
-            st.stop()
+            can_start_monthly = False
 
-        if not stripe.api_key:
+        if can_start_monthly and not stripe.api_key:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
-            st.stop()
+            can_start_monthly = False
 
-        try:
-            url = create_subscription_checkout_session(
-                price_id=PRICE_MONTHLY,
-                pack="monthly",
-                customer_email=email_for_checkout,
-                user_id=int(user_id_for_checkout),  # 🔑 PASS INTERNAL USER ID
-            )
-            st.link_button("Continue to secure checkout", url)
-        except Exception as e:
-            st.error(f"Stripe error: {e}")
+        if can_start_monthly:
+            try:
+                url = create_subscription_checkout_session(
+                    price_id=PRICE_MONTHLY,
+                    pack="monthly",
+                    customer_email=email_for_checkout,
+                    user_id=int(user_id_for_checkout),
+                )
+                st.link_button("Continue to secure checkout", url)
+            except Exception as e:
+                st.error(f"Stripe error: {e}")
 
 # ---------- PRO ----------
 with col_pro:
@@ -5028,29 +5076,31 @@ with col_pro:
     )
 
     if st.button("Start Pro Subscription", key="start_pro_sub"):
+        can_start_pro = True
+
         if not email_for_checkout or not user_id_for_checkout:
             st.warning("Please sign in first.")
-            st.stop()
+            can_start_pro = False
 
-        if not PRICE_PRO:
+        if can_start_pro and not PRICE_PRO:
             st.error("Missing STRIPE_PRICE_PRO in Railway Variables.")
-            st.stop()
+            can_start_pro = False
 
-        if not stripe.api_key:
+        if can_start_pro and not stripe.api_key:
             st.error("Missing STRIPE_SECRET_KEY in Railway Variables.")
-            st.stop()
+            can_start_pro = False
 
-        try:
-            url = create_subscription_checkout_session(
-                price_id=PRICE_PRO,
-                pack="pro",
-                customer_email=email_for_checkout,
-                user_id=int(user_id_for_checkout),  # 🔑 PASS INTERNAL USER ID
-            )
-            st.link_button("Continue to secure checkout", url)
-        except Exception as e:
-            st.error(f"Stripe error: {e}")
-
+        if can_start_pro:
+            try:
+                url = create_subscription_checkout_session(
+                    price_id=PRICE_PRO,
+                    pack="pro",
+                    customer_email=email_for_checkout,
+                    user_id=int(user_id_for_checkout),
+                )
+                st.link_button("Continue to secure checkout", url)
+            except Exception as e:
+                st.error(f"Stripe error: {e}")
 
 # ---------- ENTERPRISE ----------
 st.markdown("---")
@@ -5068,16 +5118,16 @@ st.caption(
     "Subscriptions fund the platform and prevent abuse. "
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
+
 def open_policy(scope: str, slug: str) -> None:
     snapshot_form_state()
     st.session_state["_just_returned_from_policy"] = True
 
     # ... your existing modal-open state set logic ...
 
-
 # ==============================================
 # FOOTER POLICY BUTTONS (snapshot before navigate)
-# ============================================================
+# ==============================================
 st.markdown("<hr style='margin-top:40px;'>", unsafe_allow_html=True)
 
 fc1, fc2, fc3, fc4 = st.columns(4)
@@ -5101,4 +5151,3 @@ with fc4:
         snapshot_form_state()
         st.session_state["policy_view"] = "terms"
         st.rerun()
-		
