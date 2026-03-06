@@ -4783,6 +4783,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         )
 
         col_d11, col_d12 = st.columns(2)
+
         with col_d11:
             st.download_button(
                 label="📄 Download cover letter as PDF",
@@ -4790,7 +4791,10 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 file_name="cover_letter.pdf",
                 mime="application/pdf",
                 key=f"dl_cover_pdf__{cover_epoch}",
+                disabled=has_unapplied_cover_changes,
+                help="Click 'Update downloads' first to unlock downloads." if has_unapplied_cover_changes else None,
             )
+
         with col_d12:
             st.download_button(
                 label="📝 Download cover letter as Word (.docx)",
@@ -4798,6 +4802,8 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                 file_name="cover_letter.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 key=f"dl_cover_docx__{cover_epoch}",
+                disabled=has_unapplied_cover_changes,
+                help="Click 'Update downloads' first to unlock downloads." if has_unapplied_cover_changes else None,
             )
 
     except Exception as e:
