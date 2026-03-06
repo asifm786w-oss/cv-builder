@@ -1242,17 +1242,17 @@ def locked_action_button(
     if require_login and not is_logged_in:
         st.warning("Sign in to unlock this feature.")
         open_auth_modal(default_tab)
-        st.stop()
+        return False
 
     if cooldown_name:
         ok, left = cooldown_ok(cooldown_name, cooldown_seconds)
         if not ok:
             st.warning(f"⏳ Please wait {left}s before trying again.")
-            st.stop()
+            return False
 
     if counter_key:
         if not has_free_quota(counter_key, cost, feature_label):
-            st.stop()
+            return False
 
     return True
 
