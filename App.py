@@ -3632,12 +3632,11 @@ with st.container(border=True):
             st.rerun()
 
 
-# ---------- AI fill button ----------
 fill_clicked = locked_action_button(
     "Fill the form from this CV (AI)",
     key=f"btn_fill_from_cv__{u_epoch}",
     feature_label="CV upload & parsing",
-    counter_key="upload_parses",
+    counter_key=None,
     require_login=True,
     default_tab="Sign in",
     cooldown_name="upload_parse",
