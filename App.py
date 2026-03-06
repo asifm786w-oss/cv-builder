@@ -4748,15 +4748,19 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         )
     with u2:
         if has_unapplied_cover_changes:
-            st.caption("You’ve made edits. Click **Update downloads** before downloading to include your latest changes.")
+            st.caption("Changes detected. Click **Update downloads** to refresh your PDF and Word files.")
         else:
-            st.caption("Downloads are up to date and ready.")
+            st.caption("Files are ready to download. Update downloads if you make edits.")
 
     if update_cover_downloads_clicked:
-        st.session_state["cover_letter"] = edited_letter
-        st.session_state["cover_letter_committed"] = edited_letter
-        st.success("Downloads updated with your latest cover letter changes.")
-        st.rerun()
+        if has_unapplied_cover_changes:
+            st.session_state["cover_letter"] = edited_letter
+            st.session_state["cover_letter_committed"] = edited_letter
+            st.success("Downloads updated with your latest cover letter changes.")
+            st.rerun()
+        else:
+            # ✅ dirty trick: keep the premium button active, but do nothing destructive
+            st.success("Your download files are already up to date.")
 
     # Downloads (NO AI spend)
     try:
