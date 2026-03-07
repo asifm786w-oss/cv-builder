@@ -4636,7 +4636,7 @@ if ai_cover_letter_clicked:
 
                 st.session_state["cover_letter"] = final_letter
                 st.session_state["cover_letter_committed"] = final_letter
-                st.session_state["cover_files_ready"] = True
+                st.session_state["cover_files_ready"] = False
 
                 # Seed the epoch editor key so it renders immediately
                 st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
@@ -4647,7 +4647,7 @@ if ai_cover_letter_clicked:
                 if email_for_usage:
                     increment_usage(email_for_usage, "cover_uses")
 
-                st.success("Cover letter generated below. You can edit it before downloading.")
+                st.success("Cover letter generated below. Review it, then click 'Prepare my downloads'.")
                 st.rerun()
 
             except Exception as e:
@@ -4756,7 +4756,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                     # Canonical + committed update
                     st.session_state["cover_letter"] = final_letter
                     st.session_state["cover_letter_committed"] = final_letter
-                    st.session_state["cover_files_ready"] = True
+                    st.session_state["cover_files_ready"] = False
 
                     # ✅ bump cover_epoch so the next editor key is guaranteed unique
                     st.session_state["cover_epoch"] = cover_epoch + 1
@@ -4767,7 +4767,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                     if email_for_usage:
                         increment_usage(email_for_usage, "cover_rewrite_uses")
 
-                    st.success(f"Cover letter rewritten ({tone_label}).")
+                    st.success(f"Cover letter rewritten ({tone_label}). Review it, then click 'Prepare my downloads'.")
                     st.rerun()
 
                 except Exception as e:
@@ -4786,29 +4786,25 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     )
 
     edited_letter = (st.session_state.get(cl_box_key) or edited or "").strip()
-    committed_letter = (st.session_state.get("cover_letter_committed") or "").strip()
 
     # Keep live text current for UI / later AI rewrite context
     st.session_state["cover_letter"] = edited_letter
 
-    has_unprepared_cover_changes = edited_letter != committed_letter
+    st.info("Review your letter, then click **Prepare my downloads** to generate the latest PDF and Word files.")
 
-    if has_unprepared_cover_changes:
-        st.info("Made changes? Click **Prepare files** before downloading your PDF or Word file.")
-
-        if st.button(
-            "✨ Prepare files",
-            key=f"btn_prepare_cover_files__{cover_epoch}",
-            use_container_width=True,
-            type="primary",
-        ):
-            st.session_state["cover_letter_committed"] = edited_letter
-            st.session_state["cover_files_ready"] = True
-            st.success("Your cover letter files are ready to download.")
-            st.rerun()
+    if st.button(
+        "✨ Prepare my downloads",
+        key=f"btn_prepare_cover_files__{cover_epoch}",
+        use_container_width=True,
+        type="primary",
+    ):
+        st.session_state["cover_letter_committed"] = edited_letter
+        st.session_state["cover_files_ready"] = True
+        st.success("Your cover letter downloads are ready.")
+        st.rerun()
 
     # Downloads (NO AI spend)
-    if st.session_state.get("cover_files_ready") and not has_unprepared_cover_changes:
+    if st.session_state.get("cover_files_ready"):
         try:
             letter_body = (st.session_state.get("cover_letter_committed") or "").strip()
 
