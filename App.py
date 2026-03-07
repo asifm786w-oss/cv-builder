@@ -4657,6 +4657,11 @@ if ai_cover_letter_clicked:
 # Cover letter editor + downloads + Tone upgrade (AI spend)  ✅ no duplicate keys
 # -------------------------
 
+def _mark_cover_letter_dirty(editor_key: str) -> None:
+    current = (st.session_state.get(editor_key) or "").strip()
+    st.session_state["cover_letter"] = current
+    st.session_state["cover_files_ready"] = False
+
 # Dedicated epoch for cover letter editor keys (keeps it isolated)
 st.session_state.setdefault("cover_epoch", 0)
 st.session_state.setdefault("cover_files_ready", False)
@@ -4776,6 +4781,8 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         "You can edit this before using it:",
         key=cl_box_key,
         height=260,
+        on_change=_mark_cover_letter_dirty,
+        args=(cl_box_key,),
     )
 
     edited_letter = (st.session_state.get(cl_box_key) or edited or "").strip()
@@ -4785,10 +4792,6 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     st.session_state["cover_letter"] = edited_letter
 
     has_unprepared_cover_changes = edited_letter != committed_letter
-
-    # If edited text differs from committed text, hide downloads until prepared
-    if has_unprepared_cover_changes:
-        st.session_state["cover_files_ready"] = False
 
     if has_unprepared_cover_changes:
         st.info("Made changes? Click **Prepare files** before downloading your PDF or Word file.")
@@ -4805,7 +4808,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
             st.rerun()
 
     # Downloads (NO AI spend)
-    if st.session_state.get("cover_files_ready"):
+    if st.session_state.get("cover_files_ready") and not has_unprepared_cover_changes:
         try:
             letter_body = (st.session_state.get("cover_letter_committed") or "").strip()
 
