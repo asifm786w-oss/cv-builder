@@ -4637,6 +4637,7 @@ if ai_cover_letter_clicked:
                 st.session_state["cover_letter"] = final_letter
                 st.session_state["cover_letter_committed"] = final_letter
                 st.session_state["cover_files_ready"] = False
+                st.session_state["cover_downloaded"] = False
 
                 # Seed the epoch editor key so it renders immediately
                 st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
@@ -4662,9 +4663,14 @@ def _mark_cover_letter_dirty(editor_key: str) -> None:
     st.session_state["cover_letter"] = current
     st.session_state["cover_files_ready"] = False
 
+def _clear_cover_download_artifacts() -> None:
+    st.session_state["cover_files_ready"] = False
+    st.session_state["cover_downloaded"] = True
+
 # Dedicated epoch for cover letter editor keys (keeps it isolated)
 st.session_state.setdefault("cover_epoch", 0)
 st.session_state.setdefault("cover_files_ready", False)
+st.session_state.setdefault("cover_downloaded", False)
 cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
 cl_box_key = f"cover_letter_box__{cover_epoch}"
 
@@ -4757,6 +4763,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                     st.session_state["cover_letter"] = final_letter
                     st.session_state["cover_letter_committed"] = final_letter
                     st.session_state["cover_files_ready"] = False
+                    st.session_state["cover_downloaded"] = False
 
                     # ✅ bump cover_epoch so the next editor key is guaranteed unique
                     st.session_state["cover_epoch"] = cover_epoch + 1
@@ -4800,6 +4807,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
     ):
         st.session_state["cover_letter_committed"] = edited_letter
         st.session_state["cover_files_ready"] = True
+        st.session_state["cover_downloaded"] = False
         st.success("Your cover letter downloads are ready.")
         st.rerun()
 
@@ -4831,6 +4839,7 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                     file_name="cover_letter.pdf",
                     mime="application/pdf",
                     key=f"dl_cover_pdf__{cover_epoch}",
+                    on_click=_clear_cover_download_artifacts,
                 )
             with col_d12:
                 st.download_button(
@@ -4839,10 +4848,14 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                     file_name="cover_letter.docx",
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     key=f"dl_cover_docx__{cover_epoch}",
+                    on_click=_clear_cover_download_artifacts,
                 )
 
         except Exception as e:
             st.error(f"Error generating cover letter files: {e!r}")
+
+    elif st.session_state.get("cover_downloaded"):
+        st.caption("Downloaded. If you need the files again, click “Prepare my downloads” above.")
 
 
 
