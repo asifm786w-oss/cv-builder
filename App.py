@@ -4635,6 +4635,8 @@ if ai_cover_letter_clicked:
                 final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
                 st.session_state["cover_letter"] = final_letter
+                st.session_state["cover_letter_committed"] = final_letter
+                st.session_state["cover_files_ready"] = True
 
                 # Seed the epoch editor key so it renders immediately
                 st.session_state["cover_epoch"] = int(st.session_state.get("cover_epoch", 0) or 0) + 1
@@ -4657,10 +4659,15 @@ if ai_cover_letter_clicked:
 
 # Dedicated epoch for cover letter editor keys (keeps it isolated)
 st.session_state.setdefault("cover_epoch", 0)
+st.session_state.setdefault("cover_files_ready", False)
 cover_epoch = int(st.session_state.get("cover_epoch", 0) or 0)
 cl_box_key = f"cover_letter_box__{cover_epoch}"
 
 cover_text = (st.session_state.get("cover_letter") or "").strip()
+
+# Seed committed copy if missing
+if cover_text and "cover_letter_committed" not in st.session_state:
+    st.session_state["cover_letter_committed"] = cover_text
 
 # Seed editor key BEFORE widget renders (only if missing)
 if cover_text and cl_box_key not in st.session_state:
@@ -4741,8 +4748,10 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
                     cleaned = clean_cover_letter_body(rewritten)
                     final_letter = enforce_word_limit(cleaned, MAX_LETTER_WORDS, label="cover letter")
 
-                    # Canonical update
+                    # Canonical + committed update
                     st.session_state["cover_letter"] = final_letter
+                    st.session_state["cover_letter_committed"] = final_letter
+                    st.session_state["cover_files_ready"] = True
 
                     # ✅ bump cover_epoch so the next editor key is guaranteed unique
                     st.session_state["cover_epoch"] = cover_epoch + 1
@@ -4769,46 +4778,72 @@ if cover_text or (st.session_state.get(cl_box_key) or "").strip():
         height=260,
     )
 
-    # Sync editor -> canonical
-    st.session_state["cover_letter"] = edited
+    edited_letter = (st.session_state.get(cl_box_key) or edited or "").strip()
+    committed_letter = (st.session_state.get("cover_letter_committed") or "").strip()
+
+    # Keep live text current for UI / later AI rewrite context
+    st.session_state["cover_letter"] = edited_letter
+
+    has_unprepared_cover_changes = edited_letter != committed_letter
+
+    # If edited text differs from committed text, hide downloads until prepared
+    if has_unprepared_cover_changes:
+        st.session_state["cover_files_ready"] = False
+
+    if has_unprepared_cover_changes:
+        st.info("Made changes? Click **Prepare files** before downloading your PDF or Word file.")
+
+        if st.button(
+            "✨ Prepare files",
+            key=f"btn_prepare_cover_files__{cover_epoch}",
+            use_container_width=True,
+            type="primary",
+        ):
+            st.session_state["cover_letter_committed"] = edited_letter
+            st.session_state["cover_files_ready"] = True
+            st.success("Your cover letter files are ready to download.")
+            st.rerun()
 
     # Downloads (NO AI spend)
-    try:
-        letter_pdf = render_cover_letter_pdf_bytes(
-            full_name=full_name_ss or "Candidate",
-            letter_body=st.session_state["cover_letter"],
-            location=location_ss,
-            email=email_ss,
-            phone=phone_ss,
-        )
-        letter_docx = render_cover_letter_docx_bytes(
-            full_name=full_name_ss or "Candidate",
-            letter_body=st.session_state["cover_letter"],
-            location=location_ss,
-            email=email_ss,
-            phone=phone_ss,
-        )
+    if st.session_state.get("cover_files_ready"):
+        try:
+            letter_body = (st.session_state.get("cover_letter_committed") or "").strip()
 
-        col_d11, col_d12 = st.columns(2)
-        with col_d11:
-            st.download_button(
-                label="📄 Download cover letter as PDF",
-                data=letter_pdf,
-                file_name="cover_letter.pdf",
-                mime="application/pdf",
-                key=f"dl_cover_pdf__{cover_epoch}",
+            letter_pdf = render_cover_letter_pdf_bytes(
+                full_name=full_name_ss or "Candidate",
+                letter_body=letter_body,
+                location=location_ss,
+                email=email_ss,
+                phone=phone_ss,
             )
-        with col_d12:
-            st.download_button(
-                label="📝 Download cover letter as Word (.docx)",
-                data=letter_docx,
-                file_name="cover_letter.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key=f"dl_cover_docx__{cover_epoch}",
+            letter_docx = render_cover_letter_docx_bytes(
+                full_name=full_name_ss or "Candidate",
+                letter_body=letter_body,
+                location=location_ss,
+                email=email_ss,
+                phone=phone_ss,
             )
 
-    except Exception as e:
-        st.error(f"Error generating cover letter files: {e!r}")
+            col_d11, col_d12 = st.columns(2)
+            with col_d11:
+                st.download_button(
+                    label="📄 Download cover letter as PDF",
+                    data=letter_pdf,
+                    file_name="cover_letter.pdf",
+                    mime="application/pdf",
+                    key=f"dl_cover_pdf__{cover_epoch}",
+                )
+            with col_d12:
+                st.download_button(
+                    label="📝 Download cover letter as Word (.docx)",
+                    data=letter_docx,
+                    file_name="cover_letter.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    key=f"dl_cover_docx__{cover_epoch}",
+                )
+
+        except Exception as e:
+            st.error(f"Error generating cover letter files: {e!r}")
 
 
 
