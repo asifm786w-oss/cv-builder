@@ -5165,6 +5165,72 @@ st.caption(
     "If you're running a programme (council/charity/organisation), ask about Enterprise licensing."
 )
 
+# ---------- COURSE CONNECT (safe external block) ----------
+st.markdown("---")
+
+st.markdown(
+    """
+    <div style="
+        background: rgba(255,255,255,0.05);
+        border: 1px solid rgba(255,255,255,0.12);
+        border-radius: 18px;
+        padding: 22px 22px 18px 22px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+        margin-top: 6px;
+        margin-bottom: 10px;
+    ">
+        <div style="
+            font-size: 1.6rem;
+            font-weight: 800;
+            color: rgba(255,255,255,0.96);
+            margin-bottom: 8px;
+        ">🎓 Course Connect</div>
+
+        <div style="
+            font-size: 1.02rem;
+            line-height: 1.65;
+            color: rgba(255,255,255,0.88);
+            margin-bottom: 14px;
+        ">
+            Higher education should be accessible to everyone. If you're thinking about your next step,
+            we can help guide you towards suitable university and course options with a simple enquiry form.
+        </div>
+
+        <div style="
+            font-size: 0.98rem;
+            line-height: 1.65;
+            color: rgba(255,255,255,0.82);
+            margin-bottom: 12px;
+        ">
+            We can help you choose a <strong>city</strong> and <strong>course pathway</strong>, with access to opportunities in
+            <strong>Manchester</strong>, <strong>Birmingham</strong>, and <strong>London</strong>.
+        </div>
+
+        <div style="
+            font-size: 0.98rem;
+            line-height: 1.7;
+            color: rgba(255,255,255,0.82);
+            margin-bottom: 6px;
+        ">
+            <strong>Current focus:</strong> Business & Marketing <strong>Level 4</strong>, with progression routes into
+            <strong>Level 5</strong>.
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.link_button(
+    "Apply for Courses",
+    "https://docs.google.com/forms/d/e/1FAIpQLSeqQm3XEuzY9LSm4Okfyl3Ai8bOIzBX7TvmyInaX_Q8nMcMag/viewform",
+    use_container_width=True,
+)
+
+st.caption(
+    "Register your interest and the Course Connect team will review your details and contact you "
+    "with suitable study opportunities."
+)
+
 def open_policy(scope: str, slug: str) -> None:
     snapshot_form_state()
     st.session_state["_just_returned_from_policy"] = True
