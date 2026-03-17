@@ -3982,7 +3982,7 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
 
-restore_experience_from_parsed()
+rrestore_experience_from_parsed()
 st.header("3. Experience (multiple roles)")
 
 # -------------------------
@@ -4017,12 +4017,12 @@ for i in range(int(num_experiences)):
     st.subheader(f"Role {i + 1}")
 
     job_title_key = f"job_title_{i}"
-    company_key   = f"company_{i}"
-    loc_key       = f"exp_location_{i}"
-    start_key     = f"start_date_{i}"
-    end_key       = f"end_date_{i}"
-    desc_key      = f"description_{i}"
-    pending_key   = f"description_pending_{i}"
+    company_key = f"company_{i}"
+    loc_key = f"exp_location_{i}"
+    start_key = f"start_date_{i}"
+    end_key = f"end_date_{i}"
+    desc_key = f"description_{i}"
+    pending_key = f"description_pending_{i}"
 
     # ✅ Apply staged AI BEFORE the widget renders
     if pending_key in st.session_state:
@@ -4044,10 +4044,10 @@ for i in range(int(num_experiences)):
 
     # widgets
     job_title = st.text_input("Job title", key=job_title_key)
-    company   = st.text_input("Company", key=company_key)
-    exp_loc   = st.text_input("Job location", key=loc_key)
-    start_dt  = st.text_input("Start date (e.g. Jan 2020)", key=start_key)
-    end_dt    = st.text_input("End date (e.g. Present or Jun 2023)", key=end_key)
+    company = st.text_input("Company", key=company_key)
+    exp_loc = st.text_input("Job location", key=loc_key)
+    start_dt = st.text_input("Start date (e.g. Jan 2020)", key=start_key)
+    end_dt = st.text_input("End date (e.g. Present or Jun 2023)", key=end_key)
 
     desc_value = st.text_area(
         "Description / key achievements",
@@ -4087,7 +4087,6 @@ for i in range(int(num_experiences)):
             )
         )
 
-
 # ---------- Run AI AFTER the loop (single, correct) ----------
 role_to_improve = st.session_state.get("ai_running_role")
 run_now = st.session_state.pop("ai_run_now", False)  # pop so it runs once
@@ -4102,8 +4101,8 @@ if run_now and role_to_improve is not None:
     if not gate_premium("use AI role improvements"):
         can_run_role_ai = False
 
-    desc_key     = f"description_{i}"
-    pending_key  = f"description_pending_{i}"
+    desc_key = f"description_{i}"
+    pending_key = f"description_pending_{i}"
     current_text = (st.session_state.get(desc_key) or "").strip()
 
     if can_run_role_ai and not current_text:
@@ -4146,13 +4145,11 @@ if run_now and role_to_improve is not None:
             except Exception as e:
                 st.error(f"AI error: {e}")
 
-
 # ✅ Keep your existing pop (ensures sync only happens once after autofill)
-if not st.session_state.pop("_just_autofilled_from_cv", False):
-    pass
+st.session_state.pop("_just_autofilled_from_cv", False)
 
-
-    restore_education_state()
+# ✅ ALWAYS restore education state BEFORE Section 4 renders
+restore_education_state()
 
 # -------------------------
 # 4. Education (multiple entries)
