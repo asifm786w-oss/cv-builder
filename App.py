@@ -3982,7 +3982,7 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
 
-rrestore_experience_from_parsed()
+restore_experience_from_parsed()
 st.header("3. Experience (multiple roles)")
 
 # -------------------------
