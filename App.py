@@ -4156,8 +4156,30 @@ restore_education_state()
 # -------------------------
 st.header("4. Education (multiple entries)")
 
-if "num_education" not in st.session_state:
-    st.session_state["num_education"] = 1
+def _detect_existing_education_count(max_items: int = 5) -> int:
+    detected = 0
+    for i in range(max_items):
+        degree_val = (st.session_state.get(f"degree_{i}") or "").strip()
+        institution_val = (st.session_state.get(f"institution_{i}") or "").strip()
+        edu_location_val = (st.session_state.get(f"edu_location_{i}") or "").strip()
+        edu_start_val = (st.session_state.get(f"edu_start_{i}") or "").strip()
+        edu_end_val = (st.session_state.get(f"edu_end_{i}") or "").strip()
+
+        if degree_val or institution_val or edu_location_val or edu_start_val or edu_end_val:
+            detected = i + 1
+
+    return max(detected, 1)
+
+# ✅ Rebuild count safely from existing session data if needed
+detected_education_count = _detect_existing_education_count()
+
+if "num_education" not in st.session_state or not st.session_state["num_education"]:
+    st.session_state["num_education"] = detected_education_count
+else:
+    st.session_state["num_education"] = max(
+        int(st.session_state["num_education"]),
+        detected_education_count,
+    )
 
 num_education = st.number_input(
     "How many education entries do you want to include?",
