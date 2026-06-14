@@ -2280,6 +2280,12 @@ def set_logged_in_user(user: dict) -> None:
     if not (isinstance(user, dict) and user.get("email")):
         return
 
+    email_for_check = user.get("email")
+
+    if not is_email_verified(email_for_check):
+        st.error("Please verify your email before signing in. Check your inbox for the verification code.")
+        st.stop()
+
     st.session_state["user"] = user
 
     # set from DB truth
@@ -2289,7 +2295,7 @@ def set_logged_in_user(user: dict) -> None:
 
     st.session_state["auth_modal_open"] = False
     st.rerun()
-
+	
 @st.dialog("Welcome back 👋", width="large")
 def _auth_dialog() -> None:
     preferred = st.session_state.get("auth_modal_tab", "Sign in")
