@@ -2422,7 +2422,12 @@ def _send_otp_email(email: str, code: str) -> None:
       </p>
     </div>
     """
-    send_resend_email(email, "Your verification code", html)
+
+    send_email_brevo(
+        to_email=email,
+        subject="Your verification code",
+        html=html,
+    )
 
 def create_email_otp(email: str, purpose: str = "verify") -> bool:
     """
@@ -2566,9 +2571,9 @@ def auth_ui():
                 st.stop()
 
             user = authenticate_user(login_email_n, login_password)
+
             if user:
-                st.success(f"Welcome back, {user.get('full_name') or user['email']}!")
-                set_logged_in_user(user)  # closes modal + reruns
+                set_logged_in_user(user)  # verification check happens here
             else:
                 st.error("Invalid email or password.")
 
