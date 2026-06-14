@@ -2534,13 +2534,14 @@ def is_email_verified(email: str) -> bool:
 # AUTH UI
 # =========================
 def auth_ui():
+	
     """Login / register / verify / password reset UI."""
     import os
     import traceback
     import streamlit as st
 
     tab_login, tab_register, tab_verify, tab_forgot = st.tabs(
-        ["Sign in", "Create account", "Verify email", "Forgot password"]
+        ["Sign in", "Join", "Verify ", "Reset"]
     )
 
     # ---- LOGIN TAB ----
