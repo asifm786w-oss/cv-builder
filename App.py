@@ -3675,8 +3675,8 @@ if uploaded_cv is not None and fill_clicked:
     if cv_fp != last_fp:
         _reset_outputs_on_new_cv()
         _clear_education_persistence_for_new_cv()
-        st.session_state["_last_cv_fingerprint"] = cv_fp
-		
+		st.session_state["_ai_has_edited_experience"] = False
+        st.session_state["_last_cv_fingerprint"] = cv_fp		
 
     # Apply parsed data (your existing function)
     _apply_parsed_cv_to_session(parsed)
@@ -3999,33 +3999,25 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 # 3. Experience (multiple roles)
 # -------------------------
 
-# Always restore parsed experience into blank fields only
-# This is safe because restore_experience_from_parsed() only fills empty fields
-if st.session_state.get("_cv_autofill_enabled", False):
+# Restore parsed CV experience into blank fields only,
+# but stop restoring once AI edits have started.
+if (
+    st.session_state.get("_cv_autofill_enabled", False)
+    and not st.session_state.get("_ai_has_edited_experience", False)
+):
     restore_experience_from_parsed()
 
     parsed = st.session_state.get("_cv_parsed")
     if isinstance(parsed, dict):
         exps = parsed.get("experiences") or []
-        if isinstance(exps, list) and exps:
-            parsed_n = max(1, min(5, len(exps)))
-
-            # If just autofilled, force the role count to parsed CV count
-            if st.session_state.get("_just_autofilled_from_cv", False):
-                st.session_state["num_experiences"] = parsed_n
+        if isinstance(exps, list) and exps and st.session_state.get("_just_autofilled_from_cv", False):
+            st.session_state["num_experiences"] = max(1, min(5, len(exps)))
 
 st.header("3. Experience (multiple roles)")
 
-# ✅ If we just autofilled from CV, sync the UI role count to what was parsed
-if st.session_state.get("_just_autofilled_from_cv", False):
-    parsed_n = int(st.session_state.get("parsed_num_experiences", 1) or 1)
-    st.session_state["num_experiences"] = max(1, min(5, parsed_n))
-
-# Keep count stable
 if "num_experiences" not in st.session_state or st.session_state["num_experiences"] is None:
     st.session_state["num_experiences"] = int(st.session_state.get("parsed_num_experiences", 1) or 1)
 
-# Used to run AI after render
 st.session_state.setdefault("ai_running_role", None)
 st.session_state.setdefault("ai_run_now", False)
 
@@ -4051,11 +4043,10 @@ for i in range(int(num_experiences)):
     desc_key = f"description_{i}"
     pending_key = f"description_pending_{i}"
 
-    # ✅ Apply staged AI BEFORE widget renders
+    # Apply staged AI BEFORE widget renders
     if pending_key in st.session_state:
         st.session_state[desc_key] = st.session_state.pop(pending_key)
 
-    # ✅ Ensure keys exist
     for key in [job_title_key, company_key, loc_key, start_key, end_key, desc_key]:
         if st.session_state.get(key) is None:
             st.session_state[key] = ""
@@ -4091,7 +4082,6 @@ for i in range(int(num_experiences)):
             st.session_state["ai_run_now"] = True
             st.rerun()
 
-    # Build Experience objects
     if job_title and company:
         experiences.append(
             Experience(
@@ -4112,7 +4102,6 @@ if run_now and role_to_improve is not None:
     i = int(role_to_improve)
     can_run_role_ai = True
 
-    # ✅ Clear early to prevent repeat runs
     st.session_state["ai_running_role"] = None
 
     if not gate_premium("use AI role improvements"):
@@ -4154,8 +4143,10 @@ if run_now and role_to_improve is not None:
                     label=f"Role {i + 1} description",
                 )
 
-                # ✅ Save only this role's improved text
+                # Save this role immediately and stage for next render
+                st.session_state[desc_key] = improved_limited
                 st.session_state[pending_key] = improved_limited
+                st.session_state["_ai_has_edited_experience"] = True
 
                 st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
                 increment_usage(email_for_usage, "bullets_uses")
@@ -4166,10 +4157,8 @@ if run_now and role_to_improve is not None:
             except Exception as e:
                 st.error(f"AI error: {e}")
 
-# ✅ Clear CV autofill flag once section has rendered
 st.session_state.pop("_just_autofilled_from_cv", None)
 
-# ✅ Restore education before Section 4
 restore_education_state()
 
 # -------------------------
