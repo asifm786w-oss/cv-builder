@@ -3999,11 +3999,15 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 # 3. Experience (multiple roles)
 # -------------------------
 
-# ✅ Restore parsed experience ONLY ONCE
-# This prevents Role 3 improvements disappearing when Role 2 AI button is pressed
+# Restore parsed experience immediately after CV autofill
 if st.session_state.get("_just_autofilled_from_cv", False):
     restore_experience_from_parsed()
-    
+
+    parsed = st.session_state.get("_cv_parsed")
+    if isinstance(parsed, dict):
+        exps = parsed.get("experiences") or []
+        if isinstance(exps, list) and exps:
+            st.session_state["num_experiences"] = max(1, min(5, len(exps)))
 
 st.header("3. Experience (multiple roles)")
 
