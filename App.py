@@ -3999,15 +3999,20 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 # 3. Experience (multiple roles)
 # -------------------------
 
-# Restore parsed experience immediately after CV autofill
-if st.session_state.get("_just_autofilled_from_cv", False):
+# Always restore parsed experience into blank fields only
+# This is safe because restore_experience_from_parsed() only fills empty fields
+if st.session_state.get("_cv_autofill_enabled", False):
     restore_experience_from_parsed()
 
     parsed = st.session_state.get("_cv_parsed")
     if isinstance(parsed, dict):
         exps = parsed.get("experiences") or []
         if isinstance(exps, list) and exps:
-            st.session_state["num_experiences"] = max(1, min(5, len(exps)))
+            parsed_n = max(1, min(5, len(exps)))
+
+            # If just autofilled, force the role count to parsed CV count
+            if st.session_state.get("_just_autofilled_from_cv", False):
+                st.session_state["num_experiences"] = parsed_n
 
 st.header("3. Experience (multiple roles)")
 
