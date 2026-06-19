@@ -3633,6 +3633,7 @@ with st.container(border=True):
             "Confirm reset",
             key=f"cv_confirm_reset__{u_epoch}",
         )
+
         if st.button(
             "↻ Reset whole session",
             key=f"cv_reset_whole_session__{u_epoch}",
@@ -3657,6 +3658,7 @@ fill_clicked = locked_action_button(
 
 if uploaded_cv is not None and fill_clicked:
     raw_text = _read_uploaded_cv_to_text(uploaded_cv)
+
     if not raw_text.strip():
         st.warning("No readable text found in that file.")
         st.stop()
@@ -3671,17 +3673,17 @@ if uploaded_cv is not None and fill_clicked:
         st.error("AI parser returned an unexpected format.")
         st.stop()
 
-    # reset on new CV
+    # Reset state only when a genuinely new CV is uploaded
     if cv_fp != last_fp:
         _reset_outputs_on_new_cv()
         _clear_education_persistence_for_new_cv()
-		st.session_state["_ai_has_edited_experience"] = False
-        st.session_state["_last_cv_fingerprint"] = cv_fp		
+        st.session_state["_ai_has_edited_experience"] = False
+        st.session_state["_last_cv_fingerprint"] = cv_fp
 
-    # Apply parsed data (your existing function)
+    # Apply parsed data
     _apply_parsed_cv_to_session(parsed)
 
-    # Force Personal details into YOUR canonical cv_* keys
+    # Force Personal details into canonical cv_* keys
     _safe_set("cv_full_name", parsed.get("full_name") or parsed.get("name"))
     _safe_set("cv_email", parsed.get("email"))
     _safe_set("cv_phone", parsed.get("phone"))
@@ -3689,14 +3691,15 @@ if uploaded_cv is not None and fill_clicked:
     _safe_set("cv_title", parsed.get("title") or parsed.get("professional_title") or parsed.get("current_title"))
     _safe_set("cv_summary", parsed.get("summary") or parsed.get("professional_summary"))
 
-    # Flags so restore/default logic can’t wipe after rerun
+    # Flags so restore/default logic cannot wipe after rerun
     st.session_state["_cv_parsed"] = parsed
     st.session_state["_cv_autofill_enabled"] = True
     st.session_state["_just_autofilled_from_cv"] = True
     st.session_state["_skip_restore_personal_once"] = True
 
-    # usage counting
+    # Usage counting
     email_for_usage = (st.session_state.get("user") or {}).get("email")
+
     if email_for_usage:
         st.session_state["upload_parses"] = st.session_state.get("upload_parses", 0) + 1
         increment_usage(email_for_usage, "upload_parses")
