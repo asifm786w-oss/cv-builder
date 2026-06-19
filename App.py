@@ -4146,8 +4146,7 @@ if run_now and role_to_improve is not None:
                     label=f"Role {i + 1} description",
                 )
 
-                # Save this role immediately and stage for next render
-                st.session_state[desc_key] = improved_limited
+                # Save this role immediately and stage for next render               
                 st.session_state[pending_key] = improved_limited
                 st.session_state["_ai_has_edited_experience"] = True
 
