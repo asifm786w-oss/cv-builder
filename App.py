@@ -3676,7 +3676,7 @@ if uploaded_cv is not None and fill_clicked:
         _reset_outputs_on_new_cv()
         _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
-		st.session_state["_experience_restored_once"] = False
+		
 
     # Apply parsed data (your existing function)
     _apply_parsed_cv_to_session(parsed)
