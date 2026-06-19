@@ -3676,6 +3676,7 @@ if uploaded_cv is not None and fill_clicked:
         _reset_outputs_on_new_cv()
         _clear_education_persistence_for_new_cv()
         st.session_state["_last_cv_fingerprint"] = cv_fp
+		st.session_state["_experience_restored_once"] = False
 
     # Apply parsed data (your existing function)
     _apply_parsed_cv_to_session(parsed)
@@ -3994,23 +3995,28 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 
 
 
-restore_experience_from_parsed()
-st.header("3. Experience (multiple roles)")
-
 # -------------------------
 # 3. Experience (multiple roles)
 # -------------------------
 
+# ✅ Restore parsed experience ONLY ONCE
+# This prevents Role 3 improvements disappearing when Role 2 AI button is pressed
+if st.session_state.get("_just_autofilled_from_cv", False):
+    restore_experience_from_parsed()
+    
+
+st.header("3. Experience (multiple roles)")
+
 # ✅ If we just autofilled from CV, sync the UI role count to what was parsed
 if st.session_state.get("_just_autofilled_from_cv", False):
     parsed_n = int(st.session_state.get("parsed_num_experiences", 1) or 1)
-    st.session_state["num_experiences"] = max(1, min(5, parsed_n))  # respect UI bounds
+    st.session_state["num_experiences"] = max(1, min(5, parsed_n))
 
-# Keep count stable (parsed -> UI) (only if still missing/None)
+# Keep count stable
 if "num_experiences" not in st.session_state or st.session_state["num_experiences"] is None:
-    st.session_state["num_experiences"] = st.session_state.get("parsed_num_experiences", 1)
+    st.session_state["num_experiences"] = int(st.session_state.get("parsed_num_experiences", 1) or 1)
 
-# used to run AI after render
+# Used to run AI after render
 st.session_state.setdefault("ai_running_role", None)
 st.session_state.setdefault("ai_run_now", False)
 
@@ -4036,25 +4042,15 @@ for i in range(int(num_experiences)):
     desc_key = f"description_{i}"
     pending_key = f"description_pending_{i}"
 
-    # ✅ Apply staged AI BEFORE the widget renders
+    # ✅ Apply staged AI BEFORE widget renders
     if pending_key in st.session_state:
         st.session_state[desc_key] = st.session_state.pop(pending_key)
 
-    # ✅ Ensure keys exist (never None)
-    if st.session_state.get(job_title_key) is None:
-        st.session_state[job_title_key] = ""
-    if st.session_state.get(company_key) is None:
-        st.session_state[company_key] = ""
-    if st.session_state.get(loc_key) is None:
-        st.session_state[loc_key] = ""
-    if st.session_state.get(start_key) is None:
-        st.session_state[start_key] = ""
-    if st.session_state.get(end_key) is None:
-        st.session_state[end_key] = ""
-    if st.session_state.get(desc_key) is None:
-        st.session_state[desc_key] = ""
+    # ✅ Ensure keys exist
+    for key in [job_title_key, company_key, loc_key, start_key, end_key, desc_key]:
+        if st.session_state.get(key) is None:
+            st.session_state[key] = ""
 
-    # widgets
     job_title = st.text_input("Job title", key=job_title_key)
     company = st.text_input("Company", key=company_key)
     exp_loc = st.text_input("Job location", key=loc_key)
@@ -4067,12 +4063,12 @@ for i in range(int(num_experiences)):
         help="Use one bullet per line.",
     )
 
-    # ✅ Button only schedules AI (no AI work inside loop)
     btn_role = st.button("Improve this role (AI)", key=f"btn_role_ai_{i}")
+
     if btn_role:
         can_schedule_role_ai = True
 
-        if not gate_premium(f"improve Role {i+1} with AI"):
+        if not gate_premium(f"improve Role {i + 1} with AI"):
             can_schedule_role_ai = False
 
         if can_schedule_role_ai:
@@ -4099,15 +4095,15 @@ for i in range(int(num_experiences)):
             )
         )
 
-# ---------- Run AI AFTER the loop (single, correct) ----------
+# ---------- Run AI AFTER the loop ----------
 role_to_improve = st.session_state.get("ai_running_role")
-run_now = st.session_state.pop("ai_run_now", False)  # pop so it runs once
+run_now = st.session_state.pop("ai_run_now", False)
 
 if run_now and role_to_improve is not None:
     i = int(role_to_improve)
     can_run_role_ai = True
 
-    # IMPORTANT: clear role flag early so reruns don't re-trigger
+    # ✅ Clear early to prevent repeat runs
     st.session_state["ai_running_role"] = None
 
     if not gate_premium("use AI role improvements"):
@@ -4121,7 +4117,6 @@ if run_now and role_to_improve is not None:
         st.warning("Please add text for this role first.")
         can_run_role_ai = False
 
-    # ✅ Replace free-quota check with AI credit spend (ledger)
     email_for_usage = (st.session_state.get("user") or {}).get("email")
 
     if can_run_role_ai and not email_for_usage:
@@ -4129,38 +4124,43 @@ if run_now and role_to_improve is not None:
         can_run_role_ai = False
 
     if can_run_role_ai:
-        ok_spend = spend_ai_credit(email_for_usage, source=f"ai_role_improve_{i+1}", amount=1)
+        ok_spend = spend_ai_credit(
+            email_for_usage,
+            source=f"ai_role_improve_{i + 1}",
+            amount=1,
+        )
+
         if not ok_spend:
             st.warning("You don’t have enough AI credits for this action.")
             can_run_role_ai = False
 
     if can_run_role_ai:
-        with st.spinner(f"Improving Role {i+1} description..."):
+        with st.spinner(f"Improving Role {i + 1} description..."):
             try:
                 improved = improve_bullets(current_text)
+
                 improved_limited = enforce_word_limit(
                     improved,
                     MAX_DOC_WORDS,
-                    label=f"Role {i+1} description",
+                    label=f"Role {i + 1} description",
                 )
 
-                # Stage update for next render
+                # ✅ Save only this role's improved text
                 st.session_state[pending_key] = improved_limited
 
-                # ✅ Keep existing analytics increment right after success
                 st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
                 increment_usage(email_for_usage, "bullets_uses")
 
-                st.success(f"Role {i+1} updated.")
+                st.success(f"Role {i + 1} updated.")
                 st.rerun()
 
             except Exception as e:
                 st.error(f"AI error: {e}")
 
-# ✅ Keep your existing pop (ensures sync only happens once after autofill)
-st.session_state.pop("_just_autofilled_from_cv", False)
+# ✅ Clear CV autofill flag once section has rendered
+st.session_state.pop("_just_autofilled_from_cv", None)
 
-# ✅ ALWAYS restore education state BEFORE Section 4 renders
+# ✅ Restore education before Section 4
 restore_education_state()
 
 # -------------------------
