@@ -3676,8 +3676,7 @@ if uploaded_cv is not None and fill_clicked:
     # Reset state only when a genuinely new CV is uploaded
     if cv_fp != last_fp:
         _reset_outputs_on_new_cv()
-        _clear_education_persistence_for_new_cv()
-        st.session_state["_ai_has_edited_experience"] = False
+        _clear_education_persistence_for_new_cv()        
         st.session_state["_last_cv_fingerprint"] = cv_fp
 
     # Apply parsed data
@@ -4002,12 +4001,9 @@ skills = [s for s in skills if not (s.lower() in _seen or _seen.add(s.lower()))]
 # 3. Experience (multiple roles)
 # -------------------------
 
-# Restore parsed CV experience into blank fields only,
-# but stop restoring once AI edits have started.
-if (
-    st.session_state.get("_cv_autofill_enabled", False)
-    and not st.session_state.get("_ai_has_edited_experience", False)
-):
+# Restore parsed CV experience into blank fields only.
+# Safe because restore_experience_from_parsed() only fills empty fields.
+if st.session_state.get("_cv_autofill_enabled", False):
     restore_experience_from_parsed()
 
     parsed = st.session_state.get("_cv_parsed")
@@ -4045,10 +4041,13 @@ for i in range(int(num_experiences)):
     end_key = f"end_date_{i}"
     desc_key = f"description_{i}"
     pending_key = f"description_pending_{i}"
+    saved_ai_key = f"description_ai_saved_{i}"
 
-    # Apply staged AI BEFORE widget renders
+    # Apply AI text BEFORE widget renders
     if pending_key in st.session_state:
         st.session_state[desc_key] = st.session_state.pop(pending_key)
+    elif saved_ai_key in st.session_state:
+        st.session_state[desc_key] = st.session_state[saved_ai_key]
 
     for key in [job_title_key, company_key, loc_key, start_key, end_key, desc_key]:
         if st.session_state.get(key) is None:
@@ -4112,6 +4111,8 @@ if run_now and role_to_improve is not None:
 
     desc_key = f"description_{i}"
     pending_key = f"description_pending_{i}"
+    saved_ai_key = f"description_ai_saved_{i}"
+
     current_text = (st.session_state.get(desc_key) or "").strip()
 
     if can_run_role_ai and not current_text:
@@ -4146,9 +4147,11 @@ if run_now and role_to_improve is not None:
                     label=f"Role {i + 1} description",
                 )
 
-                # Save this role immediately and stage for next render               
+                # Save improved text safely.
+                # pending_key applies it before the widget renders on the next rerun.
+                # saved_ai_key keeps it from falling back to parsed CV text later.
+                st.session_state[saved_ai_key] = improved_limited
                 st.session_state[pending_key] = improved_limited
-                st.session_state["_ai_has_edited_experience"] = True
 
                 st.session_state["bullets_uses"] = st.session_state.get("bullets_uses", 0) + 1
                 increment_usage(email_for_usage, "bullets_uses")
